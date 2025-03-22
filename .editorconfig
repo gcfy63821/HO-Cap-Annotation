@@ -1,0 +1,36 @@
+# .editorconfig for Python Project
+
+# Root EditorConfig file applies to all subdirectories
+root = true
+
+# General settings for all files
+[*]
+charset = utf-8  # Encoding
+end_of_line = lf  # Use Unix-style newlines
+insert_final_newline = true  # Ensure files end with a newline
+trim_trailing_whitespace = true  # Remove extra spaces at the end of lines
+
+# Python-specific settings
+[*.py]
+indent_style = space  # Use spaces for indentation
+indent_size = 4  # Set indentation to 4 spaces
+# max_line_length = 79  # Follow PEP 8 recommendations for max line length
+
+# Configuration files
+[*.{json,yml,yaml}]
+indent_style = space
+indent_size = 2  # Typically, JSON and YAML files use 2 spaces
+
+# Markdown files
+[*.md]
+trim_trailing_whitespace = false  # Allow trailing whitespace in Markdown for line breaks
+
+# Shell scripts
+[*.sh]
+indent_style = space
+indent_size = 4
+
+# HTML/CSS/JS
+[*.{html,css,js}]
+indent_style = space
+indent_size = 2

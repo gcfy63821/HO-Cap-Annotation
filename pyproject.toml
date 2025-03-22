@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64.0", "torch>=2.3.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hocap-annotation"
+version = "1.0.0"
+description = "Python package providing evaluation and visualization tools for the HoCap dataset."
+requires-python = ">=3.10"
+license = { "text" = "GPL-3.0" }
+authors = [
+    { name = "Jikai Wang", email = "jikai.wang@utdallas.edu" }
+]
+
+[tool.setuptools]
+packages = ["hocap_annotation"]
+
+# No [project.dependencies] section because requirements.txt is used
