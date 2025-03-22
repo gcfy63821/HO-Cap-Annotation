@@ -1,11 +1,9 @@
 # HO-Cap Annotation Pipeline
 
-[![Python 3.10](https://img.shields.io/badge/Python-3.10-3776AB.svg)](https://www.python.org/downloads/release/python-31015/)
-[![PyTorch 2.3.1](https://img.shields.io/badge/PyTorch-2.3.1-EE4C2C.svg)](https://pytorch.org/)
-[![CUDA 11.8](https://img.shields.io/badge/CUDA-11.8-76B900.svg)](https://developer.nvidia.com/cuda-toolkit/)
-[![GLP-v3 License](https://img.shields.io/badge/License-GPL--3.0-3DA639.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html)
-
-
+[![Python](https://img.shields.io/badge/Python-3.10-3776AB.svg)](https://www.python.org/downloads/release/python-31015/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.5.1-EE4C2C.svg)](https://pytorch.org/)
+[![CUDA](https://img.shields.io/badge/CUDA-11.8-76B900.svg)](https://developer.nvidia.com/cuda-toolkit/)
+[![License](https://img.shields.io/badge/License-GPL--3.0-3DA639.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html)
 
 ## Installation
 
@@ -27,12 +25,14 @@ cd HO-Cap-Annotation
 
 ```bash
 conda create -n hocap-annotation python=3.10
+
+conda activate hocap-annotation
 ```
 
 #### 4. Install PyTorch
 
 ```bash
-python -m pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu118 --no-cache-dir
+python -m pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu118 --no-cache-dir
 ```
 
 #### 5. Install the HO-Cap Annotation Package
