@@ -287,7 +287,7 @@ class Sam2VideoSegmentation:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--sequence_folder", type=str, default=None, help="Path to the sequence folder"
+        "--sequence_folder", type=str, default=None, help="Path to the sequence folder."
     )
     args = parser.parse_args()
 

@@ -70,7 +70,7 @@ class ObjectPoseSolver:
     def _check_required_files(self):
         self._logger.info("Checking existence of required files...")
         fd_pose_folder = self._data_folder / "processed/fd_pose_solver"
-        poses_o_files = [self._data_folder / "poses_o.npy"]
+        poses_o_files = [fd_pose_folder / "fd_poses_merged_fixed.npy"]
         for f in poses_o_files:
             if f.exists():
                 self._fd_pose_file = f
@@ -264,25 +264,25 @@ class ObjectPoseSolver:
             [rvt_to_quat(ps) for ps in optim_pose_o], dtype=np.float32
         )
         self._logger.debug(f"optim_pose_o: {optim_pose_o.shape}")
-        # np.save(self._save_folder / f"{save_name}_raw.npy", optim_pose_o)
+        np.save(self._save_folder / f"{save_name}_raw.npy", optim_pose_o)
 
-        # # Smooth the poses
-        # self._logger.info("Smoothing optimized poses...")
-        # for i in range(len(optim_pose_o)):
-        #     optim_pose_o[i] = evaluate_and_fix_poses(
-        #         optim_pose_o[i],
-        #         window_size=15,
-        #         rot_thresh=1.0,
-        #         trans_thresh=0.001,
-        #         seperate_rot_trans=False,
-        #     )
-        #     optim_pose_o[i] = evaluate_and_fix_poses(
-        #         optim_pose_o[i],
-        #         window_size=30,
-        #         rot_thresh=0.1,
-        #         trans_thresh=0.01,
-        #         seperate_rot_trans=False,
-        #     )
+        # Smooth the poses
+        self._logger.info("Smoothing optimized poses...")
+        for i in range(len(optim_pose_o)):
+            optim_pose_o[i] = evaluate_and_fix_poses(
+                optim_pose_o[i],
+                window_size=15,
+                rot_thresh=1.0,
+                trans_thresh=0.001,
+                seperate_rot_trans=False,
+            )
+            optim_pose_o[i] = evaluate_and_fix_poses(
+                optim_pose_o[i],
+                window_size=30,
+                rot_thresh=0.1,
+                trans_thresh=0.01,
+                seperate_rot_trans=False,
+            )
         np.save(self._save_folder / f"{save_name}.npy", optim_pose_o)
 
     def initialize_optimizer(self):
@@ -458,10 +458,7 @@ class ObjectPoseSolver:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Object Pose Solver")
     parser.add_argument(
-        "--sequence_folder",
-        type=str,
-        default=None,
-        help="Path to the sequence folder.",
+        "--sequence_folder", type=str, default=None, help="Path to the sequence folder."
     )
     parser.add_argument(
         "--debug", action="store_true", help="Run the solver in debug mode."

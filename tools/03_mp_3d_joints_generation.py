@@ -275,37 +275,6 @@ def complete_3d_joints_by_cubic(joints_3d, ratio=0.5):
     return complete_joints
 
 
-def complete_3d_joints_by_linear(joints_3d):
-    hands, N, joints, coords = joints_3d.shape
-    # Loop over each hand and each joint
-    for hand in range(hands):
-        if np.all(joints_3d[hand] == -1):  # no hand detected
-            continue
-        for joint in range(joints):
-            for coord in range(coords):
-                # Extract the current sequence for the joint's coordinate
-                sequence = joints_3d[hand, :, joint, coord]
-                # Identify frames where the joint data is not missing
-                valid_frames = np.where(sequence != -1)[0]
-                # Check if there are enough points to interpolate
-                if len(valid_frames) > 1:
-                    # Extract the valid coordinates and corresponding frames
-                    valid_coords = sequence[valid_frames]
-                    # Create a spline interpolation function
-                    interp_func = interp1d(
-                        valid_frames,
-                        valid_coords,
-                        kind="linear",
-                        bounds_error=False,
-                        fill_value=(valid_coords[0], valid_coords[-1]),
-                    )
-                    # Interpolate missing points
-                    interpolated_coords = interp_func(np.arange(N))
-                    # Update the original array with interpolated values
-                    joints_3d[hand, :, joint, coord] = interpolated_coords
-    return joints_3d
-
-
 class HandJointsEstimator:
     def __init__(self, sequence_folder, debug=False) -> None:
         self._data_folder = Path(sequence_folder).resolve()
@@ -381,8 +350,8 @@ class HandJointsEstimator:
             np.save(joints_3d_file, hand_joints_3d)
             self._logger.debug(f"hand_joints_3d: {hand_joints_3d.shape}")
 
-        # hand_joints_3d = complete_3d_joints_by_cubic(hand_joints_3d, ratio=0.8)
-        hand_joints_3d = complete_3d_joints_by_linear(hand_joints_3d)
+        hand_joints_3d = complete_3d_joints_by_cubic(hand_joints_3d)
+        # hand_joints_3d = complete_3d_joints_by_linear(hand_joints_3d)
         np.save(self._save_folder / "mp_joints_3d_interpolated.npy", hand_joints_3d)
 
         # Project 3D hand joints to 2D
@@ -537,7 +506,7 @@ class HandJointsEstimator:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MP Hand 3D Joints Estimation")
     parser.add_argument(
-        "--sequence_folder", type=str, required=True, help="path to the sequence folder"
+        "--sequence_folder", type=str, default=None, help="Path to the sequence folder."
     )
     parser.add_argument("--debug", action="store_true", help="debug mode")
     args = parser.parse_args()

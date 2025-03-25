@@ -597,7 +597,7 @@ def run_pose_estimation(
 
             ob_in_cam_poses[serial_idx] = ob_in_cam_mat
 
-            save_pose_folder = save_folder / object_id / "ob_in_cam_new" / serial
+            save_pose_folder = save_folder / object_id / "ob_in_cam" / serial
             save_pose_folder.mkdir(parents=True, exist_ok=True)
             write_pose_to_txt(
                 save_pose_folder / f"{frame_id:06d}.txt", mat_to_quat(ob_in_cam_mat)
@@ -617,7 +617,7 @@ def run_pose_estimation(
         all_poses_w.append(curr_pose_w)
 
         # save pose to file
-        save_pose_folder = save_folder / object_id / "ob_in_world_new"
+        save_pose_folder = save_folder / object_id / "ob_in_world"
         save_pose_folder.mkdir(parents=True, exist_ok=True)
         write_pose_to_txt(save_pose_folder / f"{frame_id:06d}.txt", curr_pose_w)
 
@@ -627,7 +627,7 @@ def run_pose_estimation(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--sequence_folder", type=str, default=None, help="sequence folder"
+        "--sequence_folder", type=str, default=None, help="Path to the sequence folder."
     )
     parser.add_argument(
         "--object_idx",

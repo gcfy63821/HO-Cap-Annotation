@@ -72,10 +72,10 @@ class ManoPoseSolver:
     def _check_required_pose_files(self):
         self._logger.info("Checking existence of required files...")
         self._joints_2d_file = (
-            self._data_folder / "processed/hand_detection/hamer_handmarks_results.npz"
+            self._data_folder / "processed/hand_detection/mp_handmarks_results.npz"
         )
         self._joints_3d_file = (
-            self._data_folder / "processed/hand_detection/hamer_joints_3d_raw.npy"
+            self._data_folder / "processed/hand_detection/mp_joints_3d_raw.npy"
         )
         if not self._joints_2d_file.exists():
             msg = "Hand 2D Joints Detection Results do not exist!"
@@ -115,24 +115,12 @@ class ManoPoseSolver:
     def _load_hand_2d_keypoints(self, kpts_file):
         kpts = np.load(kpts_file)
         kpts = np.stack([kpts[s] for s in self._valid_rs_serials], axis=1)
+        kpts = kpts.transpose(2, 1, 0, 3, 4)  # (N, C, H, 2)
         kpts = np.concatenate(
             [kpts[:, :, 0 if side == "right" else 1] for side in self._mano_sides],
             axis=2,
         )  # (N, C, 21 * H, 2)
-        vit_mask = None
-        vitpose_file = kpts_file.parent / "vitpose_handmarks_results.npz"
-        if vitpose_file.exists():
-            self._logger.info(f"Loading VIT keypoints from {vitpose_file}")
-            vit_kpts = np.load(vitpose_file)
-            vit_kpts = np.stack([vit_kpts[s] for s in self._valid_rs_serials], axis=1)
-            vit_kpts = np.concatenate(
-                [
-                    vit_kpts[:, :, 0 if side == "right" else 1]
-                    for side in self._mano_sides
-                ],
-                axis=2,
-            )  # (N, C, 21 * H, 3)
-            vit_mask = vit_kpts[..., -1] > 0.65
+
         invalid_kpt_indices = [
             i * 21 + j
             for i in range(len(self._mano_sides))
@@ -141,8 +129,6 @@ class ManoPoseSolver:
         ]
         valid_mask = np.all(kpts != -1, axis=-1)  # (N, C, 21 * H)
         valid_mask[:, :, invalid_kpt_indices] = False
-        if vit_mask is not None:
-            valid_mask = valid_mask & vit_mask
         kpts = torch.from_numpy(kpts).to(self._device) / self._rs_img_size
         valid_mask = torch.from_numpy(valid_mask).to(self._device)
         self._logger.info(
@@ -358,17 +344,19 @@ class ManoPoseSolver:
         self._pose_m = self._initialize_pose_m_from_3d_joints(joints_3d)
         self._optimizer = torch.optim.Adam(self._pose_m, lr=self._lr)
 
-        joints_3d = np.concatenate([p for p in joints_3d], axis=1)
-        self._target_joints_3d = torch.from_numpy(joints_3d).to(self._device)
-        self._logger.info(f"target_joints_3d: {self._target_joints_3d.shape}")
+        if self._w_kpt_3d > 0:
+            joints_3d = np.concatenate([p for p in joints_3d], axis=1)
+            self._target_joints_3d = torch.from_numpy(joints_3d).to(self._device)
+            self._logger.info(f"target_joints_3d: {self._target_joints_3d.shape}")
 
         # loss, sdf, kpt_2d, kpt_3d, reg, smooth
         self._log_loss = np.zeros((6, self._total_steps), dtype=np.float32)
 
         # Load 2d keypoints for hands
-        self._target_kpts_m, self._valid_mask_m = self._load_hand_2d_keypoints(
-            self._joints_2d_file
-        )
+        if self._w_kpt_2d > 0:
+            self._target_kpts_m, self._valid_mask_m = self._load_hand_2d_keypoints(
+                self._joints_2d_file
+            )
 
     def solve(self):
         subset_m = list(range(self._mano_group_layer.num_obj))
@@ -552,7 +540,7 @@ class ManoPoseSolver:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hand Pose Solver")
     parser.add_argument(
-        "--sequence_folder", type=str, default=None, help="The sequence folder"
+        "--sequence_folder", type=str, default=None, help="Path to the sequence folder."
     )
     parser.add_argument(
         "--debug", action="store_true", help="Whether to enable debug mode"

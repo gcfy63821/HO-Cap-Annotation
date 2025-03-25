@@ -542,10 +542,7 @@ class JointPoseSolver:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Joint Pose Solver")
     parser.add_argument(
-        "--sequence_folder",
-        type=str,
-        default=None,
-        help="Path to the sequence folder.",
+        "--sequence_folder", type=str, default=None, help="Path to the sequence folder."
     )
     parser.add_argument(
         "--debug", action="store_true", help="Run the solver in debug mode."

@@ -3,7 +3,7 @@ import os
 os.environ["MPLBACKEND"] = "Agg"  # Disable matplotlib GUI backend
 
 from hocap_annotation.utils import *
-from hocap_annotation.wrappers.mediapipe_hand import MPHandDetector
+from hocap_annotation.wrappers.mediapipe import MPHandDetector
 from hocap_annotation.loaders import SequenceLoader
 
 
@@ -30,6 +30,7 @@ def draw_handmarks_results_frame(rgb_images, handmarks, serials, save_path):
             hand_marks=handmarks[idx],
             draw_boxes=True,
             draw_hand_sides=True,
+            reduce_background=True,
         )
         for idx, rgb_image in enumerate(rgb_images)
     ]
@@ -207,7 +208,7 @@ class HandJointsDetector:
 
         t_start = time.time()
 
-        self.detect_mp_handmarks()
+        # self.detect_mp_handmarks()
         self.render_mp_handmarks()
 
         self._logger.info(f"Done!!! ({time.time() - t_start:.2f} s)")
@@ -216,12 +217,12 @@ class HandJointsDetector:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MediaPipe Hand Detection")
     parser.add_argument(
-        "--sequence_folder",
-        type=str,
-        required=True,
-        help="Path to the sequence folder",
+        "--sequence_folder", type=str, default=None, help="Path to the sequence folder."
     )
     args = parser.parse_args()
+
+    if args.sequence_folder is None:
+        raise ValueError("Please provide the sequence folder path.")
 
     detector = HandJointsDetector(args.sequence_folder)
     detector.run()

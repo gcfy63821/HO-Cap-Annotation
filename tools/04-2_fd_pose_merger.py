@@ -249,7 +249,7 @@ class FoundationPoseMerger:
                     read_pose_from_txt,
                     self._fd_pose_folder
                     / obj_id
-                    / "ob_in_world_new"
+                    / "ob_in_world"
                     / f"{frame_id:06d}.txt",
                 ): (obj_idx, frame_id)
                 for frame_id in range(self._num_frames)
@@ -380,7 +380,7 @@ class FoundationPoseMerger:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--sequence_folder", type=str, default=None, help="Path to the sequence folder"
+        "--sequence_folder", type=str, default=None, help="Path to the sequence folder."
     )
     args = parser.parse_args()
 
