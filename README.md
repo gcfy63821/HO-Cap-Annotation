@@ -5,6 +5,32 @@
 [![CUDA](https://img.shields.io/badge/CUDA-11.8-76B900.svg)](https://developer.nvidia.com/cuda-toolkit/)
 [![License](https://img.shields.io/badge/License-GPL--3.0-3DA639.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html)
 
+This repository contains the code for the HO-Cap annotation pipeline.
+
+## Contents
+
+- [HO-Cap Annotation Pipeline](#ho-cap-annotation-pipeline)
+  - [Contents](#contents)
+  - [Installation](#installation)
+      - [1. Clone the repository](#1-clone-the-repository)
+      - [2. Change current directory to the repository](#2-change-current-directory-to-the-repository)
+      - [3. Create conda environment](#3-create-conda-environment)
+      - [4. Install PyTorch](#4-install-pytorch)
+      - [5. Install the HO-Cap Annotation Package](#5-install-the-ho-cap-annotation-package)
+      - [6. Download MANO models](#6-download-mano-models)
+      - [7. Install Third-Party Tools (Optional)](#7-install-third-party-tools-optional)
+        - [7.1 Install FoundationPose](#71-install-foundationpose)
+        - [7.2 Install SAM2](#72-install-sam2)
+  - [Usage](#usage)
+      - [1. Segment the Sequence](#1-segment-the-sequence)
+      - [2. 2D Hand Detection by MediaPipe](#2-2d-hand-detection-by-mediapipe)
+      - [3. 3D Hand Joints Estimation](#3-3d-hand-joints-estimation)
+      - [4. Object Pose Estimation by FoundationPose](#4-object-pose-estimation-by-foundationpose)
+      - [5. Hand Pose Optimization](#5-hand-pose-optimization)
+      - [6. Object Pose Optimization](#6-object-pose-optimization)
+      - [7. Hand-Object Joint Optimization](#7-hand-object-joint-optimization)
+      - [8. HoloLens Pose Refinement](#8-hololens-pose-refinement)
+
 ## Installation
 
 This code is tested with `Python 3.10` and `CUDA 11.8` on `Ubuntu 20.04`. **Make sure CUDA 11.8 is installed on your system before running the code.**
