@@ -184,6 +184,12 @@ def mat_to_quat(mat_4x4: np.ndarray) -> np.ndarray:
     if not isinstance(mat_4x4, np.ndarray) or mat_4x4.shape[-2:] != (4, 4):
         raise ValueError("Input must be a numpy array with shape (4, 4) or (N, 4, 4).")
 
+    if np.all(mat_4x4 == -1):
+        if mat_4x4.ndim == 2:  # Single matrix (shape (4, 4))
+            return np.full((7,), -1, dtype=np.float32)
+        elif mat_4x4.ndim == 3:  # Batch of matrices (shape (N, 4, 4))
+            return np.full((mat_4x4.shape[0], 7), -1, dtype=np.float32)
+
     if mat_4x4.ndim == 2:  # Single matrix (shape (4, 4))
         r = R.from_matrix(mat_4x4[:3, :3])
         q = r.as_quat()  # Quaternion (shape (4,))

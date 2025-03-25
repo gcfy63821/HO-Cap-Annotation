@@ -102,6 +102,7 @@ COLORS = {
     "lightgray": RGBA(211, 211, 211),
     "tomato": RGBA(255, 99, 71),
     "deepskyblue": RGBA(0, 128, 255),
+    "orange_red": RGBA(250, 74, 43),
     # Tab10 colors
     "tab10_0": RGBA(31, 119, 180),
     "tab10_1": RGBA(255, 127, 14),
@@ -127,8 +128,8 @@ OBJ_CLASS_COLORS = [
 # RGB colors for Hands
 HAND_COLORS = [
     COLORS["black"],  # background
-    COLORS["tab10_5"],  # right hand
-    COLORS["tab10_8"],  # left hand
+    COLORS["orange_red"],  # right hand
+    COLORS["cyan"],  # left hand
 ]
 
 # RGB colors for HOCap Dataset Segmentation

@@ -601,7 +601,7 @@ def get_bbox_from_landmarks(landmarks, width, height, margin=3):
     bbox[1] = max(0, bbox[1] - margin)
     bbox[2] = min(width - 1, bbox[2] + margin)
     bbox[3] = min(height - 1, bbox[3] + margin)
-    return bbox.astype(int).tolist()
+    return bbox
 
 
 def get_bbox_from_mask(mask, margin=3):

@@ -10,7 +10,9 @@ from omegaconf import OmegaConf
 from hydra import initialize_config_dir, compose
 from hydra.utils import instantiate
 from hydra.core.global_hydra import GlobalHydra
-from hocap_annotation.utils import CFG, PROJ_ROOT
+from hocap_annotation.utils import CFG
+
+# Import SAM2 modules
 from sam2.modeling.sam2_base import NO_OBJ_SCORE, SAM2Base
 from sam2.utils.misc import (
     concat_points,
