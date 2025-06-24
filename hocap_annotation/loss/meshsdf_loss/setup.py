@@ -5,13 +5,26 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 CURR_DIR = Path(__file__).parent.resolve()
 
 # Compiler flags
+# c_flags = ["-O3", "-std=c++17"]
+
+# nvcc_flags = [
+#     "-U__CUDA_NO_HALF_OPERATORS__",
+#     "-U__CUDA_NO_HALF_CONVERSIONS__",
+#     "-U__CUDA_NO_HALF2_OPERATORS__",
+#     "-Xcompiler=-O3,-std=c++17",
+# ]
+
+# Compiler flags
 c_flags = ["-O3", "-std=c++17"]
 
 nvcc_flags = [
     "-U__CUDA_NO_HALF_OPERATORS__",
     "-U__CUDA_NO_HALF_CONVERSIONS__",
     "-U__CUDA_NO_HALF2_OPERATORS__",
-    "-Xcompiler=-O3,-std=c++17",
+    "--expt-relaxed-constexpr",
+    "-Xcompiler", "-O3",
+    "-Xcompiler", "-std=c++17",
+    "-gencode=arch=compute_75,code=sm_75"  # 按需修改
 ]
 
 setup(

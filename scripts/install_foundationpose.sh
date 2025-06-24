@@ -40,7 +40,8 @@ fi
 log_message "Preparing to build mycpp..."
 MYCPP_DIR="${FD_POSE_DIR}/mycpp"
 BUILD_DIR="${MYCPP_DIR}/build"
-CMAKE_PREFIX_PATH="${CONDA_PREFIX}/lib/python3.1/site-packages/pybind11/share/cmake/pybind11"
+# CMAKE_PREFIX_PATH="/home/wys/.local/lib/python3.10/site-packages/pybind11/share/cmake/pybind11"
+CMAKE_PREFIX_PATH= "${CONDA_PREFIX}/lib/python3.10/site-packages/pybind11/share/cmake/pybind11"
 
 # Check if CMAKE_PREFIX_PATH exists
 if [ ! -d "$CMAKE_PREFIX_PATH" ]; then
