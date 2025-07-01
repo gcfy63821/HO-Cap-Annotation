@@ -3,9 +3,11 @@ import os
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 os.environ["MPLBACKEND"] = "Agg"  # Disable matplotlib GUI backend
 
+import copy
 from itertools import combinations
 from hocap_annotation.utils import *
-from hocap_annotation.loaders import HOCapLoader
+# from hocap_annotation.loaders import HOCapLoader
+from hocap_annotation.loaders import MyLoader as HOCapLoader
 from hocap_annotation.wrappers.foundationpose import (
     FoundationPose,
     ScorePredictor,
@@ -15,6 +17,25 @@ from hocap_annotation.wrappers.foundationpose import (
     dr,
 )
 
+from pathlib import Path
+import cv2
+import logging
+
+# -0.2 < x < 0.4 and 0.0 < y < 0.8 and 0.0 < z < 0.8
+# X_THRESHOLD = (0.2, 0.4)
+# Y_THRESHOLD = (0.4, 0.8)
+# Z_THRESHOLD = (0.4, 0.8)
+
+# to origin
+# spoon
+# X_THRESHOLD = (-0.18, 0.1)
+# Y_THRESHOLD = (0.0, 0.2)
+# Z_THRESHOLD = (0.6, 0.9)
+
+# scooper
+X_THRESHOLD = (-0.25, 0.1)
+Y_THRESHOLD = (0.0, 0.25)
+Z_THRESHOLD = (0.6, 0.9)
 
 def slerp(q1, q2, t):
     """
@@ -275,7 +296,12 @@ def is_valid_pose(pose_w):
         Boolean, True if pose is valid.
     """
     x, y, z = pose_w[-3:]
-    return -0.6 < x < 0.6 and -0.4 < y < 0.4 and -0.01 < z < 0.6
+    # return -1 < x < 1 and -1 < y < 1 and -1 < z < 1
+
+    # return -0.2 < x < 0.4 and 0.0 < y < 0.8 and 0.0 < z < 0.8
+    return (X_THRESHOLD[0] < x < X_THRESHOLD[1] and
+            Y_THRESHOLD[0] < y < Y_THRESHOLD[1] and
+            Z_THRESHOLD[0] < z < Z_THRESHOLD[1])
 
 
 def transform_poses_to_world(mat_poses_c, cam_RTs):
@@ -366,6 +392,48 @@ def ransac_consistent_translation(inlier_trans, threshold):
     return best_translation
 
 
+def project_points_to_image(camera_intrinsics, camera_extrinsics, points_3d):
+    """
+    Project a group of 3D points back to 2D image points using the camera intrinsics and extrinsics.
+    
+    Args:
+    - camera_intrinsics (np.ndarray): 3x3 intrinsic matrix of the camera.
+    - camera_extrinsics (np.ndarray): 4x4 extrinsic matrix of the camera (rotation and translation).
+    - points_3d (np.ndarray): Nx3 array of 3D points in world coordinates.
+    
+    Returns:
+    - image_points (np.ndarray): Nx2 array of 2D points in image coordinates (u, v).
+    """
+    # Convert the 3D points to homogeneous coordinates (Nx4)
+    points_3d_homogeneous = np.hstack([points_3d, np.ones((points_3d.shape[0], 1))])  # (778, 4)
+    
+    # Apply the inverse of the extrinsics to convert points to the camera frame
+    extrinsics_inv = np.linalg.inv(camera_extrinsics)  # (4, 4)
+    points_camera_frame = (extrinsics_inv @ points_3d_homogeneous.T).T  # (778, 4)
+    
+    # Perspective projection: project onto the image plane using the intrinsics
+    points_projected_homogeneous = (camera_intrinsics @ points_camera_frame[:, :3].T).T  # (778, 3)
+    
+    # Convert from homogeneous coordinates to 2D
+    u = points_projected_homogeneous[:, 0] / points_projected_homogeneous[:, 2]
+    v = points_projected_homogeneous[:, 1] / points_projected_homogeneous[:, 2]
+    
+    # Stack into Nx2 array
+    image_points = np.vstack([u, v]).T  # (778, 2)
+    
+    return image_points
+
+def debug_save_poses(poses_w, save_dir="debug_pose_w"):
+    os.makedirs(save_dir, exist_ok=True)
+    for i, pose in enumerate(poses_w):
+        pose_dict = {
+            "rotation": pose[:4].tolist(),  # [qx, qy, qz, qw]
+            "translation": pose[4:7].tolist()
+        }
+        with open(f"{save_dir}/pose_cam{i}.json", "w") as f:
+            json.dump(pose_dict, f, indent=2)
+
+
 def get_consistent_pose_w(
     mat_poses_c,
     cam_RTs,
@@ -398,6 +466,7 @@ def get_consistent_pose_w(
     # Step 1: transform all poses to world space
     poses_w = transform_poses_to_world(mat_poses_c, cam_RTs)
 
+    
     # if len(poses_w) == 0:
     if len(poses_w) < 3:
         curr_rot = predict_current_rotation(
@@ -415,6 +484,10 @@ def get_consistent_pose_w(
 
     # Stack poses for processing
     poses_w = np.stack(poses_w, axis=0)
+
+    #####debug
+    debug_save_poses(poses_w)
+
 
     # Step 2: detect check if poses are noisy
     inlier_rots, inlier_trans, is_rot_noisy, is_trans_noisy = detect_pose_outliers(
@@ -473,7 +546,13 @@ def is_valid_ob_pose(ob_in_cam, cam_RT=None):
     else:
         ob_in_world = cam_RT @ ob_in_cam
         x, y, z = ob_in_world[:3, 3]
-    return -0.6 < x < 0.6 and -0.4 < y < 0.4 and -0.01 < z < 0.6
+
+    # print(f"DEBUG: ob_in_world: {ob_in_world if cam_RT is not None else ob_in_cam[:3, 3]}")
+
+    # return -0.2 < x < 0.4 and 0.0 < y < 0.8 and 0.0 < z < 0.8
+    return (X_THRESHOLD[0] < x < X_THRESHOLD[1] and
+            Y_THRESHOLD[0] < y < Y_THRESHOLD[1] and
+            Z_THRESHOLD[0] < z < Z_THRESHOLD[1])
 
 
 def initialize_fd_pose_estimator(textured_mesh_path, cleaned_mesh_path, debug_dir):
@@ -524,6 +603,56 @@ def run_pose_estimation(
     object_mesh_cleaned = trimesh.load(data_loader.object_cleaned_files[object_idx])
     empty_mat_pose = np.full((4, 4), -1.0, dtype=np.float32)
 
+    object_mesh_small = object_mesh_cleaned.simplify_quadric_decimation(0.4)
+    object_mesh_small.vertices *= 0.001
+
+    #### process mesh ###
+
+
+    other_mesh = trimesh.load(data_loader.object_cleaned_files[object_idx], process=True)
+
+    # load in texture information
+    # print(f"Register: {config['foundation_pose']['register']}")
+    # USE_TEXTURE= True
+    USE_TEXTURE = False
+
+    if USE_TEXTURE:
+        try:
+            # texture_file = args.mesh_file.replace('decim_mesh_files', 'textures').replace('.obj', '.jpg')
+            texture_file = data_loader._texture_files[object_idx]
+            texture = cv2.imread(texture_file)
+            from PIL import Image
+            im = Image.open(texture_file)
+            uv = other_mesh.visual.uv
+            material = trimesh.visual.texture.SimpleMaterial(image=im)
+            color_visuals = trimesh.visual.TextureVisuals(uv=uv, image=im, material=material)
+            other_mesh.visual = color_visuals
+        except:
+            print(f"Error loading texture file: {texture_file}")
+    mesh=None 
+    # print(len(other_mesh.vertices))
+    if len(other_mesh.vertices) > 200000: # fix
+        mesh = other_mesh.simplify_quadric_decimation(0.4)
+        # mesh = other_mesh.simplify_quadric_decimation(200000) #trimesh.Trimesh(vertices=samples, process=True)
+        del other_mesh
+    else:
+        mesh = copy.deepcopy(other_mesh)
+
+    mesh.vertices *= 0.001
+    mesh_copy = trimesh.Trimesh(mesh.vertices.copy(), mesh.faces.copy())
+    print(f"[DEBUG] : Mesh vertices: {len(mesh.vertices)}, faces: {len(mesh.faces)}")
+    # debug = config['foundation_pose']['debug']
+    # debug_dir = args.debug_dir
+    # os.system(f'rm -rf {debug_dir}/* && mkdir -p {debug_dir}/track_vis {debug_dir}/ob_in_cam')
+
+    to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
+    # mesh_copy.apply_transform(to_origin)
+    mesh.apply_transform(to_origin)
+    bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2,3)
+  
+    print(f"[DEBUG] : To Origin:\ {to_origin}, Extents: {extents}, BBox: {bbox}")
+    ###########
+
     # Check start and end frame_idx
     start_frame = max(start_frame, 0)
     end_frame = num_frames if end_frame < start_frame else end_frame
@@ -533,35 +662,90 @@ def run_pose_estimation(
     save_folder = sequence_folder / "processed" / "fd_pose_solver"
     save_folder.mkdir(parents=True, exist_ok=True)
 
+    logger.setLevel(logging.WARNING)
     set_seed(0)
+    debug = 3
+    # estimator = FoundationPose(
+    #     # model_pts=object_mesh_cleaned.vertices.astype(np.float32),
+    #     # model_normals=object_mesh_cleaned.vertex_normals.astype(np.float32),
+    #     # mesh=trimesh.load(data_loader.object_textured_files[object_idx]),
+    #     model_pts=object_mesh_small.vertices.astype(np.float32),
+    #     model_normals=object_mesh_small.vertex_normals.astype(np.float32),
+    #     mesh = object_mesh_small,
+    #     scorer=ScorePredictor(),
+    #     refiner=PoseRefinePredictor(),
+    #     glctx=dr.RasterizeCudaContext(),
+    #     debug=3,
+    #     debug_dir=save_folder / "debug" / object_id,
+    #     rotation_grid_min_n_views=120,
+    #     rotation_grid_inplane_step=60,
+    # )
+
+    
 
     estimator = FoundationPose(
-        model_pts=object_mesh_cleaned.vertices.astype(np.float32),
-        model_normals=object_mesh_cleaned.vertex_normals.astype(np.float32),
-        mesh=trimesh.load(data_loader.object_textured_files[object_idx]),
+        model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh,
         scorer=ScorePredictor(),
         refiner=PoseRefinePredictor(),
         glctx=dr.RasterizeCudaContext(),
-        debug=0,
+        debug=debug,
+        # debug=0,
         debug_dir=save_folder / "debug" / object_id,
         rotation_grid_min_n_views=120,
         rotation_grid_inplane_step=60,
     )
 
+    # estimator = FoundationPose(
+    #     model_pts=mesh_copy.vertices, model_normals=mesh_copy.vertex_normals, mesh=mesh_copy,
+    #     scorer=ScorePredictor(),
+    #     refiner=PoseRefinePredictor(),
+    #     glctx=dr.RasterizeCudaContext(),
+    #     debug=debug,
+    #     # debug=0,
+    #     debug_dir=save_folder / "debug" / object_id,
+    #     rotation_grid_min_n_views=120,
+    #     rotation_grid_inplane_step=60,
+    # )
+
+
     # Initialize poses
     ob_in_world_refined = empty_mat_pose.copy()
     ob_in_cam_poses = [empty_mat_pose.copy()] * len(valid_serials)
     all_poses_w = []
+
+    # # debug
+    # end_frame = 32
+
+    # === 新增：可视化保存准备 ===
+
+    all_vis_frames = []
+    vis_save_dir = save_folder / object_id / "vis_video"
+    vis_save_dir.mkdir(parents=True, exist_ok=True)
+    video_path = str(vis_save_dir / "tracking_result.mp4")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    video_writer = None  # 等第一帧确定尺寸再初始化
+
     for frame_id in range(start_frame, end_frame, 1):
         for serial_idx, serial in enumerate(valid_serials):
             color = data_loader.get_color(serial, frame_id)
             depth = data_loader.get_depth(serial, frame_id)
             mask = data_loader.get_mask(serial, frame_id, object_idx)
             K = valid_Ks[serial_idx]
+            ## DEBUG ##
+
+            # print("depth shape:", depth.shape)
+            # print("depth stats: min =", np.min(depth), ", max =", np.max(depth), ", mean =", np.mean(depth))
+
+
+            # print(f"[DEBUG] Cam {serial}: mask.sum() = {mask.sum()}, depth.mean() = {np.mean(depth):.2f}")
+
 
             if mask.sum() < 100:
                 ob_in_cam_mat = empty_mat_pose.copy()
+                print(f"[DEBUG] Frame {frame_id}, Cam {serial}: mask.sum() = {mask.sum()} is less than 100, skipping.")
+
             elif is_valid_ob_pose(ob_in_world_refined):
+                # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: using refined ob_in_world pose.")
                 ob_in_cam_mat = estimator.track_one(
                     rgb=color,
                     depth=depth,
@@ -570,6 +754,9 @@ def run_pose_estimation(
                     prev_pose=valid_RTs_inv[serial_idx] @ ob_in_world_refined,
                 )
             elif is_valid_ob_pose(ob_in_cam_poses[serial_idx], valid_RTs[serial_idx]):
+                print(f"DEBUG {ob_in_world_refined} is not valid, but ob_in_cam_poses is valid.")
+                print("ob in world refined:", ob_in_world_refined[:3, 3])
+                # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: using previous ob_in_cam pose.")
                 ob_in_cam_mat = estimator.track_one(
                     rgb=color,
                     depth=depth,
@@ -578,9 +765,12 @@ def run_pose_estimation(
                     prev_pose=ob_in_cam_poses[serial_idx],
                 )
             else:
+                print(f"[DEBUG] Frame {frame_id}, Cam {serial}: estimating new pose.")
                 init_ob_pos_center = data_loader.get_init_translation(
                     frame_id, [serial], object_idx, kernel_size=5
                 )[0][0]
+                # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: init_ob_pos_center = {init_ob_pos_center}")
+
                 if init_ob_pos_center is not None:
                     ob_in_cam_mat = estimator.register(
                         rgb=color,
@@ -590,10 +780,19 @@ def run_pose_estimation(
                         iteration=est_refine_iter,
                         init_ob_pos_center=init_ob_pos_center,
                     )
+                    # print(f"[DEBUG] register result:  Frame {frame_id}, Cam {serial}: ob_in_cam_mat = {ob_in_cam_mat.flatten()[:4]}")
+                    # the register result is not working
                     if not is_valid_ob_pose(ob_in_cam_mat, valid_RTs[serial_idx]):
+                        # here
+                        print(f"[DEBUG]!!! Frame {frame_id}, Cam {serial}: Register failed! using empty pose.")
+                        debug_ob_in_world = valid_RTs[serial_idx] @ ob_in_cam_mat
+                        print(debug_ob_in_world[:3,3])
                         ob_in_cam_mat = empty_mat_pose.copy()
                 else:
+                    print(f"[DEBUG] Frame {frame_id}, Cam {serial}: init_ob_pos_center is None, using empty pose.")
                     ob_in_cam_mat = empty_mat_pose.copy()
+
+            # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: ob_in_cam_mat = {ob_in_cam_mat}")
 
             ob_in_cam_poses[serial_idx] = ob_in_cam_mat
 
@@ -602,6 +801,19 @@ def run_pose_estimation(
             write_pose_to_txt(
                 save_pose_folder / f"{frame_id:06d}.txt", mat_to_quat(ob_in_cam_mat)
             )
+            
+            if debug > 1:
+                # save the initial ob_in_cam_mat for debugging
+                debug_image_path = save_folder / "debug" / object_id / serial
+                debug_image_path.mkdir(parents=True, exist_ok=True)
+
+                pass
+            # debug_image_path = save_folder / "debug_vis" / serial
+            # debug_image_path.mkdir(parents=True, exist_ok=True)
+            # cv2.imwrite(str(debug_image_path / f"color_{frame_id:06d}.png"), color)
+            # cv2.imwrite(str(debug_image_path / f"mask_{frame_id:06d}.png"), mask * 255)
+
+
 
         # refine object pose in world coordinate system
         curr_pose_w = get_consistent_pose_w(
@@ -613,8 +825,14 @@ def run_pose_estimation(
             thresh_factor=2.0,
             outlier_ratio=0.2,
         )
+        # print(curr_pose_w)
 
         all_poses_w.append(curr_pose_w)
+        # print(f"[DEBUG] Register result: \n{ob_in_cam_mat}")
+        # print(f"[DEBUG] Valid? {is_valid_ob_pose(ob_in_cam_mat, valid_RTs[serial_idx])}")
+
+        print(f"[RESULT] ob_in_world (Frame {frame_id}): {curr_pose_w[4:7]}")
+
 
         # save pose to file
         save_pose_folder = save_folder / object_id / "ob_in_world"
@@ -622,6 +840,33 @@ def run_pose_estimation(
         write_pose_to_txt(save_pose_folder / f"{frame_id:06d}.txt", curr_pose_w)
 
         ob_in_world_refined = quat_to_mat(curr_pose_w[:7])
+
+
+        # === 新增：渲染可视化图像并拼图保存 ===
+        cam_idx_vis = 0  # 只用第一个相机做可视化，可按需调整
+        color_vis = data_loader.get_color(valid_serials[cam_idx_vis], frame_id).copy()
+        vis_img = color_vis.copy()
+
+        # 使用你已有函数渲染 mesh（需要你已有的 mesh、camera_extrinsics 等）
+        mesh_vis = mesh.copy()
+        mesh_vis.vertices = mesh.vertices.copy()
+        # debugging
+        # mesh_vis.apply_transform(to_origin)
+        # 
+        mesh_vis.apply_transform(ob_in_cam_poses[cam_idx_vis])
+        proj_pts = project_points_to_image(valid_Ks[cam_idx_vis], valid_RTs[cam_idx_vis], mesh_vis.vertices)
+        proj_pts = proj_pts[(proj_pts[:, 0] >= 0) & (proj_pts[:, 1] >= 0)]
+        proj_pts = proj_pts[(proj_pts[:, 0] < 640) & (proj_pts[:, 1] < 480)]
+        proj_pts = proj_pts[::200].astype(np.uint64)
+        vis_img[proj_pts[:, 1], proj_pts[:, 0]] = [0, 255, 0]  # 红色表示预测姿态
+
+        all_vis_frames.append(vis_img)
+
+        if video_writer is None:
+            H, W = vis_img.shape[:2]
+            video_writer = cv2.VideoWriter(video_path, fourcc, 30, (W, H))
+
+        video_writer.write(vis_img)
 
 
 if __name__ == "__main__":
@@ -671,6 +916,10 @@ if __name__ == "__main__":
 
     set_logging_format()
     t_start = time.time()
+    logger = logging.getLogger("register")
+    # 
+    logger.setLevel(logging.WARNING)  # 只显示WARNING及以上
+    logging.getLogger().setLevel(logging.WARNING)  # 全局也设为WARNING
 
     run_pose_estimation(
         args.sequence_folder,
@@ -683,4 +932,5 @@ if __name__ == "__main__":
         args.trans_thresh,
     )
 
-    logging.info(f"done!!! time: {time.time() - t_start:.3f}s.")
+    # logging.info(f"done!!! time: {time.time() - t_start:.3f}s.")
+    print(f"done!!! time: {time.time() - t_start:.3f}s.")

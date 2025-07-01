@@ -219,7 +219,7 @@ class Sam2VideoSegmentation:
                             self._data_folder / serial / f"color_{i:06d}.jpg"
                         ),
                         mask_images[i],
-                        alpha=0.7,
+                        alpha=0.5,
                         reduce_background=True,
                     ): i
                     for i in range(num_frames)

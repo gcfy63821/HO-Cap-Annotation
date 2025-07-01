@@ -37,8 +37,12 @@ def save_calibration(extrinsics, intrinsics, calib_root):
 
     # === Save extrinsics ===
     extrinsics_dict = {}
+    T_base_world = np.array([[0, -1, 0, 0], [-1, 0, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]], dtype=np.float32)
+            
     for serial, T in zip(CAMERA_SERIALS, extrinsics):
-        T_3x4 = T[:3, :4]  # 3x4 matrix
+        T_base = T_base_world @ T  # World to camera transformation
+        T_3x4 = T_base[:3, :4]  # Extract the 3x4 part
+        # T_3x4 = T[:3, :4]  # 3x4 matrix
         extrinsics_dict[serial] = T_3x4.flatten().tolist()
 
     extrinsics_dict["tag_0"] = np.eye(4)[:3].flatten().tolist()

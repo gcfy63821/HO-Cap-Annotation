@@ -47,14 +47,22 @@ optimization:
     sdf_dist_thresh: 0.01
     load_offline_dpts: false
     valid_rs_serials:
-      - "105322251564"
-      - "043422252387"
-      - "037522251142"
-      - "105322251225"
-      - "108222250342"
-      - "117222250549"
-      - "046122250168"
-      - "115422250549"
+      - "00"
+      - "01"
+      - "02" 
+      - "03"
+      - "04"
+      - "05"
+      - "06"
+      - "07"
+      # - "105322251564"
+      # - "043422252387"
+      # - "037522251142"
+      # - "105322251225"
+      # - "108222250342"
+      # - "117222250549"
+      # - "046122250168"
+      # - "115422250549"
     valid_mano_joint_indices:
       - 0
       - 1
@@ -83,7 +91,7 @@ optimization:
     w_smooth_acc_trans: 0.1
     smooth_window_size: 3
     sdf_dist_thresh: 0.01
-    use_object_masks: false
+    use_object_masks: true # false
     load_offline_dpts: false
   joint_pose_solver:
     lr: 0.001

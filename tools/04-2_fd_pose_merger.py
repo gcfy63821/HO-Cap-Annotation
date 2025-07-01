@@ -7,7 +7,7 @@ from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 from scipy.interpolate import interp1d, CubicSpline
 from hocap_annotation.utils import *
-from hocap_annotation.loaders import HOCapLoader
+from hocap_annotation.loaders import MyLoader as HOCapLoader
 from hocap_annotation.rendering import HOCapRenderer
 
 
@@ -225,7 +225,7 @@ class FoundationPoseMerger:
         poses_o, verts_m, faces_m, colors_m, joints_m = None, None, None, None, None
         poses_o = np.load(pose_file)
         poses_o = np.stack([quat_to_mat(p) for p in poses_o], axis=1)
-        self._logger.debug(f"Loaded fd_poses: {poses_o.shape}")
+        self._logger.info(f"Loaded fd_poses: {poses_o.shape}")
         renderer = HOCapRenderer(self._data_folder, log_file=self._log_file)
         renderer.update_render_dict(poses_o, verts_m, faces_m, colors_m, joints_m)
         renderer.render_pose_images(

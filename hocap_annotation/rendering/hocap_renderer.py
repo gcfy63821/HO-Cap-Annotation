@@ -1,5 +1,5 @@
 from ..utils import *
-from ..loaders import HOCapLoader
+from ..loaders import MyLoader as HOCapLoader
 from .renderer_pyrd import OffscreenRenderer
 
 
@@ -17,13 +17,18 @@ class HOCapRenderer:
         self._rs_height = self._reader.rs_height
         self._rs_serials = self._reader.rs_serials
         self._rs_Ks = self._reader.rs_Ks
-        self._hl_serial = self._reader.hl_serial
-        self._hl_K = self._reader.hl_K
-        self._hl_width = self._reader.hl_width
-        self._hl_height = self._reader.hl_height
+        ## mofdify for no hololens
+        self.have_hl = self._reader.have_hl
+        if self.have_hl:
+            self._hl_serial = self._reader.hl_serial
+            self._hl_K = self._reader.hl_K
+            self._hl_width = self._reader.hl_width
+            self._hl_height = self._reader.hl_height
         self._object_ids = self._reader.object_ids
-        self._mano_beta = self._reader.mano_beta
-        self._mano_sides = self._reader.mano_sides
+        ## modify for no manos
+        if self._reader.have_mano:
+            self._mano_beta = self._reader.mano_beta
+            self._mano_sides = self._reader.mano_sides
         self._camera_poses = self._reader.extr2world
         self._seg_color_index_map = self._reader.get_seg_color_index_map()
         self._render_fn = None
@@ -40,7 +45,8 @@ class HOCapRenderer:
         for serial, K in zip(self._rs_serials, self._rs_Ks):
             self._renderer.add_camera(K, serial)
         # Add hololens camera
-        self._renderer.add_camera(self._hl_K, self._hl_serial)
+        if self.have_hl:
+            self._renderer.add_camera(self._hl_K, self._hl_serial)
 
     def _add_objects_to_renderer(self):
         for object_id, mesh_file in zip(
@@ -123,6 +129,9 @@ class HOCapRenderer:
             mano_faces=faces_m,
             mano_colors=colors_m,
         )
+        # print(f"#rendered images: {len(r_colors)}")
+        print(f"One image shape: {r_colors[0].shape}, min={r_colors[0].min()}, max={r_colors[0].max()}")
+
         if self.render_dict["pv_poses"] is not None:
             pv_pose = self.render_dict["pv_poses"][frame_id]
             r_colors += self._renderer.get_render_colors(

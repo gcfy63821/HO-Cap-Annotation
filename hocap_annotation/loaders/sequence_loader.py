@@ -39,7 +39,13 @@ class SequenceLoader:
         self._device = device
 
         # Crop limits in world frame, [x_min, x_max, y_min, y_max, z_min, z_max]
-        self._crop_lim = [-0.60, +0.60, -0.35, +0.35, -0.01, +0.80]
+        # self._crop_lim = [-0.60, +0.60, -0.35, +0.35, -0.01, +0.80]
+        # scooper
+        # X_THRESHOLD = (-0.25, 0.1)
+        # Y_THRESHOLD = (0.0, 0.25)
+        # Z_THRESHOLD = (0.6, 0.9)
+        # Crop limits in world frame, [x_min, x_max, y_min, y_max, z_min, z_max]
+        self._crop_lim = [-0.25, +0.1, 0.0, +0.25, 0.6, +0.9]
 
         # Load metadata
         self._load_metadata()
@@ -52,7 +58,7 @@ class SequenceLoader:
         self._rays = self._create_3d_rays()
 
         # Create projection matrices from camera to master/world
-        self._M2master = torch.bmm(self._rs_Ks, self._extr2master_inv[:, :3, :])
+        # self._M2master = torch.bmm(self._rs_Ks, self._extr2master_inv[:, :3, :])
         self._M2world = torch.bmm(self._rs_Ks, self._extr2world_inv[:, :3, :])
 
         # Initialize points, colors, and masks
@@ -87,10 +93,14 @@ class SequenceLoader:
         self._rs_height = data["realsense"]["height"]
         self._num_cams = len(self._rs_serials)
 
+        self.have_hl = data["have_hololens"]
+        self.have_mano = data["have_mano"]
+
+        if self.have_hl:
         # HoloLens metadata
-        self._hl_serial = data["hololens"]["serial"]
-        self._hl_pv_width = data["hololens"]["pv_width"]
-        self._hl_pv_height = data["hololens"]["pv_height"]
+            self._hl_serial = data["hololens"]["serial"]
+            self._hl_pv_width = data["hololens"]["pv_width"]
+            self._hl_pv_height = data["hololens"]["pv_height"]
 
         # Object models file paths
         self._object_textured_files = [
@@ -107,9 +117,10 @@ class SequenceLoader:
 
         # Load rs camera extrinsics
         self._load_extrinsics(data["extrinsics"])
-
-        # Load MANO shape parameters
-        self._mano_beta = self._load_mano_beta()
+        
+        if self.have_mano:
+            # Load MANO shape parameters
+            self._mano_beta = self._load_mano_beta()
 
     def _load_intrinsics(self):
         def read_K_from_yaml(serial, cam_type="color"):
@@ -129,15 +140,16 @@ class SequenceLoader:
             [read_K_from_yaml(serial) for serial in self._rs_serials], axis=0
         )
         rs_Ks_inv = np.stack([np.linalg.inv(K) for K in rs_Ks], axis=0)
+        if self.have_hl:
+            hl_K = read_K_from_yaml(self._hl_serial)
+            hl_K_inv = np.linalg.inv(hl_K)
 
-        hl_K = read_K_from_yaml(self._hl_serial)
-        hl_K_inv = np.linalg.inv(hl_K)
+            self._hl_K = torch.from_numpy(hl_K).to(self._device)
+            self._hl_K_inv = torch.from_numpy(hl_K_inv).to(self._device)
 
         # Convert intrinsics to torch tensors
         self._rs_Ks = torch.from_numpy(rs_Ks).to(self._device)
         self._rs_Ks_inv = torch.from_numpy(rs_Ks_inv).to(self._device)
-        self._hl_K = torch.from_numpy(hl_K).to(self._device)
-        self._hl_K_inv = torch.from_numpy(hl_K_inv).to(self._device)
 
     def _load_extrinsics(self, file_name):
         def create_mat(values):
@@ -148,30 +160,37 @@ class SequenceLoader:
         data = read_data_from_yaml(self._calib_folder / "extrinsics" / f"{file_name}")
 
         # Read rs_master serial
-        self._rs_master = data["rs_master"]
+        # self._rs_master = data["rs_master"]
 
         # Create extrinsics matrices
+        # extrinsics = data["extrinsics"]
+        # tag_0 = create_mat(extrinsics["tag_0"])
+        # tag_0_inv = np.linalg.inv(tag_0)
+        # tag_1 = create_mat(extrinsics["tag_1"])
+        # tag_1_inv = np.linalg.inv(tag_1)
+        # extr2master = np.stack(
+        #     [create_mat(extrinsics[s]) for s in self._rs_serials], axis=0
+        # )
+        # extr2master_inv = np.stack([np.linalg.inv(t) for t in extr2master], axis=0)
+        # extr2world = np.stack([tag_1_inv @ t for t in extr2master], axis=0)
+        # extr2world_inv = np.stack([np.linalg.inv(t) for t in extr2world], axis=0)
         extrinsics = data["extrinsics"]
-        tag_0 = create_mat(extrinsics["tag_0"])
-        tag_0_inv = np.linalg.inv(tag_0)
-        tag_1 = create_mat(extrinsics["tag_1"])
-        tag_1_inv = np.linalg.inv(tag_1)
-        extr2master = np.stack(
-            [create_mat(extrinsics[s]) for s in self._rs_serials], axis=0
-        )
-        extr2master_inv = np.stack([np.linalg.inv(t) for t in extr2master], axis=0)
-        extr2world = np.stack([tag_1_inv @ t for t in extr2master], axis=0)
-        extr2world_inv = np.stack([np.linalg.inv(t) for t in extr2world], axis=0)
+        extr2world = [create_mat(extrinsics[s]) for s in self._rs_serials]
+        extr2world_inv = [np.linalg.inv(tt) for tt in extr2world]
+        # let me test
 
-        # Convert extrinsics to torch tensors
-        self._tag_0 = torch.from_numpy(tag_0).to(self._device)
-        self._tag_0_inv = torch.from_numpy(tag_0_inv).to(self._device)
-        self._tag_1 = torch.from_numpy(tag_1).to(self._device)
-        self._tag_1_inv = torch.from_numpy(tag_1_inv).to(self._device)
-        self._extr2master = torch.from_numpy(extr2master).to(self._device)
-        self._extr2master_inv = torch.from_numpy(extr2master_inv).to(self._device)
-        self._extr2world = torch.from_numpy(extr2world).to(self._device)
-        self._extr2world_inv = torch.from_numpy(extr2world_inv).to(self._device)
+        self._extr2world = torch.from_numpy(np.stack(extr2world, axis=0)).to(self._device)
+        self._extr2world_inv = torch.from_numpy(np.stack(extr2world_inv, axis=0)).to(self._device)
+
+        # # Convert extrinsics to torch tensors
+        # self._tag_0 = torch.from_numpy(tag_0).to(self._device)
+        # self._tag_0_inv = torch.from_numpy(tag_0_inv).to(self._device)
+        # self._tag_1 = torch.from_numpy(tag_1).to(self._device)
+        # self._tag_1_inv = torch.from_numpy(tag_1_inv).to(self._device)
+        # self._extr2master = torch.from_numpy(extr2master).to(self._device)
+        # self._extr2master_inv = torch.from_numpy(extr2master_inv).to(self._device)
+        # self._extr2world = torch.from_numpy(extr2world).to(self._device)
+        # self._extr2world_inv = torch.from_numpy(extr2world_inv).to(self._device)
 
     def _load_mano_beta(self) -> torch.Tensor:
         file_path = self._calib_folder / "mano" / f"{self._subject_id}.yaml"

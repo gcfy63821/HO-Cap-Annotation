@@ -3,7 +3,7 @@ import trimesh
 import pyrender
 from pyrender.constants import RenderFlags
 from ..utils import NUM_MANO_VERTS, get_logger
-
+import cv2
 cvcam_in_glcam = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
 
 
@@ -231,6 +231,25 @@ class OffscreenRenderer:
                 seg_obj=seg_obj,
                 seg_mano=seg_mano,
             )
+            # print(f"[DEBUG] Scene has {len(scene.mesh_nodes)} mesh nodes, {len(scene.camera_nodes)} camera nodes")
+            # if isinstance(cam_names, list):
+            #     for cam_name in cam_names:
+            #         assert cam_name in self._cam_nodes, f"Missing camera node for: {cam_name}"
+            #         print(f"[DEBUG] Rendering from cam: {cam_name}")
+            # 添加可见光源
+            # light = pyrender.DirectionalLight(color=np.ones(3), intensity=3.0)
+            # scene.add(light, pose=np.eye(4))  # 光源从默认位置照射
+
+            # 打印相机与 mesh 位姿检查朝向
+            # for name, pose in zip(cam_names, cam_poses):
+            #     print(f"[DEBUG] cam {name} pos: {pose[:3, 3]}")
+            # for i, pose in enumerate(mesh_poses):
+            #     print(f"[DEBUG] mesh {i} pos: {pose[:3, 3]}")
+
+            # # 保存可视化
+            # pyrender.Viewer(scene, use_raymond_lighting=True)  # 若你有图形界面支持
+
+
             colors, depths = [], []
             if isinstance(cam_names, list):
                 for cam_name in cam_names:
@@ -241,6 +260,9 @@ class OffscreenRenderer:
             else:
                 scene.main_camera_node = self._cam_nodes[cam_names]
                 colors, depths = r.render(scene, render_flags, seg_node_map)
+            print(f"[DEBUG] Rendered image stats - mean: {color.mean()}, min: {color.min()}, max: {color.max()}")
+            cv2.imwrite(f"debug_render/cam_{cam_name}.png", color[..., ::-1])  # BGR save
+
         finally:
             r.delete()
 
@@ -279,6 +301,7 @@ class OffscreenRenderer:
             mano_colors,
             bg_color,
         )
+        # print(f"#rendered images: {len(colors)}")
         return colors
 
     def get_render_depths(

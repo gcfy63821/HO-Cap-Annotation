@@ -245,6 +245,7 @@ class FoundationPose:
         if self.debug >= 2:
             imageio.imwrite(f"{self.debug_dir}/color.png", rgb)
             cv2.imwrite(f"{self.debug_dir}/depth.png", (depth * 1000).astype(np.uint16))
+
             valid = xyz_map[..., 2] >= 0.1
             pcd = toOpen3dCloud(xyz_map[valid], rgb[valid])
             o3d.io.write_point_cloud(f"{self.debug_dir}/scene_complete.ply", pcd)
@@ -266,6 +267,7 @@ class FoundationPose:
         logging.info(f"poses:{poses.shape}")
 
         if init_ob_pos_center is None:
+            print("debug: init_ob_pos_center is None, using guess_translation")
             center = self.guess_translation(depth=depth, mask=ob_mask, K=K)
         else:
             center = init_ob_pos_center.copy()

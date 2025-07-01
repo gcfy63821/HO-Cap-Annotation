@@ -8,24 +8,85 @@ from datetime import datetime
 from tqdm import tqdm
 
 
-# def save_image(image_array, path):
-#     # 只对彩色图做BGR->RGB转换，深度和mask不转换
+# old one
+# def save_image(image_array, path, is_depth=False):
+#     image_array = np.squeeze(image_array)
+
+#     # 彩色图：BGR -> RGB
 #     if image_array.ndim == 3 and image_array.shape[2] == 3:
-#         image_array = image_array[..., ::-1]  # BGR->RGB
+#         image_array = image_array[..., ::-1]
+
+#     if is_depth:
+#         # 深度图使用 uint16 保存
+#         image_array = image_array.astype(np.uint16)
+#     else:
+#         # mask/灰度图转换为 uint8
+#         if image_array.dtype != np.uint8:
+#             image_array = (image_array.astype(np.float32) * 255).clip(0, 255).astype(np.uint8)
+
 #     Image.fromarray(image_array).save(path)
-def save_image(image_array, path):
-    # 自动 squeeze 掉多余的维度
+
+def save_image(image_array, path, is_depth=False):
+    """
+    保存图像为 PNG 格式：
+    - 彩色图RGB为 8-bit 三通道 JPEG
+    - 深度图为 16-bit 单通道 PNG
+    - Mask 为灰度 8-bit PNG
+    """
     image_array = np.squeeze(image_array)
 
-    # 彩色图像：BGR to RGB
+    # 彩色图：BGR -> RGB（如果是彩色图）
     if image_array.ndim == 3 and image_array.shape[2] == 3:
-        image_array = image_array[..., ::-1]
+        image_array = image_array[..., ::-1].astype(np.uint8)  # BGR to RGB
+        img = Image.fromarray(image_array, mode='RGB')
+        img.save(path, format='JPEG')
 
-    # 如果是 mask，确保是 uint8 格式
-    if image_array.dtype != np.uint8:
-        image_array = (image_array.astype(np.float32) * 255).clip(0, 255).astype(np.uint8)
+    elif is_depth:
+        # 深度图保存为 16-bit PNG
+        # image_array = image_array.astype(np.uint16)
+        # img = Image.fromarray(image_array, mode='I;16')  # 单通道 16-bit
+        # img.save(path, format='PNG')
+        depth_uint16 = np.clip(image_array, 0, 65535).astype(np.uint16)
+        img = Image.fromarray(depth_uint16, mode='I;16')
+        img.save(path, format='PNG')
 
-    Image.fromarray(image_array).save(path)
+
+    else:
+        # Mask 或灰度图，保存为 8-bit 灰度图
+        if image_array.dtype != np.uint8:
+            # image_array = (image_array.astype(np.float32) * 255).clip(0, 255).astype(np.uint8)
+            image_array = (image_array.astype(np.float32)).clip(0, 255).astype(np.uint8)
+        img = Image.fromarray(image_array, mode='L')  # 单通道 8-bit
+        img.save(path, format='PNG')
+
+# def save_image(image_array, path, is_depth=False):
+#     """
+#     保存图像为 PNG 格式：
+#     - 彩色图RGB为 8-bit 三通道 JPEG
+#     - 深度图为 16-bit 单通道 PNG，单位毫米（uint16）
+#     - Mask 为灰度 8-bit PNG
+#     """
+#     image_array = np.squeeze(image_array)
+
+#     # 彩色图：BGR -> RGB（如果是彩色图）
+#     if image_array.ndim == 3 and image_array.shape[2] == 3:
+#         image_array = image_array[..., ::-1].astype(np.uint8)  # BGR to RGB
+#         img = Image.fromarray(image_array, mode='RGB')
+#         img.save(path, format='JPEG')
+
+#     elif is_depth:
+#         # 深度图，假设输入单位是米，转成毫米并保存成 uint16 16-bit PNG
+#         depth_mm = np.where(image_array > 0, image_array * 1000, 0).astype(np.uint16)
+#         img = Image.fromarray(depth_mm, mode='I;16')  # 单通道 16-bit
+#         img.save(path, format='PNG')
+
+#     else:
+#         # Mask 或灰度图，保存为 8-bit 灰度图
+#         if image_array.dtype != np.uint8:
+#             image_array = (image_array.astype(np.float32) * 255).clip(0, 255).astype(np.uint8)
+#         img = Image.fromarray(image_array, mode='L')  # 单通道 8-bit
+#         img.save(path, format='PNG')
+
 
 
 def load_masks_from_folder(mask_root_dir, num_frames, num_cams):
@@ -71,8 +132,15 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
     # Load extrinsics from YAML
     with open(extrinsics_yaml_path, 'r') as f:
         extrinsics_yaml = yaml.safe_load(f)
-    extrinsics_dict = extrinsics_yaml["extrinsics"]
-    cam_serials = sorted(extrinsics_dict.keys())  # ['00', '01', ..., '07']
+    # extrinsics_dict = extrinsics_yaml["extrinsics"]
+    # cam_serials = sorted(extrinsics_dict.keys())  # ['00', '01', ..., '07']
+
+    extrinsics_dict = {
+        k: v for k, v in extrinsics_yaml["extrinsics"].items()
+        if not k.startswith("tag_")
+    }
+    cam_serials = sorted(extrinsics_dict.keys())
+
 
     # Check consistency
     assert len(cam_serials) == num_cams, f"Number of cameras mismatch: {len(cam_serials)} vs {num_cams}"
@@ -90,7 +158,9 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
         color_dir = cam_dir
         depth_dir = cam_dir
         mask_dir = output_folder / "processed" / "segmentation" / "sam2" / cam_serial / "mask"
+        mask_init_dir = output_folder / "processed" / "segmentation" / "init" / cam_serial
         mask_dir.mkdir(parents=True, exist_ok=True)
+        mask_init_dir.mkdir(parents=True, exist_ok=True)
         color_dir.mkdir(parents=True, exist_ok=True)
 
         for frame_idx in tqdm(range(num_frames), desc=f"Camera {cam_idx}"):
@@ -100,16 +170,25 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
 
             # Save depth
             depth = depths[frame_idx, cam_idx]
-            save_image(depth, depth_dir / f"depth_{frame_idx:06d}.png")
+            # show max and min depth
+            # print(f"[INFO] Frame {frame_idx}, Camera {cam_serial}: Depth min={np.min(depth)}, max={np.max(depth)}")
+            depth[(depth<1) | (depth>=np.inf)] = 0
+
+            save_image(depth, depth_dir / f"depth_{frame_idx:06d}.png", is_depth=True)
 
             # Save mask
             mask = masks[frame_idx, cam_idx].astype(np.uint8)
-            save_image(mask * 255, mask_dir / f"mask_{frame_idx:06d}.png")
+            if frame_idx == 0:
+                print(f"[INFO] Frame {frame_idx}, Camera {cam_serial}: Mask shape={mask.shape}, unique values={np.unique(mask)}")
+                save_image(mask, mask_init_dir / f"mask_{frame_idx:06d}.png")
+            save_image(mask, mask_dir / f"mask_{frame_idx:06d}.png")
+            
 
     # Save meta.yaml
     meta = {
         "num_frames": int(num_frames),
         "object_ids": ["blue_scooper"],
+        # "object_ids": ["wooden_spoon"],
         "mano_sides": [],
         "subject_id": subject_id,
         "realsense": {
@@ -122,7 +201,9 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
             "pv_height": 720,
             "pv_width": 1280
         },
-        "extrinsics": "extrinsics.yaml"
+        "extrinsics": "extrinsics.yaml",
+        "have_hololens": False,
+        "have_mano": False,
     }
 
     with open(output_folder / "meta.yaml", "w") as f:
@@ -133,10 +214,19 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
 
 # 示例调用
 if __name__ == "__main__":
+    # blue scooper
     convert_to_hocap_format(
         h5_path="/home/wys/learning-compliant/crq_ws/data/0506data/blue_scooper/06c0c8e0_blue_scooper_mid_6/data00000000.h5",
         mask_root_dir="/home/wys/learning-compliant/crq_ws/data/0506data/blue_scooper_annotated/06c0c8e0_blue_scooper_mid_6/tool_masks",
         extrinsics_yaml_path="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml",
         output_root="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset",
-        subject_id="subject_5"
+        subject_id="test_1"
     )
+    # wooden_spoon
+    # convert_to_hocap_format(
+    #     h5_path="/home/wys/learning-compliant/crq_ws/data/raw_h5s/0b99324a_wooden_spoon_small_6/data00000000.h5",
+    #     mask_root_dir="/home/wys/learning-compliant/crq_ws/data/0b99324a_wooden_spoon_small_6/tool_masks",
+    #     extrinsics_yaml_path="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml",
+    #     output_root="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset",
+    #     subject_id="test_2"
+    # )

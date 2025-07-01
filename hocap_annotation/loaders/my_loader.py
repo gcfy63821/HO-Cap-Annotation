@@ -1,7 +1,7 @@
 from ..utils import *
 
 
-class HOCapLoader:
+class MyLoader:
 
     def __init__(self, sequence_folder) -> None:
         self._data_folder = Path(sequence_folder)
@@ -53,14 +53,38 @@ class HOCapLoader:
         pts = np.concatenate(pts, axis=0)
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(pts)
+        # 保存原始点云 DEBUG
+        # output_dir = "debug_outputs/"
+        # raw_pcd_path = os.path.join(output_dir, f"frame_{frame_id}_raw.ply")
+        # o3d.io.write_point_cloud(raw_pcd_path, pcd)
+        # print(f"[INFO] Saved raw point cloud to {raw_pcd_path}")
 
         # Remove outliers
         cl, ind = pcd.remove_statistical_outlier(nb_neighbors=300, std_ratio=2.0)
         pcd = pcd.select_by_index(ind)
+        # ####### DEBUG
+        # filtered_pcd_path = os.path.join(output_dir, f"frame_{frame_id}_filtered.ply")
+        # o3d.io.write_point_cloud(filtered_pcd_path, pcd)
+        # print(f"[INFO] Saved filtered point cloud to {filtered_pcd_path}")
+
+        # 可视化mask和depth（取第一个摄像头为例）
+        # mask_img = (masks[0] * 255).astype(np.uint8)
+        # mask_path = os.path.join(output_dir, f"frame_{frame_id}_mask_cam0.png")
+        # cv2.imwrite(mask_path, mask_img)
+        # print(f"[INFO] Saved mask image to {mask_path}")
+
+        depth = depths[0]
+        # depth 归一化到0-255，方便查看（注意不要用于计算）
+        # depth_vis = (depth - np.min(depth)) / (np.max(depth) - np.min(depth) + 1e-8) * 255
+        # depth_vis = depth_vis.astype(np.uint8)
+        # depth_path = os.path.join(output_dir, f"frame_{frame_id}_depth_cam0.png")
+        # cv2.imwrite(depth_path, depth_vis)
+        # print(f"[INFO] Saved depth visualization to {depth_path}")
 
         pts = np.asarray(pcd.points, dtype=np.float32)
 
         if len(pts) < 100:
+            print(f"[WARNING] Not enough points for frame {frame_id}, serials {serials} when get_init_translation")
             return [None] * len(serials), pcd
 
         center = np.mean(pts, axis=0)
@@ -101,10 +125,10 @@ class HOCapLoader:
             for obj_id in self._object_ids
         ]
 
-        self._texture_files = [
-            self._models_folder / obj_id / "textured_mesh_0.jpg"
-            for obj_id in self._object_ids
-        ]
+        # self._texture_files = [
+        #     self._models_folder / obj_id / "textured_mesh_0.jpg"
+        #     for obj_id in self._object_ids
+        # ]
 
         # Load camera intrinsics
         self._load_intrinsics()
@@ -147,26 +171,14 @@ class HOCapLoader:
         data = read_data_from_yaml(file_path)
 
         extrinsics = data["extrinsics"]
-        tag_1 = create_mat(extrinsics["tag_1"])
-        tag_1_inv = np.linalg.inv(tag_1)
-        tag2master = create_mat(extrinsics["tag_0"])
-        tag2master_inv = np.linalg.inv(tag2master)
-        tag2world = tag_1_inv @ tag2master
-        tag2world_inv = np.linalg.inv(tag2world)
-        extr2master = [create_mat(extrinsics[s]) for s in self._rs_serials]
-        extr2master_inv = [np.linalg.inv(tt) for tt in extr2master]
-        extr2world = [tag_1_inv @ tt for tt in extr2master]
+        extr2world = [create_mat(extrinsics[s]) for s in self._rs_serials]
         extr2world_inv = [np.linalg.inv(tt) for tt in extr2world]
+        # let me test
 
-        self._rs_master = data["rs_master"]
-        self._tag2master = tag2master
-        self._tag2master_inv = tag2master_inv
-        self._tag2world = tag2world
-        self._tag2world_inv = tag2world_inv
-        self._extr2master = np.stack(extr2master, axis=0)
-        self._extr2master_inv = np.stack(extr2master_inv, axis=0)
         self._extr2world = np.stack(extr2world, axis=0)
         self._extr2world_inv = np.stack(extr2world_inv, axis=0)
+        # self._extr2world = np.stack(extr2world_inv, axis=0)
+        # self._extr2world_inv = np.stack(extr2world, axis=0)
 
     def _load_mano_beta(self):
         file_path = self._calib_folder / "mano" / f"{self._subject_id}.yaml"
@@ -197,25 +209,25 @@ class HOCapLoader:
     def get_mask(self, serial, frame_id, object_idx, kernel_size=1):
         """Get mask image in numpy format, dtype=uint8, [H, W]"""
         file_path = self._seg_folder / serial / "mask" / f"mask_{frame_id:06d}.png"
-        print(f"[DEBUG] Checking if mask file exists at: {file_path}")
+        # print(f"[DEBUG] Checking if mask file exists at: {file_path}")
         
         if not file_path.exists():
-            print(f"[ERROR] Mask file not found: {file_path}")
+            # print(f"[ERROR] Mask file not found: {file_path}")
             return np.zeros((self._rs_height, self._rs_width), dtype=np.uint8)
         
         # 读取 mask 图像
         mask = read_mask_image(file_path)
-        print(f"[DEBUG] Loaded mask: shape = {mask.shape}, dtype = {mask.dtype}, unique values = {np.unique(mask)}")
+        # print(f"[DEBUG] Loaded mask: shape = {mask.shape}, dtype = {mask.dtype}, unique values = {np.unique(mask)}")
         
         # 假设mask是前景255，背景0的二值图像
         mask = (mask > 0).astype(np.uint8)
-        print(f"[DEBUG] Binary mask: unique values = {np.unique(mask)}")
+        # print(f"[DEBUG] Binary mask: unique values = {np.unique(mask)}")
         
         # 腐蚀操作
         if kernel_size > 1:
-            print(f"[DEBUG] Eroding mask with kernel size: {kernel_size}")
+            # print(f"[DEBUG] Eroding mask with kernel size: {kernel_size}")
             mask = erode_mask(mask, kernel_size)
-            print(f"[DEBUG] Mask after erosion: unique values = {np.unique(mask)}")
+            # print(f"[DEBUG] Mask after erosion: unique values = {np.unique(mask)}")
         
         return mask
 

@@ -122,6 +122,7 @@ def draw_object_mask_overlay(
         if label == 0:
             continue
         color_idx = label % len(OBJ_CLASS_COLORS)
+        print(f"Drawing object mask for label {label} with color index {color_idx}")
         overlay[mask_image == label] = OBJ_CLASS_COLORS[color_idx].rgb
     overlay = cv2.addWeighted(rgb_image, 1 - alpha, overlay, alpha, 0)
     return overlay

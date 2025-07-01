@@ -145,3 +145,12 @@ cython_debug/
 
 # Mac system files
 .DS_Store
+
+# debug outputs
+debug_outputs/
+debug_output/
+debug_pose_w/
+
+# dataset
+
+my_dataset/
