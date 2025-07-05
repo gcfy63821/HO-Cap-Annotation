@@ -28,6 +28,7 @@ if __name__ == "__main__":
     # ply_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/debug_outputs/frame_3_raw.ply"
     # ply_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/test_2/20250626_203130/processed/fd_pose_solver/debug/wooden_spoon/scene_complete.ply"
     # optimize pose
+    # ply_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/test_1/20250701_012148/processed/object_pose_solver/dpts/dpts_000000.ply"
     ply_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/test_1/20250701_012148/processed/object_pose_solver/dpts/dpts_000000.ply"
 
     # tarun's debug

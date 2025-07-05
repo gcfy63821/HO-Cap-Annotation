@@ -233,6 +233,7 @@ class SequenceLoader:
     def _init_object_group_layer(self):
         """Initialize the object group layer."""
         if not self._load_object:
+            print("[DEBUG] Object group layer not loaded.")
             return None
 
         verts, faces, norms = [], [], []
@@ -241,6 +242,9 @@ class SequenceLoader:
             verts.append(m.vertices)
             faces.append(m.faces)
             norms.append(m.vertex_normals)
+        print(f"[DEBUG] Loaded {len(verts)} object meshes with {sum(len(v) for v in verts)} vertices.")
+        print(f"[DEBUG] Loaded {len(faces)} object meshes with {sum(len(f) for f in faces)} faces.")
+        print(f"[DEBUG] Loaded {len(norms)} object meshes with {sum(len(n) for n in norms)} normals.")
         object_group_layer = ObjectGroupLayer(verts, faces, norms).to(self._device)
         return object_group_layer
 

@@ -1,54 +1,38 @@
 from ..utils import *
 import numpy as np
+import h5py
 
 
-class MyLoader:
+class ClusterLoader:
 
     def __init__(self, sequence_folder) -> None:
         self._data_folder = Path(sequence_folder)
         self._calib_folder = self._data_folder.parent.parent / "calibration"
         self._models_folder = self._data_folder.parent.parent / "models"
         self._seg_folder = self._data_folder / "processed/segmentation/sam2"
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         self._load_metadata()
-        self._load_all_images_to_memory()
+        self._big_data_loaded = False
+        self._big_data = None
+        self._try_load_big_h5_data()
 
-    def _load_all_images_to_memory(self):
-        """一次性加载所有color、depth、mask到内存"""
-        num_frames = self._num_frames
-        num_cams = len(self._rs_serials)
-        H, W = self._rs_height, self._rs_width
-
-        # 颜色图
-        self._all_colors = np.zeros((num_frames, num_cams, H, W, 3), dtype=np.uint8)
-        # 深度图
-        self._all_depths = np.zeros((num_frames, num_cams, H, W), dtype=np.float32)
-        # mask
-        self._all_masks = np.zeros((num_frames, num_cams, H, W), dtype=np.uint8)
-        # object mask
-        self._all_object_masks = np.zeros((num_frames, num_cams, H, W), dtype=np.uint8) if self.have_mano else None
-
-        for cam_idx, serial in enumerate(self._rs_serials):
-            for frame_id in range(num_frames):
-                # color
-                color_path = self._data_folder / serial / f"color_{frame_id:06d}.jpg"
-                self._all_colors[frame_id, cam_idx] = read_rgb_image(color_path)
-                # depth
-                depth_path = self._data_folder / serial / f"depth_{frame_id:06d}.png"
-                self._all_depths[frame_id, cam_idx] = read_depth_image(depth_path, 1000.0)
-                # mask
-                mask_path = self._seg_folder / serial / "mask" / f"mask_{frame_id:06d}.png"
-                if mask_path.exists():
-                    mask_img = read_mask_image(mask_path)
-                    self._all_masks[frame_id, cam_idx] = mask_img
-                else:
-                    self._all_masks[frame_id, cam_idx] = np.zeros((H, W), dtype=np.uint8)
-                # object mask
-                object_mask_path = self._seg_folder / serial / "object_mask" / f"object_mask_{frame_id:06d}.png"
-                if object_mask_path.exists():
-                    object_mask_img = read_mask_image(object_mask_path)
-                    self._all_object_masks = np.zeros((num_frames, num_cams, H, W), dtype=np.uint8)
-                    self._all_object_masks[frame_id, cam_idx] = object_mask_img
+    def _try_load_big_h5_data(self):
+        """
+        自动查找并加载all_data.h5（或all_data.npz），加载到内存
+        """
+        big_data_h5 = self._data_folder / "all_data.h5"
+        big_data_npz = self._data_folder / "all_data.npz"
+        if big_data_h5.exists():
+            self._big_data = h5py.File(big_data_h5, "r")
+            self._big_data_loaded = True
+            print(f"[INFO] Loaded big data file: {big_data_h5}")
+        elif big_data_npz.exists():
+            self._big_data = np.load(big_data_npz)
+            self._big_data_loaded = True
+            print(f"[INFO] Loaded big data file: {big_data_npz}")
+        else:
+            self._big_data_loaded = False
 
     def _depth2xyz(self, depth, K, T=None):
         """Convert depth image to xyz point cloud"""
@@ -225,81 +209,63 @@ class MyLoader:
         self._mano_beta = np.array(data["betas"], dtype=np.float32)
 
     def get_color(self, serial, frame_id):
-        """Get RGB image in numpy format, dtype=uint8, [H, W, 3]，从内存读取"""
-        cam_idx = self._rs_serials.index(serial)
-        return self._all_colors[frame_id, cam_idx]
+        """Get RGB image in numpy format, dtype=uint8, [H, W, 3]"""
+        if self._big_data_loaded:
+            idx = self._rs_serials.index(serial)
+            if isinstance(self._big_data, h5py.File):
+                return self._big_data['colors'][frame_id, idx]
+            else:
+                return self._big_data['colors'][frame_id, idx]
+        # 原有方式
+        file_path = self._data_folder / serial / f"color_{frame_id:06d}.jpg"
+        return read_rgb_image(file_path)
 
     def get_depth(self, serial, frame_id):
-        """Get depth image in numpy format, dtype=float32, [H, W]，从内存读取"""
-        cam_idx = self._rs_serials.index(serial)
-        return self._all_depths[frame_id, cam_idx]
+        """Get depth image in numpy format, dtype=float32, [H, W]"""
+        if self._big_data_loaded:
+            idx = self._rs_serials.index(serial)
+            if isinstance(self._big_data, h5py.File):
+                return self._big_data['depths'][frame_id, idx] / 1000.0
+            else:
+                return self._big_data['depths'][frame_id, idx] / 1000.0
+        # 原有方式
+        file_path = self._data_folder / serial / f"depth_{frame_id:06d}.png"
+        return read_depth_image(file_path, 1000.0)
 
     def get_mask(self, serial, frame_id, object_idx, kernel_size=1):
-        """Get mask image in numpy format, dtype=uint8, [H, W]，从内存读取并处理object_idx和腐蚀"""
-        cam_idx = self._rs_serials.index(serial)
-        mask = self._all_masks[frame_id, cam_idx]
+        """Get mask image in numpy format, dtype=uint8, [H, W]"""
+        if self._big_data_loaded:
+            idx = self._rs_serials.index(serial)
+            if isinstance(self._big_data, h5py.File):
+                mask = self._big_data['masks'][frame_id, idx][()]
+            else:
+                mask = self._big_data['masks'][frame_id, idx]
+            mask = mask.astype(np.uint8)
+            mask = mask.squeeze()
+            mask = (mask == (object_idx + 1)).astype(np.uint8)
+            # if kernel_size > 1:
+            #     mask = erode_mask(mask, kernel_size)
+            return mask
+
+        # 原有方式
+        file_path = self._seg_folder / serial / "mask" / f"mask_{frame_id:06d}.png"
+        if not file_path.exists():
+            return np.zeros((self._rs_height, self._rs_width), dtype=np.uint8)
+        
+        mask = read_mask_image(file_path)
+        mask = mask.squeeze()
         mask = (mask == (object_idx + 1)).astype(np.uint8)
         if kernel_size > 1:
             mask = erode_mask(mask, kernel_size)
         return mask
 
-    def get_object_mask(self, serial, frame_id):
-        """Get object mask image in numpy format, dtype=uint8, [H, W]，从内存读取"""
-        cam_idx = self._rs_serials.index(serial)
-        if self._all_object_masks is not None:
-            return self._all_object_masks[frame_id, cam_idx]
-        else:
-            return np.zeros((self._rs_height, self._rs_width), dtype=np.uint8)
-
-    def get_all_colors(self):
-        """返回所有颜色图，shape: (num_frames, num_cams, H, W, 3)"""
-        return self._all_colors
-
-    def get_all_depths(self):
-        """返回所有深度图，shape: (num_frames, num_cams, H, W)"""
-        return self._all_depths
-
-    def get_all_masks(self, object_idx=None, kernel_size=1):
-        """
-        返回所有mask，shape: (num_frames, num_cams, H, W)
-        如果object_idx不为None，则返回指定object的mask（已二值化和腐蚀）
-        """
-        if object_idx is None and kernel_size == 1:
-            return self._all_masks
-        num_frames, num_cams, H, W = self._all_masks.shape
-        masks = np.zeros_like(self._all_masks, dtype=np.uint8)
-        for cam_idx in range(num_cams):
-            for frame_id in range(num_frames):
-                mask = self._all_masks[frame_id, cam_idx]
-                if object_idx is not None:
-                    mask = (mask == (object_idx + 1)).astype(np.uint8)
-                if kernel_size > 1:
-                    mask = erode_mask(mask, kernel_size)
-                masks[frame_id, cam_idx] = mask
-        return masks
-
-    def get_all_object_masks(self, kernel_size=1):
-        """
-        返回所有object mask，shape: (num_frames, num_cams, H, W)
-        如果没有object mask，则返回全0的mask
-        """
-        if self._all_object_masks is None:
-            return np.zeros_like(self._all_masks, dtype=np.uint8)
-        num_frames, num_cams, H, W = self._all_object_masks.shape
-        masks = np.zeros_like(self._all_object_masks, dtype=np.uint8)
-        for cam_idx in range(num_cams):
-            for frame_id in range(num_frames):
-                mask = self._all_object_masks[frame_id, cam_idx]
-                if kernel_size > 1:
-                    mask = erode_mask(mask, kernel_size)
-                masks[frame_id, cam_idx] = mask
-        return masks
 
     def get_valid_seg_serials(self):
-        valid_serials = []
-        for serial in self._rs_serials:
-            if (self._seg_folder / serial / "mask" / "mask_000000.png").exists():
-                valid_serials.append(serial)
+        # valid_serials = []
+        # for serial in self._rs_serials:
+        #     if (self._seg_folder / serial / "mask" / "mask_000000.png").exists():
+        #         valid_serials.append(serial)
+        valid_serials =  self._rs_serials.copy()
         return valid_serials
 
     def get_seg_color_index_map(self):

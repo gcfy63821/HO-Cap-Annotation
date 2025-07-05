@@ -815,6 +815,9 @@ def evaluate_and_fix_poses(
     Returns:
         np.ndarray: Fixed poses.
     """
+    # print("Evaluating and fixing poses...")
+    # print(f"poses.shape: {poses.shape}")
+    # print(poses)
     num_poses, pose_dim = poses.shape
     fixed_poses = np.copy(poses)
 

@@ -344,6 +344,7 @@ class FoundationPose:
         iteration,
         extra={},
         prev_pose=None,
+        ob_mask=None,
     ):
         if self.pose_last is None and prev_pose is None:
             logging.info("Please init pose by register first")
@@ -366,6 +367,11 @@ class FoundationPose:
             torch.as_tensor(K, dtype=torch.float, device=CFG.device)[None],
             zfar=np.inf,
         )[0]
+        # re-estimate translation 
+        ob_in_cams = self.pose_last.reshape(1,4,4).data.cpu().numpy()
+        if ob_mask is not None and ob_mask.sum() > 10:
+            center = self.guess_translation(depth=depth.data.cpu().numpy(), mask=ob_mask, K=K)
+            ob_in_cams[:, :3, 3] = center
 
         pose, vis = self.refiner.predict(
             mesh=self.mesh,

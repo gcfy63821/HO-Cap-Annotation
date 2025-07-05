@@ -235,9 +235,9 @@ class FoundationPoseMerger:
     def merge_fd_poses(self):
         self._logger.info(f">>>>>>>>>> Merging foundation poses <<<<<<<<<<")
 
-        raw_file = self._fd_pose_folder / f"fd_poses_merged_raw.npy"
-        interp_file = self._fd_pose_folder / f"fd_poses_merged_interp.npy"
-        fixed_file = self._fd_pose_folder / f"fd_poses_merged_fixed.npy"
+        raw_file = self._fd_pose_folder / f"adaptive_fd_poses_merged_raw.npy"
+        interp_file = self._fd_pose_folder / f"adaptive_fd_poses_merged_interp.npy"
+        fixed_file = self._fd_pose_folder / f"adaptive_fd_poses_merged_fixed.npy"
 
         # Generate raw poses
         self._logger.info("Generating raw poses...")
@@ -287,41 +287,45 @@ class FoundationPoseMerger:
         for idx in range(self._num_objects):
             poses_fixed = fd_poses_interp[idx]
 
+            # === 自适应平滑窗口 ===
+            # 计算每帧的平移速度
+            trans = poses_fixed[:, 4:7]
+            speed = np.linalg.norm(np.diff(trans, axis=0), axis=1)
+            speed = np.concatenate([[0], speed])  # 第一帧速度设为0
+
+            # 归一化速度到[0, 1]
+            speed_norm = (speed - speed.min()) / (speed.max() - speed.min() + 1e-8)
+            # 设定窗口范围
+            min_win, max_win = 0, 10
+            # 速度越大窗口越小，速度越小窗口越大
+            adaptive_windows = (max_win - (max_win - min_win) * speed_norm).astype(int)
+            adaptive_windows = np.clip(adaptive_windows, min_win, max_win)
+
+            # 对每一帧用不同窗口做平滑
+            smoothed_poses = poses_fixed.copy()
+            for i in range(len(poses_fixed)):
+                win = adaptive_windows[i]
+                start = max(0, i - win)
+                end = min(len(poses_fixed), i + win + 1)
+                window_quats = poses_fixed[start:end, :4]
+                window_trans = poses_fixed[start:end, 4:]
+                norm_quats = normalize_quats(window_quats)
+                mean_quat = average_quats(norm_quats)
+                mean_quat = normalize_quats(mean_quat)
+                mean_trans = np.mean(window_trans, axis=0)
+                smoothed_poses[i] = np.concatenate([mean_quat, mean_trans], axis=0)
+
+            # 后续仍可用evaluate_and_fix_poses进一步修正
+            poses_fixed = smoothed_poses
+
             # poses_fixed = evaluate_and_fix_poses(
             #     poses_fixed,
-            #     window_size=15,
-            #     rot_thresh=5.0,
-            #     trans_thresh=0.01,
+            #     window_size=10,
+            #     rot_thresh=1.0,
+            #     trans_thresh=0.005,
             #     seperate_rot_trans=True,
             #     use_mean_pose=True,
             # )
-            # 1, 0.5, 0.003
-            # 0.03会太小
-            poses_fixed = pose_jitter_smooth(
-                poses_fixed,
-                window_size=1,
-                rot_thresh=1.5,
-                trans_thresh=0.004,
-            )
-
-            poses_fixed = evaluate_and_fix_poses(
-                poses_fixed,
-                window_size=10,
-                rot_thresh=1.0,
-                trans_thresh=0.005,
-                seperate_rot_trans=True,
-                use_mean_pose=True,
-            )
-            # 15, 2.0, 0.01, 
-            # poses_fixed = evaluate_and_fix_poses(
-            #     poses_fixed,
-            #     window_size=15,
-            #     rot_thresh=2.0,
-            #     trans_thresh=0.01,
-            #     seperate_rot_trans=False,
-            #     use_mean_pose=True,
-            # )
-
             # poses_fixed = evaluate_and_fix_poses(
             #     poses_fixed,
             #     window_size=5,
@@ -330,17 +334,15 @@ class FoundationPoseMerger:
             #     seperate_rot_trans=False,
             #     use_mean_pose=True,
             # )
-            # 1， 0.5， 0.001
             poses_fixed = pose_jitter_smooth(
                 poses_fixed,
                 window_size=1,
-                rot_thresh=1.0,
+                rot_thresh=2.0,
                 trans_thresh=0.003,
             )
-
             poses_fixed = evaluate_and_fix_poses(
                 poses_fixed,
-                window_size=20,
+                window_size=45,
                 rot_thresh=2.0,
                 trans_thresh=0.003,
                 seperate_rot_trans=True,

@@ -118,7 +118,69 @@ def load_masks_from_folder(mask_root_dir, num_frames, num_cams):
     return all_masks
 
 
-def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output_root, subject_id="subject_5"):
+def save_all_data_to_npz(output_folder, colors, depths, masks):
+    """
+    一次性保存所有 color/depth/mask 到一个 npz 文件
+    """
+    np.savez_compressed(
+        Path(output_folder) / "all_data.npz",
+        colors=colors,
+        depths=depths,
+        masks=masks
+    )
+    print(f"[INFO] All data saved to {Path(output_folder) / 'all_data.npz'}")
+
+def save_all_data_to_h5(output_folder, colors, depths, masks):
+    """
+    一次性保存所有 color/depth/mask 到一个 h5 文件
+    """
+    import h5py
+    h5_path = Path(output_folder) / "all_data.h5"
+    with h5py.File(h5_path, "w") as f:
+        f.create_dataset("colors", data=colors, compression="gzip")
+        f.create_dataset("depths", data=depths, compression="gzip")
+        f.create_dataset("masks", data=masks, compression="gzip")
+    print(f"[INFO] All data saved to {h5_path}")
+
+
+def preprocess_masks(masks, kernel_size=1):
+    """
+    对所有mask进行squeeze、二值化和腐蚀（如需要），返回处理后的mask
+    masks: (N, C, H, W) numpy array
+    """
+    print(masks.shape)
+    N, C,  H, W = masks.shape
+    processed = np.zeros_like(masks, dtype=np.uint8)
+    for i in range(N):
+        for j in range(C):
+            mask = masks[i, j]
+            mask = np.squeeze(mask)
+            mask = mask.astype(np.uint8)
+            if kernel_size > 1:
+                from hocap_annotation.utils.cv_utils import erode_mask
+                mask = erode_mask(mask, kernel_size)
+            processed[i, j] = mask
+    # debug: 输出mask的唯一值
+    unique_vals = np.unique(processed)
+    print(f"[DEBUG] Mask unique values after preprocess: {unique_vals}")
+    return processed
+
+def preprocess_depths(depths):
+    """
+    对所有深度图进行预处理：将小于1或无穷大的值置为0
+    depths: (N, C, H, W) numpy array
+    """
+    depths = np.copy(depths)
+    mask_invalid = (depths < 1) | (~np.isfinite(depths))
+    depths[mask_invalid] = 0
+    # debug: 输出每个相机的深度最大最小平均值
+    N, C, H, W = depths.shape
+    for cam in range(C):
+        d = depths[:, cam]
+        print(f"[DEBUG] Depth stats for camera {cam}: min={np.min(d):.4f}, max={np.max(d):.4f}, mean={np.mean(d):.4f}")
+    return depths
+
+def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output_root, subject_id="subject_5", tool_name="blue_scooper", mask_kernel_size=1):
     # Load data
     with h5py.File(h5_path, 'r') as f:
         imgs = f["imgs"][:]  # (N, 8, 480, 640, 3)
@@ -126,21 +188,23 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
 
     num_frames, num_cams = imgs.shape[0], imgs.shape[1]
 
+    # 深度预处理
+    depths = preprocess_depths(depths)
+
     # Load masks from folder structure
     masks = load_masks_from_folder(mask_root_dir, num_frames, num_cams)  # (N, 8, H, W)
+
+    # 预处理mask（squeeze、二值化、腐蚀等）
+    masks = preprocess_masks(masks, kernel_size=mask_kernel_size)
 
     # Load extrinsics from YAML
     with open(extrinsics_yaml_path, 'r') as f:
         extrinsics_yaml = yaml.safe_load(f)
-    # extrinsics_dict = extrinsics_yaml["extrinsics"]
-    # cam_serials = sorted(extrinsics_dict.keys())  # ['00', '01', ..., '07']
-
     extrinsics_dict = {
         k: v for k, v in extrinsics_yaml["extrinsics"].items()
         if not k.startswith("tag_")
     }
     cam_serials = sorted(extrinsics_dict.keys())
-
 
     # Check consistency
     assert len(cam_serials) == num_cams, f"Number of cameras mismatch: {len(cam_serials)} vs {num_cams}"
@@ -151,44 +215,13 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
     print(f"[INFO] Saving to {output_folder}")
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    # For each camera
-    for cam_idx in range(num_cams):
-        cam_serial = f"{cam_idx:02d}"
-        cam_dir = output_folder / cam_serial
-        color_dir = cam_dir
-        depth_dir = cam_dir
-        mask_dir = output_folder / "processed" / "segmentation" / "sam2" / cam_serial / "mask"
-        mask_init_dir = output_folder / "processed" / "segmentation" / "init" / cam_serial
-        mask_dir.mkdir(parents=True, exist_ok=True)
-        mask_init_dir.mkdir(parents=True, exist_ok=True)
-        color_dir.mkdir(parents=True, exist_ok=True)
-
-        for frame_idx in tqdm(range(num_frames), desc=f"Camera {cam_idx}"):
-            # Save color
-            rgb = imgs[frame_idx, cam_idx]
-            save_image(rgb, color_dir / f"color_{frame_idx:06d}.jpg")
-
-            # Save depth
-            depth = depths[frame_idx, cam_idx]
-            # show max and min depth
-            # print(f"[INFO] Frame {frame_idx}, Camera {cam_serial}: Depth min={np.min(depth)}, max={np.max(depth)}")
-            depth[(depth<1) | (depth>=np.inf)] = 0
-
-            save_image(depth, depth_dir / f"depth_{frame_idx:06d}.png", is_depth=True)
-
-            # Save mask
-            mask = masks[frame_idx, cam_idx].astype(np.uint8)
-            if frame_idx == 0:
-                print(f"[INFO] Frame {frame_idx}, Camera {cam_serial}: Mask shape={mask.shape}, unique values={np.unique(mask)}")
-                save_image(mask, mask_init_dir / f"mask_{frame_idx:06d}.png")
-            save_image(mask, mask_dir / f"mask_{frame_idx:06d}.png")
-            
+    # 保存为大文件
+    save_all_data_to_h5(output_folder, imgs, depths, masks)
 
     # Save meta.yaml
     meta = {
         "num_frames": int(num_frames),
-        "object_ids": ["blue_scooper"],
-        # "object_ids": ["wooden_spoon"],
+        "object_ids": [tool_name],
         "mano_sides": [],
         "subject_id": subject_id,
         "realsense": {
@@ -204,24 +237,43 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
         "extrinsics": "extrinsics.yaml",
         "have_hololens": False,
         "have_mano": False,
+        "task_id": 1,
     }
 
     with open(output_folder / "meta.yaml", "w") as f:
         yaml.dump(meta, f)
 
-    print("[INFO] Done writing images and meta.yaml!")
+    print("[INFO] Done writing all_data.npz and meta.yaml!")
 
 
+
+# ====== 如何加载数据示例 ======
+# data = np.load('/path/to/all_data.npz')
+# imgs = data['colors']      # (N, 8, 480, 640, 3)
+# depths = data['depths']    # (N, 8, 480, 640)
+# masks = data['masks']      # (N, 8, H, W)
+# ===========================
 # 示例调用
 if __name__ == "__main__":
     # blue scooper
+    # test_1
+    # convert_to_hocap_format(
+    #     h5_path="/home/wys/learning-compliant/crq_ws/data/0506data/blue_scooper/06c0c8e0_blue_scooper_mid_6/data00000000.h5",
+    #     mask_root_dir="/home/wys/learning-compliant/crq_ws/data/0506data/blue_scooper_annotated/06c0c8e0_blue_scooper_mid_6/tool_masks",
+    #     extrinsics_yaml_path="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml",
+    #     output_root="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset",
+    #     subject_id="test_1"
+    # )
+    # spoon
     convert_to_hocap_format(
-        h5_path="/home/wys/learning-compliant/crq_ws/data/0506data/blue_scooper/06c0c8e0_blue_scooper_mid_6/data00000000.h5",
-        mask_root_dir="/home/wys/learning-compliant/crq_ws/data/0506data/blue_scooper_annotated/06c0c8e0_blue_scooper_mid_6/tool_masks",
+        h5_path="/home/wys/learning-compliant/crq_ws/data/0513data/28dfb756_pestie_1/data00000000.h5",
+        mask_root_dir="/home/wys/learning-compliant/crq_ws/data/0513data/28dfb756_pestie_1/masks",
         extrinsics_yaml_path="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml",
         output_root="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset",
-        subject_id="test_1"
+        subject_id="pestle_1",
+        tool_name="pestle"
     )
+
     # wooden_spoon
     # convert_to_hocap_format(
     #     h5_path="/home/wys/learning-compliant/crq_ws/data/raw_h5s/0b99324a_wooden_spoon_small_6/data00000000.h5",

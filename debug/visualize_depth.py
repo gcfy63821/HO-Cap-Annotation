@@ -44,6 +44,6 @@ def visualize_depth_png(depth_path, output_jpg_path=None, percentile_range=(5, 9
 
 # 示例调用
 if __name__ == "__main__":
-    depth_png_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/test_2/20250626_203130/07/depth_000100.png"  # 替换为你的路径
+    depth_png_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/pestle_1/20250703_132710/processed/fd_pose_solver/debug/pestle/depth.png"  # 替换为你的路径
     output_jpg_path = "debug_outputs/depth_vis.jpg"        # 保存可视化结果的路径（可选）
     visualize_depth_png(depth_png_path, output_jpg_path)

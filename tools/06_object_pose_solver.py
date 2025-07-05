@@ -268,16 +268,32 @@ class ObjectPoseSolver:
 
         # Smooth the poses
         self._logger.info("Smoothing optimized poses...")
-        for i in range(len(optim_pose_o)):
-            optim_pose_o[i] = evaluate_and_fix_poses(
-                optim_pose_o[i],
+        print("len optim_pose_o:", len(optim_pose_o))
+        # print("optim_pose_o:", optim_pose_o)
+        # for i in range(len(optim_pose_o)):
+        #     optim_pose_o[i] = evaluate_and_fix_poses(
+        #         optim_pose_o[i],
+        #         window_size=15,
+        #         rot_thresh=1.0,
+        #         trans_thresh=0.001,
+        #         seperate_rot_trans=False,
+        #     )
+        #     optim_pose_o[i] = evaluate_and_fix_poses(
+        #         optim_pose_o[i],
+        #         window_size=30,
+        #         rot_thresh=0.1,
+        #         trans_thresh=0.01,
+        #         seperate_rot_trans=False,
+        #     )
+        optim_pose_o = evaluate_and_fix_poses(
+                optim_pose_o,
                 window_size=15,
                 rot_thresh=1.0,
                 trans_thresh=0.001,
                 seperate_rot_trans=False,
             )
-            optim_pose_o[i] = evaluate_and_fix_poses(
-                optim_pose_o[i],
+        optim_pose_o = evaluate_and_fix_poses(
+                optim_pose_o,
                 window_size=30,
                 rot_thresh=0.1,
                 trans_thresh=0.01,
