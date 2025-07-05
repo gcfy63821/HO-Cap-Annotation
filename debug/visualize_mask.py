@@ -62,10 +62,37 @@ def visualize_single_npy_mask(npy_path, output_dir=None, cmap=cv2.COLORMAP_JET):
         cv2.imwrite(str(out_path), mask_color)
         print(f"[INFO] Saved mask for value {val} to {out_path}")
 
+def visualize_single_png_mask(png_path, output_dir=None, cmap=cv2.COLORMAP_JET):
+    """
+    可视化单个png文件中每个唯一取值对应的mask，并保存为png。
+    png_path: 单个png文件路径
+    output_dir: 输出png的目录（默认为png文件同目录下的vis_{stem}文件夹）
+    """
+    png_path = Path(png_path)
+    mask = cv2.imread(str(png_path), cv2.IMREAD_GRAYSCALE)
+    unique_vals = np.unique(mask)
+    print(f"[INFO] Unique values in mask: {unique_vals}")
+
+    if output_dir is None:
+        output_dir = png_path.parent / f"vis_{png_path.stem}"
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for val in unique_vals:
+        mask_bin = (mask == val).astype(np.uint8) * 255
+        mask_color = cv2.applyColorMap(mask_bin, cmap)
+        out_path = output_dir / f"{png_path.stem}_val{val}.png"
+        cv2.imwrite(str(out_path), mask_color)
+        print(f"[INFO] Saved mask for value {val} to {out_path}")
+
 if __name__ == "__main__":
     '''
         usage: view all labels in a single npy mask file
     '''
-    mask_dir = "/home/wys/learning-compliant/crq_ws/data/0513data/2379b837_coffee_1/masks/cam00.mp4/0.npy"
-    output_dir = "debug_outputs/mask_vis"
-    visualize_single_npy_mask(mask_dir, output_dir)
+    # mask_dir = "/home/wys/learning-compliant/crq_ws/data/0513data/2379b837_coffee_1/masks/cam00.mp4/0.npy"
+    # output_dir = "debug_outputs/mask_vis"
+    # visualize_single_npy_mask(mask_dir, output_dir)
+
+    png_mask_dir = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/pestle_1/20250703_132710/processed/segmentation/sam2/00/mask/mask_000000.png"
+    output_png_dir = "debug_outputs/png_mask_vis"
+    visualize_single_png_mask(png_mask_dir, output_png_dir)

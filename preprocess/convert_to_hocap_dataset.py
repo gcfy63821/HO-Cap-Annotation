@@ -264,14 +264,25 @@ if __name__ == "__main__":
 
     # )
     # new scooper
+    # convert_to_hocap_format(
+    #     h5_path="/media/wys/1146f1fa-b0e1-4f4d-bd3c-924c33902dd7/crq_ws/data/0506data/blue_scooper/8f2cf90d_blue_scooper_small_1/data00000000.h5",
+    #     mask_root_dir="/media/wys/1146f1fa-b0e1-4f4d-bd3c-924c33902dd7/crq_ws/data/0506data/blue_scooper_annotated/8f2cf90d_blue_scooper_small_1/tool_masks",
+    #     extrinsics_yaml_path="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml",
+    #     output_root="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset",
+    #     subject_id="blue_scooper_1",
+    #     tool_name="blue_scooper",
+    #     object_mask_dir = "/media/wys/1146f1fa-b0e1-4f4d-bd3c-924c33902dd7/crq_ws/data/0506data/blue_scooper_annotated/8f2cf90d_blue_scooper_small_1/object_masks"  # 如果有物体mask目录，可以传入
+    # )
+
+    # new spoon with plate
     convert_to_hocap_format(
-        h5_path="/media/wys/1146f1fa-b0e1-4f4d-bd3c-924c33902dd7/crq_ws/data/0506data/blue_scooper/8f2cf90d_blue_scooper_small_1/data00000000.h5",
-        mask_root_dir="/media/wys/1146f1fa-b0e1-4f4d-bd3c-924c33902dd7/crq_ws/data/0506data/blue_scooper_annotated/8f2cf90d_blue_scooper_small_1/tool_masks",
+        h5_path="/media/wys/1146f1fa-b0e1-4f4d-bd3c-924c33902dd7/crq_ws/data/0607data/6c1264cf_wooden_spoon_dough_0/data00000000.h5",
+        mask_root_dir="/media/wys/1146f1fa-b0e1-4f4d-bd3c-924c33902dd7/crq_ws/data/0607data/6c1264cf_wooden_spoon_dough_0_annotated/tool_masks",
         extrinsics_yaml_path="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml",
         output_root="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset",
-        subject_id="blue_scooper_1",
-        tool_name="blue_scooper",
-        object_mask_dir = "/media/wys/1146f1fa-b0e1-4f4d-bd3c-924c33902dd7/crq_ws/data/0506data/blue_scooper_annotated/8f2cf90d_blue_scooper_small_1/object_masks"  # 如果有物体mask目录，可以传入
+        subject_id="wooden_spoon_1",
+        tool_name="wooden_spoon",
+        # object_mask_dir = "/media/wys/1146f1fa-b0e1-4f4d-bd3c-924c33902dd7/crq_ws/data/0506data/blue_scooper_annotated/8f2cf90d_blue_scooper_small_1/object_masks"  # 如果有物体mask目录，可以传入
     )
 
     # convert_to_hocap_format(
