@@ -76,7 +76,7 @@ def save_calibration(extrinsics, intrinsics, calib_root):
     calibration_folder = calib_root / "calibration"
     intrinsics_folder = calibration_folder / "intrinsics"
     extrinsics_folder = calibration_folder / "extrinsics"
-    extrinsics_file = extrinsics_folder / "extrinsics.yaml"
+    extrinsics_file = extrinsics_folder / "extrinsics_updated_0629.yaml"
 
     calibration_folder.mkdir(parents=True, exist_ok=True)
     intrinsics_folder.mkdir(parents=True, exist_ok=True)
@@ -134,7 +134,7 @@ def save_calibration(extrinsics, intrinsics, calib_root):
 # 示例调用
 if __name__ == "__main__":
     # 输入相机参数的路径
-    camera_params_file = "/home/wys/learning-compliant/crq_ws/camera_ext_calibration_0629.yaml"
+    camera_params_file = "/home/wys/learning-compliant/crq_ws/updated_extrinsics_0629.yaml"
 
     # 输出路径
     calib_root = Path("/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset")

@@ -118,6 +118,7 @@ class HOCapRenderer:
         )
         faces_m = self.render_dict["mano_faces"]
         colors_m = self.render_dict["mano_colors"]
+        self._logger.debug("Getting render colors")
         r_colors = self._renderer.get_render_colors(
             width=self._rs_width,
             height=self._rs_height,
@@ -130,7 +131,7 @@ class HOCapRenderer:
             mano_colors=colors_m,
         )
         # print(f"#rendered images: {len(r_colors)}")
-        print(f"One image shape: {r_colors[0].shape}, min={r_colors[0].min()}, max={r_colors[0].max()}")
+        self._logger.debug(f"One image shape: {r_colors[0].shape}, min={r_colors[0].min()}, max={r_colors[0].max()}")
 
         if self.render_dict["pv_poses"] is not None:
             pv_pose = self.render_dict["pv_poses"][frame_id]

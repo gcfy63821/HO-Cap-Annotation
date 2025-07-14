@@ -44,7 +44,7 @@ optimization:
     w_smooth_acc_rot: 1.0
     w_smooth_acc_trans: 1.0
     smooth_window_size: 1
-    sdf_dist_thresh: 0.01
+    sdf_dist_thresh: 0.1 # 0.01
     load_offline_dpts: false
     valid_rs_serials:
       - "00"
@@ -83,9 +83,9 @@ optimization:
     # sdf_steps: 50
     # smooth_steps: 50
     # for debug
-    total_steps: 30
-    sdf_steps: 30
-    smooth_steps: 30
+    total_steps: 10
+    sdf_steps: 10
+    smooth_steps: 10
     w_sdf: 1.0
     w_reg: 1.0
     w_smooth: 0.01
@@ -94,13 +94,13 @@ optimization:
     w_smooth_acc_rot: 1.0
     w_smooth_acc_trans: 0.1
     smooth_window_size: 3
-    sdf_dist_thresh: 0.02 #0.01
+    sdf_dist_thresh: 0.1 #0.01
     use_object_masks: true #true # false
     load_offline_dpts: false #true #false
   joint_pose_solver:
     lr: 0.001
-    total_steps: 50
-    sdf_steps: 50
+    total_steps: 10
+    sdf_steps: 10
     w_sdf: 10.0
     w_reg_m: 1.0
     w_reg_o: 1.0
@@ -116,5 +116,5 @@ optimization:
     w_smooth_acc_rot_o: 1.0
     w_smooth_acc_trans_o: 0.1
     smooth_window_size_o: 3
-    sdf_dist_thresh: 0.01
+    sdf_dist_thresh: 0.1 # 0.01
     load_offline_dpts: false

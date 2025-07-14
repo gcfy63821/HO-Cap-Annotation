@@ -8,6 +8,7 @@ TOOL_NAME=""
 BASE_PATH="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/"
 OPTIMIZE=""
 UUID=""
+TRACK_REFINE_ITER="10"
 # 解析命令行参数
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -29,6 +30,10 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         --optimize)
             OPTIMIZE="$2"
+            shift 2
+            ;;
+        --track_refine_iter)
+            TRACK_REFINE_ITER="$2"
             shift 2
             ;;
         --uuid)
@@ -55,7 +60,7 @@ TOOL_NAME=${TOOL_NAME:-""}  # 默认值为空
 # 运行 04-1-1_fd_pose_solver_prep.py
 if [ -n "$OBJECT_IDX" ]; then
     echo "Running fd_pose_solver with object_idx=$OBJECT_IDX..."
-    python tools/04-1-1_fd_pose_solver_prep.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX"
+    python tools/04-1-1_fd_pose_solver_prep.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER"
 fi
 
 # 运行 04-2_fd_pose_merger.py
@@ -68,19 +73,28 @@ python tools/04-2-1_adaptive_fd_merger.py --sequence_folder "$SEQUENCE_FOLDER"
 
 
 # 运行 visualize_ob_in_world.py
-if [ -n "$TOOL_NAME" ]; then
-    echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
-    python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID" 
+# if [ -n "$TOOL_NAME" ]; then
+#     echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
+#     python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID"  --object_idx "$OBJECT_IDX"
 
-    echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
-    python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID" --pose_file "adaptive"
+#     echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
+#     python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "adaptive"
+# fi
+if [ -n "$TOOL_NAME" ]; then
+    echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
+    python debug/visualize_and_evaluate_result.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID"  --object_idx "$OBJECT_IDX"
+
+    echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
+    python debug/visualize_and_evaluate_result.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "adaptive"
 fi
+
+
 
 if [ -n "$OPTIMIZE" ]; then
     echo "Running optimize_fd_pose with optimize=$OPTIMIZE..."
     python tools/06_object_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
     echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
-    python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID" --pose_file "optimized"
+    python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID" --pose_file "optimized" --uuid "$UUID" --object_idx "$OBJECT_IDX"
 
 fi
 

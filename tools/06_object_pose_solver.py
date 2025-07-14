@@ -91,6 +91,8 @@ class ObjectPoseSolver:
 
     def _load_poses_o(self, pose_file):
         poses = np.load(pose_file).astype(np.float32)
+        if poses.ndim != 3:
+            poses = np.expand_dims(poses, axis=0)
         self._logger.info(f"Object poses loaded: {poses.shape}")
         return poses
 
@@ -438,6 +440,7 @@ class ObjectPoseSolver:
         poses_o = np.stack([quat_to_mat(p) for p in poses_o], axis=1)
         self._logger.debug(f"Loaded poses_o: {poses_o.shape}")
 
+
         # Render poses
         renderer = HOCapRenderer(self._data_folder, log_file=self._log_file)
         renderer.update_render_dict(poses_o, verts_m, faces_m, colors_m, joints_m)
@@ -454,14 +457,14 @@ class ObjectPoseSolver:
         self._logger.info("=" * 100)
         t_s = time.time()
 
-        # Initialize optimizer
-        self.initialize_optimizer()
+        # # Initialize optimizer
+        # self.initialize_optimizer()
 
-        # Start optimization
-        self.solve()
+        # # Start optimization
+        # self.solve()
 
-        # Save results
-        self.save_results()
+        # # Save results
+        # self.save_results()
 
         # Render optimized poses
         self.render_optimized_poses()

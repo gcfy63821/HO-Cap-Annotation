@@ -41,11 +41,11 @@ class SequenceLoader:
         # Crop limits in world frame, [x_min, x_max, y_min, y_max, z_min, z_max]
         # self._crop_lim = [-0.60, +0.60, -0.35, +0.35, -0.01, +0.80]
         # scooper
-        # X_THRESHOLD = (-0.25, 0.1)
-        # Y_THRESHOLD = (0.0, 0.25)
-        # Z_THRESHOLD = (0.6, 0.9)
+        # X_THRESHOLD = (-0.3, 0.2)
+        # Y_THRESHOLD = (-0.3, 0.3)
+        # Z_THRESHOLD = (0.5, 0.95)
         # Crop limits in world frame, [x_min, x_max, y_min, y_max, z_min, z_max]
-        self._crop_lim = [-0.25, +0.1, 0.0, +0.25, 0.6, +0.9]
+        self._crop_lim = [-0.3, +0.2, -0.3, +0.3, 0.5, +0.95]
 
         # Load metadata
         self._load_metadata()

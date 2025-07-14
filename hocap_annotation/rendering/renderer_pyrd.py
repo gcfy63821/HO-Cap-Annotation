@@ -91,6 +91,8 @@ class OffscreenRenderer:
         seg_node_map = {}
         if isinstance(node_names, list):
             if len(node_names) != len(node_poses):
+                print("DEBUG: node names and poses:",node_names, node_poses)
+                print("DEBUG length:", len(node_names), len(node_poses))
                 raise ValueError("Mismatch between node_names and node_poses length")
             for name, pose in zip(node_names, node_poses):
                 if name in node_dict and self._is_valid_pose(pose):
@@ -260,7 +262,8 @@ class OffscreenRenderer:
             else:
                 scene.main_camera_node = self._cam_nodes[cam_names]
                 colors, depths = r.render(scene, render_flags, seg_node_map)
-            print(f"[DEBUG] Rendered image stats - mean: {color.mean()}, min: {color.min()}, max: {color.max()}")
+            # print(f"[DEBUG] Rendered image stats - mean: {color.mean()}, min: {color.min()}, max: {color.max()}")
+            self._logger.debug(f"Rendered image stats - mean: {color.mean()}, min: {color.min()}, max: {color.max()}")
             cv2.imwrite(f"debug_render/cam_{cam_name}.png", color[..., ::-1])  # BGR save
 
         finally:

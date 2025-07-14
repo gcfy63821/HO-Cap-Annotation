@@ -31,18 +31,31 @@
 # ./run_local.sh --sequence_name test_2/20250702_003757 --object_idx 1 --tool_name wooden_spoon --uuid mask_depth >> log.txt 2>&1
 
 
-# ./run_local.sh --sequence_name test_2/20250630_165212 --object_idx 1 --tool_name wooden_spoon --output_idx 2 >> log.txt 2>&1
-# ./run_detection.sh --sequence_name test_3/20250702_234933 --object_idx 1 --tool_name squeegee --output_idx 2 >> log.txt 2>&1
+# ./run_local.sh --sequence_name test_2/20250630_165212 --object_idx 1 --tool_name wooden_spoon  --uuid 0711 >> log.txt 2>&1
+# # # ./run_detection.sh --sequence_name test_3/20250702_234933 --object_idx 1 --tool_name squeegee --output_idx 2 >> log.txt 2>&1
 
-# ./run_local.sh --sequence_name squeegee_1/20250704_151206 --tool_name squeegee --object_idx 1 --output_idx 1 --uuid mask_depth >> log.txt 2>&1
+# ./run_local.sh --sequence_name squeegee_1/20250704_151206 --tool_name squeegee --object_idx 1  --uuid 0711 >> log.txt 2>&1
 
-# ./run_local.sh --sequence_name blue_scooper_1/20250704_172530 --tool_name blue_scooper --object_idx 1  --uuid mask_depth_and_object >> log.txt 2>&1
+# ./run_local.sh --sequence_name blue_scooper_1/20250704_172530 --tool_name blue_scooper --object_idx 1  --uuid 0711 >> log.txt 2>&1
 
-# ./run_local.sh --sequence_name wooden_spoon_1/20250704_202115 --tool_name wooden_spoon --object_idx 1  --uuid re_test >> log.txt 2>&1
+# # ./run_local.sh --sequence_name wooden_spoon_1/20250704_202115 --tool_name wooden_spoon --object_idx 1  --uuid re_test >> log.txt 2>&1
 
-# ./run_local.sh --sequence_name blue_scooper_1/20250704_202733 --tool_name blue_scooper --object_idx 1  --uuid mask_depth_and_object >> log.txt 2>&1
+# ./run_local.sh --sequence_name blue_scooper_1/20250704_202733 --tool_name blue_scooper --object_idx 1  --uuid 0711  >> log.txt 2>&1
 
-# ./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid mask_depth >> log.txt 2>&1
+# ./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0711  >> log.txt 2>&1
+
+# ./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name purple_plate --object_idx 2  --uuid 0711 --optimize 1 >> log.txt 2>&1
+# # new extrinsics
+# ./run_local.sh --sequence_name wooden_spoon_1/20250705_210948 --tool_name wooden_spoon --object_idx 1  --uuid updated_ext >> log.txt 2>&1
+
+./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name purple_plate --object_idx 2  --uuid 0712_plate_20iter --track_refine_iter 20 >> log.txt 2>&1
+
+./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name purple_plate --object_idx 2  --uuid 0712_plate_40iter --track_refine_iter 40 >> log.txt 2>&1
+
+./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0712_pestle_40iter --track_refine_iter 40 >> log.txt 2>&1
+
+./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0712_pestle_20iter --track_refine_iter 20 >> log.txt 2>&1
+
 
 # 运行目标姿态求解
 # python tools/06_object_pose_solver.py --sequence_folder /home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/test_1/20250702_003042

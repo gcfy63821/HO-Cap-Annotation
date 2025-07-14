@@ -7,6 +7,7 @@ class MPHandDetector:
         self._config = mp_config
         self._device = mp_config.device
         self._mode = self._config.running_mode
+        print("self.config:",self._config)
         if self._mode == "video":
             self._delta_time_ms = 1000 // self._config.frame_rate
             self._timestamp_ms = 0
@@ -34,6 +35,8 @@ class MPHandDetector:
             min_tracking_confidence=self._config.min_tracking_confidence,
             min_hand_presence_confidence=self._config.min_hand_presence_confidence,
         )
+        # debug
+        print("DEBUG:", self._config.max_num_hands)
         return mp.tasks.vision.HandLandmarker.create_from_options(mp_options)
 
     def _normalized_to_pixel_coords(self, normalized_x, normalized_y, width, height):

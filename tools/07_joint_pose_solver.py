@@ -103,6 +103,8 @@ class JointPoseSolver:
 
     def _load_poses_o(self, pose_file):
         poses = np.load(pose_file).astype(np.float32)
+        if poses.ndim != 3:
+            poses = np.expand_dims(poses, axis=0)
         self._logger.debug(f"Object poses loaded: {poses.shape}")
         return poses
 
@@ -500,6 +502,9 @@ class JointPoseSolver:
 
         # Prepare object data
         poses_o = np.load(self._save_folder / f"{poses_o_name}.npy").astype(np.float32)
+        if poses_o.ndim != 3:
+            poses_o = np.expand_dims(poses_o, axis=0)
+
         poses_o = np.stack([quat_to_mat(p) for p in poses_o], axis=1)
         self._logger.debug(f"Loaded poses_o: {poses_o.shape}")
 
@@ -522,14 +527,14 @@ class JointPoseSolver:
         self._logger.info("=" * 100)
         t_s = time.time()
 
-        # Initialize optimizer
-        self.initialize_optimizer()
+        # # Initialize optimizer
+        # self.initialize_optimizer()
 
-        # Start optimization
-        self.solve()
+        # # Start optimization
+        # self.solve()
 
-        # Save results
-        self.save_results()
+        # # Save results
+        # self.save_results()
 
         # Render optimized poses
         self.render_optimized_poses()

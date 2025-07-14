@@ -258,9 +258,12 @@ class ManoPoseSolver:
             for f_idx in tqdm(range(self._num_frames), ncols=100):
                 self._data_loader.step_by_frame_id(f_idx)
                 points = self._data_loader.points[self._data_loader.masks]
+                print(f"Masks size for frame {f_idx}: {self._data_loader.masks.size()}")
+                print(f"Points  _data_loader.points for frame {f_idx}: {points.size()}")
                 points = self._get_dpts_for_loss_sdf(
                     verts[f_idx], faces, points, self._dist_thresh
                 )
+                print(f"Points after _get_dpts_for_loss_sdf for frame {f_idx}: {points.size()}")
                 points = process_points(
                     points=points, voxel_size=0.003, remove_outliers=True
                 )

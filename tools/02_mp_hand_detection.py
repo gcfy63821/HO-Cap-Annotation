@@ -102,7 +102,6 @@ class HandJointsDetector:
 
     def detect_mp_handmarks(self):
         self._logger.info(">>>>>>>>>> Running MediaPipe Hand Detection <<<<<<<<<<")
-
         mp_config = CFG.mp_hand
         mp_config.device = CFG.device
         mp_config["max_num_hands"] = len(self._mano_sides)

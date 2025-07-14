@@ -39,15 +39,15 @@ import logging
 
 # more general
 
-# X_THRESHOLD = (-0.3, 0.2)
-# Y_THRESHOLD = (-0.3, 0.3)
-# Z_THRESHOLD = (0.5, 0.95)
+X_THRESHOLD = (-0.3, 0.2)
+Y_THRESHOLD = (-0.3, 0.3)
+Z_THRESHOLD = (0.5, 0.95)
 
 # new trinsics
 
-X_THRESHOLD = (-0.3, 0.3)
-Y_THRESHOLD = (-0.3, 0.3)
-Z_THRESHOLD = (-0.2, 0.4)
+# X_THRESHOLD = (-0.3, 0.3)
+# Y_THRESHOLD = (-0.3, 0.3)
+# Z_THRESHOLD = (-0.2, 0.4)
 
 
 def slerp(q1, q2, t):
@@ -692,6 +692,7 @@ def run_pose_estimation(
     # print(len(other_mesh.vertices))
     if len(other_mesh.vertices) > 200000: # fix
         mesh = other_mesh.simplify_quadric_decimation(0.8)
+        print("Decim mesh.")
         # mesh = other_mesh.simplify_quadric_decimation(200000) #trimesh.Trimesh(vertices=samples, process=True)
         del other_mesh
     else:

@@ -81,6 +81,7 @@ class OffscreenRenderer:
         seg_node_map = {}
         if isinstance(node_names, list):
             if len(node_names) != len(node_poses):
+                print("DEBUG: node names and poses:",node_names, node_poses)
                 raise ValueError("Mismatch between node_names and node_poses length")
             for name, pose in zip(node_names, node_poses):
                 if name in node_dict and self._is_valid_pose(pose):
