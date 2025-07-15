@@ -507,7 +507,10 @@ class JointPoseSolver:
 
         poses_o = np.stack([quat_to_mat(p) for p in poses_o], axis=1)
         self._logger.debug(f"Loaded poses_o: {poses_o.shape}")
-
+        self._logger.debug(f"Loaded verts_m: {verts_m.shape}")
+        self._logger.debug(f"Loaded joints_m: {joints_m.shape}")
+        self._logger.debug(f"Loaded colors_m: {colors_m}")
+        self._logger.debug(f"Loaded faces_m: {faces_m.shape}")
         # Render images
         renderer = HOCapRenderer(self._data_folder, log_file=self._log_file)
         renderer.update_render_dict(poses_o, verts_m, faces_m, colors_m, joints_m)

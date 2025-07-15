@@ -301,12 +301,12 @@ class FoundationPoseMerger:
                 poses_fixed,
                 window_size=1,
                 rot_thresh=1.5,
-                trans_thresh=0.004,
+                trans_thresh=0.005,
             )
 
             poses_fixed = evaluate_and_fix_poses(
                 poses_fixed,
-                window_size=10,
+                window_size=15,
                 rot_thresh=1.0,
                 trans_thresh=0.005,
                 seperate_rot_trans=True,

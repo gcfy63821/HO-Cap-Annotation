@@ -56,6 +56,13 @@
 
 ./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0712_pestle_20iter --track_refine_iter 20 >> log.txt 2>&1
 
+./run_whole_process.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0714_whole_process --hand 1>> log.txt 2>&1
+
+./run_optimize.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0714_whole_process --hand 1 --optimize 1>> log.txt 2>&1
+
+./run_whole_process.sh --sequence_name blue_scooper_1/20250704_202733 --tool_name blue_scooper  --uuid 0715 --hand 1 --optimize 1  >> log.txt 2>&1
+./run_whole_process.sh --sequence_name blue_scooper_1/20250704_172530 --tool_name blue_scooper  --uuid 0715 --hand 1 --optimize 1  >> log.txt 2>&1
+
 
 # 运行目标姿态求解
 # python tools/06_object_pose_solver.py --sequence_folder /home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/test_1/20250702_003042

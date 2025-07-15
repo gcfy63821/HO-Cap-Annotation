@@ -1,4 +1,5 @@
 device: "cuda"
+max_workers: 256
 sam2:
   model_checkpoint: "config/checkpoints/sam2/sam2.1_hiera_large.pt"
   model_config: "config/sam2_config/sam2.1_hiera_l.yaml"
@@ -96,10 +97,10 @@ optimization:
     smooth_window_size: 3
     sdf_dist_thresh: 0.1 #0.01
     use_object_masks: true #true # false
-    load_offline_dpts: false #true #false
+    load_offline_dpts: true #true #false
   joint_pose_solver:
     lr: 0.001
-    total_steps: 10
+    total_steps: 20
     sdf_steps: 10
     w_sdf: 10.0
     w_reg_m: 1.0

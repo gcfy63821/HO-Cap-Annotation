@@ -263,7 +263,7 @@ class OffscreenRenderer:
                 scene.main_camera_node = self._cam_nodes[cam_names]
                 colors, depths = r.render(scene, render_flags, seg_node_map)
             # print(f"[DEBUG] Rendered image stats - mean: {color.mean()}, min: {color.min()}, max: {color.max()}")
-            self._logger.debug(f"Rendered image stats - mean: {color.mean()}, min: {color.min()}, max: {color.max()}")
+            # self._logger.debug(f"Rendered image stats - mean: {color.mean()}, min: {color.min()}, max: {color.max()}")
             cv2.imwrite(f"debug_render/cam_{cam_name}.png", color[..., ::-1])  # BGR save
 
         finally:

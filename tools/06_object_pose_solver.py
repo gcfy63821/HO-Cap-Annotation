@@ -267,40 +267,45 @@ class ObjectPoseSolver:
         )
         self._logger.debug(f"optim_pose_o: {optim_pose_o.shape}")
         np.save(self._save_folder / f"{save_name}_raw.npy", optim_pose_o)
+        
+        if optim_pose_o.ndim != 3:
+            optim_pose_o = np.expand_dims(optim_pose_o, axis=0)
 
         # Smooth the poses
         self._logger.info("Smoothing optimized poses...")
         print("len optim_pose_o:", len(optim_pose_o))
-        # print("optim_pose_o:", optim_pose_o)
-        # for i in range(len(optim_pose_o)):
-        #     optim_pose_o[i] = evaluate_and_fix_poses(
-        #         optim_pose_o[i],
-        #         window_size=15,
-        #         rot_thresh=1.0,
-        #         trans_thresh=0.001,
-        #         seperate_rot_trans=False,
-        #     )
-        #     optim_pose_o[i] = evaluate_and_fix_poses(
-        #         optim_pose_o[i],
-        #         window_size=30,
-        #         rot_thresh=0.1,
-        #         trans_thresh=0.01,
-        #         seperate_rot_trans=False,
-        #     )
-        optim_pose_o = evaluate_and_fix_poses(
-                optim_pose_o,
+        
+        print("optim_pose_o:", optim_pose_o)
+        for i in range(len(optim_pose_o)):
+            optim_pose_o[i] = evaluate_and_fix_poses(
+                optim_pose_o[i],
                 window_size=15,
                 rot_thresh=1.0,
                 trans_thresh=0.001,
                 seperate_rot_trans=False,
             )
-        optim_pose_o = evaluate_and_fix_poses(
-                optim_pose_o,
+            optim_pose_o[i] = evaluate_and_fix_poses(
+                optim_pose_o[i],
                 window_size=30,
                 rot_thresh=0.1,
                 trans_thresh=0.01,
                 seperate_rot_trans=False,
             )
+        
+        # optim_pose_o = evaluate_and_fix_poses(
+        #         optim_pose_o,
+        #         window_size=15,
+        #         rot_thresh=1.0,
+        #         trans_thresh=0.001,
+        #         seperate_rot_trans=False,
+        #     )
+        # optim_pose_o = evaluate_and_fix_poses(
+        #         optim_pose_o,
+        #         window_size=30,
+        #         rot_thresh=0.1,
+        #         trans_thresh=0.01,
+        #         seperate_rot_trans=False,
+        #     )
         np.save(self._save_folder / f"{save_name}.npy", optim_pose_o)
 
     def initialize_optimizer(self):
@@ -457,17 +462,17 @@ class ObjectPoseSolver:
         self._logger.info("=" * 100)
         t_s = time.time()
 
-        # # Initialize optimizer
-        # self.initialize_optimizer()
+        # Initialize optimizer
+        self.initialize_optimizer()
 
-        # # Start optimization
-        # self.solve()
+        # Start optimization
+        self.solve()
 
-        # # Save results
-        # self.save_results()
+        # Save results
+        self.save_results()
 
         # Render optimized poses
-        self.render_optimized_poses()
+        # self.render_optimized_poses()
 
         self._logger.info("=" * 100)
         self._logger.info(f"Object Pose Solver Done!!! ({time.time() - t_s:.2f}s)")

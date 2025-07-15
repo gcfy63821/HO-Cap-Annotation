@@ -343,7 +343,7 @@ if __name__ == "__main__":
             20, (W * 4, H * 2)
         )
         import multiprocessing
-        pool = multiprocessing.Pool(processes=min(8, os.cpu_count()))
+        pool = multiprocessing.Pool(processes=min(32, os.cpu_count()))
         args_list1 = [
             (i, Ks, serials, [], orig_vertices, orig_mesh)
             for i in range(num_frames)
@@ -383,7 +383,7 @@ if __name__ == "__main__":
         print(f"[INFO] Using pose_data[{args.object_idx - 1}], shape: {pose_data.shape}")
     pose_data = pose_data.reshape(-1, 7)
 
-    pool = multiprocessing.Pool(processes=min(8, os.cpu_count()))
+    pool = multiprocessing.Pool(processes=min(32, os.cpu_count()))
     args_list2 = [
         (i, pose_data, Ks, serials, [], orig_vertices, orig_mesh)
         for i in range(num_frames)

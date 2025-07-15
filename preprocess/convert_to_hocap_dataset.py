@@ -200,7 +200,7 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
         "num_frames": int(num_frames),
         # "object_ids": ["blue_scooper"],
         "object_ids": [tool_name],
-        "mano_sides": [],
+        "mano_sides": ['left','right'],
         "subject_id": subject_id,
         "realsense": {
             "serials": cam_serials,
@@ -214,7 +214,7 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
         },
         "extrinsics": "extrinsics.yaml",
         "have_hololens": False,
-        "have_mano": False,
+        "have_mano": True,
         "task_id": 1,
     }
 

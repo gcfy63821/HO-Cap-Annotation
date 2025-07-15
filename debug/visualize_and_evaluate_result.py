@@ -260,7 +260,7 @@ if __name__ == "__main__":
             20, (W * 4, H * 2)
         )
         import multiprocessing
-        pool = multiprocessing.Pool(processes=min(8, os.cpu_count()))
+        pool = multiprocessing.Pool(processes=min(32, os.cpu_count()))
         args_list1 = [
             (i, Ks, serials, [], orig_vertices, orig_mesh, mask_proj_errors_dir1)
             for i in range(num_frames)
@@ -325,6 +325,9 @@ if __name__ == "__main__":
         pose_npy_path = f"{base_path}/processed/fd_pose_solver/adaptive_fd_poses_merged_fixed.npy"
     elif pose_file == "optimized":
         pose_npy_path = f"{base_path}/processed/object_pose_solver/poses_o.npy"
+    elif pose_file == "joint":
+        pose_npy_path = f"{base_path}/processed/joint_pose_solver/poses_o.npy"
+
     output_path2 = Path(f"debug_output/{data_path}/pose_npy_in_cams_video")
     output_path2.mkdir(parents=True, exist_ok=True)
     mask_proj_errors_dir2 = output_path2 / "mask_proj_errors"
@@ -342,7 +345,7 @@ if __name__ == "__main__":
         print(f"[INFO] Using pose_data[{args.object_idx - 1}], shape: {pose_data.shape}")
     pose_data = pose_data.reshape(-1, 7)
 
-    pool = multiprocessing.Pool(processes=min(8, os.cpu_count()))
+    pool = multiprocessing.Pool(processes=min(32, os.cpu_count()))
     args_list2 = [
         (i, pose_data, Ks, serials, [], orig_vertices, orig_mesh, mask_proj_errors_dir2)
         for i in range(num_frames)

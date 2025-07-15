@@ -205,6 +205,7 @@ def convert_to_hocap_format(
 
 # 示例调用
 if __name__ == "__main__":
+    # dataset for HandReconstruction
     # blue scooper
     # test_1
     # convert_to_hocap_format(

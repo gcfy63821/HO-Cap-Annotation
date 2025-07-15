@@ -296,6 +296,7 @@ class HOCapRenderer:
         vis_images = [None] * self._num_frames
         render_images = {s: [None] * self._num_frames for s in self._rs_serials}
         tqbar = tqdm(total=self._num_frames, ncols=100)
+        print("max_workers:",CFG.max_workers)
         with concurrent.futures.ProcessPoolExecutor(CFG.max_workers) as executor:
             futures = {
                 executor.submit(

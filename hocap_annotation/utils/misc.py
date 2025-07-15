@@ -53,7 +53,7 @@ def load_config(cfg_file: Path) -> DictConfig:
         cfg = OmegaConf.load(cfg_file)
 
         # Update max_workers based on available CPU cores
-        max_workers = os.cpu_count() or 1
+        max_workers = os.cpu_count()  or 1
         if cfg.get("max_workers", -1) == -1:
             cfg.max_workers = max_workers // 2
         else:

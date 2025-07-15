@@ -516,4 +516,4 @@ if __name__ == "__main__":
 
     estimator = HandJointsEstimator(args.sequence_folder, args.debug)
     estimator.run_hand_joints_3d_estimation()
-    estimator.render_hand_joints_3d()
+    # estimator.render_hand_joints_3d()

@@ -533,7 +533,7 @@ class ManoPoseSolver:
         self.save_results()
 
         # Render optimized poses
-        self.render_optimized_poses()
+        # self.render_optimized_poses()
 
         self._logger.info("=" * 100)
         self._logger.info(f"Hand Pose Solver Done! ({time.time() - t_s:.2f}s)")
