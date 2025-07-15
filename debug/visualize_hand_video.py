@@ -52,9 +52,17 @@ def mano_group_layer_forward(poses_m, layer, subset=None):
         j = j.squeeze(0)
     return v, j
 
+def load_poses_m(pose_file):
+    poses = np.load(pose_file).astype(np.float32)
+    mano_sides = ['left','right']
+    poses = np.stack(
+        [poses[0 if side == "right" else 1] for side in mano_sides], axis=0
+    )  # (num_hands, num_frames 51)
+    return poses
 
 def load_mano_data(mano_file, layer):
-    poses_m = np.load(mano_file)  # 假设文件形状为(2, N, 51)
+    poses_m = load_poses_m(mano_file)
+    
     poses_m = [torch.from_numpy(p).to('cuda') for p in poses_m]
     verts_m, joints_m = mano_group_layer_forward(poses_m, layer)  # 获取verts_m和joints_m
     verts_m = verts_m.detach().clone().cpu().numpy()
