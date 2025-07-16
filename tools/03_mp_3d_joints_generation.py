@@ -317,7 +317,7 @@ class HandJointsEstimator:
 
             hand_joints_3d = [None] * self._num_frames
             tqbar = tqdm(total=self._num_frames, ncols=100)
-            with concurrent.futures.ProcessPoolExecutor(max_workers=8) as executor:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=16) as executor:
                 futures = {
                     executor.submit(
                         runner_hand_3d_joints_ransac_torch,

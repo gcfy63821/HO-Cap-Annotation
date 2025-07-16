@@ -77,7 +77,7 @@ if [ -n "$OBJECT_IDX" ]; then
     python tools/04-1-1_fd_pose_solver_prep.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER"
 fi
 
-# 运行 04-2_fd_pose_merger.py
+# # 运行 04-2_fd_pose_merger.py
 echo "Running fd_pose_merger..."
 python tools/04-2_fd_pose_merger.py --sequence_folder "$SEQUENCE_FOLDER"
 
@@ -116,8 +116,7 @@ if [ -n "$OPTIMIZE" ]; then
 
     echo "Running joint_pose_optimization with optimize=$OPTIMIZE..."
     python tools/07_joint_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
-    # echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
-    # python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID" --pose_file "optimized" --uuid "$UUID" --object_idx "$OBJECT_IDX"
+    
     echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
     python debug/visualize_hand_video.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID "
 
