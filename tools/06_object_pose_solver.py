@@ -281,14 +281,14 @@ class ObjectPoseSolver:
                 optim_pose_o[i],
                 window_size=15,
                 rot_thresh=1.0,
-                trans_thresh=0.001,
+                trans_thresh=0.05,
                 seperate_rot_trans=False,
             )
             optim_pose_o[i] = evaluate_and_fix_poses(
                 optim_pose_o[i],
                 window_size=30,
-                rot_thresh=0.1,
-                trans_thresh=0.01,
+                rot_thresh=1.5,
+                trans_thresh=0.05,
                 seperate_rot_trans=False,
             )
         

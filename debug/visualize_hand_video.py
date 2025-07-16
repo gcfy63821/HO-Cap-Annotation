@@ -69,39 +69,6 @@ def load_mano_data(mano_file, layer):
     joints_m = joints_m.detach().clone().cpu().numpy()
     return verts_m, joints_m
 
-# 3. 通过verts_m, faces_m, colors_m来可视化手部
-def visualize_mano_hand(verts_m, faces_m, colors_m, serial_idx, i, outlier_idxs, dataloader):
-    W, H = 640, 480
-    color = dataloader.get_color_img(i, serial_idx)
-    sam_mask = dataloader.get_mask_img(i, serial_idx)
-    if color is None or sam_mask is None:
-        return np.ones((H, W, 3), dtype=np.uint8) * 255  # 返回一个全白的图像
-    sam_overlay = color.copy()
-    sam_overlay[sam_mask > 0] = [0, 0, 255]
-
-    # 假设verts_m是形状为(N, 3)，我们将它们投影到2D
-    Ks = dataloader.Ks
-    serials = dataloader.serials
-    pts = project_points(verts_m, Ks[serials[serial_idx]])
-    pts = pts[(pts[:, 0] >= 0) & (pts[:, 0] < W) & (pts[:, 1] >= 0) & (pts[:, 1] < H)]
-    pts = pts.astype(np.int32)[::200]
-
-    vis = sam_overlay.copy()
-    color_dot = (0, 0, 255) if i in outlier_idxs else (255, 0, 0)
-    for x, y in pts:
-        cv2.circle(vis, (x, y), 2, color_dot, -1)
-
-    # verts_m = verts_m.cpu().numpy() if torch.is_tensor(verts_m) else verts_m
-    # faces_m = faces_m.cpu().numpy() if torch.is_tensor(faces_m) else faces_m
-    # colors_m = colors_m.cpu().numpy() if torch.is_tensor(colors_m) else colors_m
-
-    # # 使用faces_m、verts_m和colors_m来可视化手部模型
-    # mesh = trimesh.Trimesh(vertices=verts_m, faces=faces_m, face_colors=colors_m)
-    # mesh.apply_transform(np.eye(4))  # 如果需要，可以在这里加上其他变换
-    # mesh.show()
-    
-    return vis
-
 def project_points(vertices, K):
     pts = vertices @ K[:3, :3].T
     pts = pts[:, :2] / pts[:, 2:]
@@ -227,9 +194,15 @@ def process_frame_pose_npy_h5(args):
         pts = pts.astype(np.int32)[::200]
         
         vis = sam_overlay.copy()
-        color_dot = (0, 0, 255) if i in outlier_idxs else (255, 0, 0)
+        color_dot = (0, 0, 255) if i in outlier_idxs else colors_m[1]
         for x, y in pts:
             cv2.circle(vis, (x, y), 2, color_dot, -1)
+        # slow
+        # for face in mesh.faces:
+        #     pts_2d = pts[face]
+        #     pts_2d = pts_2d.astype(np.int32)
+        #     if pts_2d.shape[0] == 3:
+        #         cv2.polylines(vis, [pts_2d], isClosed=True, color=colors_m[1], thickness=1)
 
         # 将MANO手部位姿可视化到图像上
         mano_verts_cpu = mano_verts.cpu().numpy() if torch.is_tensor(mano_verts) else mano_verts
@@ -237,18 +210,10 @@ def process_frame_pose_npy_h5(args):
         # 创建Trimesh对象
         hand_mesh = trimesh.Trimesh(vertices=mano_verts_cpu, faces=faces_m_cpu, process=False)
         hand_mesh.apply_transform(world2cam)
-        # hand_pts = project_points(hand_mesh.vertices, Ks[serial])
-        # hand_pts = hand_pts[(hand_pts[:, 0] >= 0) & (hand_pts[:, 0] < W) & (hand_pts[:, 1] >= 0) & (hand_pts[:, 1] < H)]
-        # hand_pts = hand_pts.astype(np.int32)[::200]
-
-        # # 可视化手部
-        # color_dot = colors_m[1]
-        # for x, y in hand_pts:
-        #     cv2.circle(vis, (x, y), 2, color_dot, -1)
         hand_img = render_hand_mesh(hand_mesh, Ks[serial], W, H)
 
         # 合并结果
-        vis = cv2.addWeighted(vis, 0.5, hand_img, 0.5, 0)
+        vis = cv2.addWeighted(vis, 0.6, hand_img, 0.4, 0)
 
         frame_tiles.append(vis)
         # vis = visualize_mano_hand(mano_verts, faces_m, colors_m, serial_idx, i, outlier_idxs, dataloader)

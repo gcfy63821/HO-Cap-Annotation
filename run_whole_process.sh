@@ -8,7 +8,7 @@ TOOL_NAME=""
 BASE_PATH="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/"
 OPTIMIZE=""
 UUID=""
-TRACK_REFINE_ITER="10"
+TRACK_REFINE_ITER="20"
 HAND=""
 # 解析命令行参数
 while [[ "$#" -gt 0 ]]; do
@@ -81,9 +81,9 @@ fi
 echo "Running fd_pose_merger..."
 python tools/04-2_fd_pose_merger.py --sequence_folder "$SEQUENCE_FOLDER"
 
-# 运行 04-2-1_adaptive_fd_merger.py
-echo "Running adaptive fd_pose_merger..."
-python tools/04-2-1_adaptive_fd_merger.py --sequence_folder "$SEQUENCE_FOLDER"
+# # 运行 04-2-1_adaptive_fd_merger.py
+# echo "Running adaptive fd_pose_merger..."
+# python tools/04-2-1_adaptive_fd_merger.py --sequence_folder "$SEQUENCE_FOLDER"
 
 
 # 运行 visualize_ob_in_world.py
@@ -97,13 +97,13 @@ python tools/04-2-1_adaptive_fd_merger.py --sequence_folder "$SEQUENCE_FOLDER"
 # added evaluation
 
 # 运行 visualize 并且 分析结果
-if [ -n "$TOOL_NAME" ]; then
-    echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
-    python debug/visualize_and_evaluate_result.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID"  --object_idx "$OBJECT_IDX"
+# if [ -n "$TOOL_NAME" ]; then
+#     echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
+#     python debug/visualize_and_evaluate_result.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID"  --object_idx "$OBJECT_IDX"
 
-    echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
-    python debug/visualize_and_evaluate_result.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "adaptive"
-fi
+#     echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
+#     python debug/visualize_and_evaluate_result.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "adaptive"
+# fi
 
 
 
@@ -119,7 +119,7 @@ if [ -n "$OPTIMIZE" ]; then
     # echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
     # python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID" --pose_file "optimized" --uuid "$UUID" --object_idx "$OBJECT_IDX"
     echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
-    python debug/visualize_and_evaluate_result.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "joint"
+    python debug/visualize_hand_video.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID "
 
 fi
 

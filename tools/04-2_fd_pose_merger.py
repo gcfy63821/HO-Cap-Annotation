@@ -287,28 +287,28 @@ class FoundationPoseMerger:
         for idx in range(self._num_objects):
             poses_fixed = fd_poses_interp[idx]
 
-            # poses_fixed = evaluate_and_fix_poses(
-            #     poses_fixed,
-            #     window_size=15,
-            #     rot_thresh=5.0,
-            #     trans_thresh=0.01,
-            #     seperate_rot_trans=True,
-            #     use_mean_pose=True,
-            # )
+            poses_fixed = evaluate_and_fix_poses(
+                poses_fixed,
+                window_size=5,
+                rot_thresh=5.0,
+                trans_thresh=0.01,
+                seperate_rot_trans=True,
+                use_mean_pose=True,
+            )
             # 1, 0.5, 0.003
             # 0.03会太小
             poses_fixed = pose_jitter_smooth(
                 poses_fixed,
                 window_size=1,
                 rot_thresh=1.5,
-                trans_thresh=0.005,
+                trans_thresh=0.004,
             )
 
             poses_fixed = evaluate_and_fix_poses(
                 poses_fixed,
                 window_size=15,
                 rot_thresh=1.0,
-                trans_thresh=0.005,
+                trans_thresh=0.004,
                 seperate_rot_trans=True,
                 use_mean_pose=True,
             )
@@ -340,7 +340,7 @@ class FoundationPoseMerger:
 
             poses_fixed = evaluate_and_fix_poses(
                 poses_fixed,
-                window_size=20,
+                window_size=10, # 20
                 rot_thresh=2.0,
                 trans_thresh=0.003,
                 seperate_rot_trans=True,

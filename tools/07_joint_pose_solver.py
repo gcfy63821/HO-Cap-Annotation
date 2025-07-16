@@ -530,17 +530,17 @@ class JointPoseSolver:
         self._logger.info("=" * 100)
         t_s = time.time()
 
-        # # Initialize optimizer
-        # self.initialize_optimizer()
+        # Initialize optimizer
+        self.initialize_optimizer()
 
-        # # Start optimization
-        # self.solve()
+        # Start optimization
+        self.solve()
 
-        # # Save results
-        # self.save_results()
+        # Save results
+        self.save_results()
 
         # Render optimized poses
-        self.render_optimized_poses()
+        # self.render_optimized_poses()
 
         self._logger.info("=" * 100)
         self._logger.info(f"Joint Pose Solver Done!!! ({time.time() - t_s:.2f}s)")

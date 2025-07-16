@@ -39,15 +39,15 @@ import logging
 
 # more general
 
-X_THRESHOLD = (-0.3, 0.2)
-Y_THRESHOLD = (-0.3, 0.3)
-Z_THRESHOLD = (0.5, 0.95)
+# X_THRESHOLD = (-0.3, 0.2)
+# Y_THRESHOLD = (-0.3, 0.3)
+# Z_THRESHOLD = (0.5, 0.95)
 
 # new trinsics
 
-# X_THRESHOLD = (-0.3, 0.3)
-# Y_THRESHOLD = (-0.3, 0.3)
-# Z_THRESHOLD = (-0.2, 0.4)
+X_THRESHOLD = (-0.3, 0.3)
+Y_THRESHOLD = (-0.3, 0.3)
+Z_THRESHOLD = (-0.2, 0.4)
 
 
 def slerp(q1, q2, t):
@@ -1004,7 +1004,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--track_refine_iter",
         type=int,
-        default=10, # 50 5
+        default=20, # 50 5
         help="number of iterations for tracking",
     )
     parser.add_argument("--start_frame", type=int, default=0, help="start frame")

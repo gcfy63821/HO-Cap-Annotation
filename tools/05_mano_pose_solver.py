@@ -104,6 +104,9 @@ class ManoPoseSolver:
             dtype=torch.float32,
         )
         M = self._data_loader.M2world
+        print(M)
+        print(self._valid_rs_serials)
+        print(self._rs_serials)
         self._M = M[[self._rs_serials.index(s) for s in self._valid_rs_serials]]
         self._valid_kpt_ind_m = [
             i * 21 + j

@@ -48,20 +48,24 @@
 # # new extrinsics
 # ./run_local.sh --sequence_name wooden_spoon_1/20250705_210948 --tool_name wooden_spoon --object_idx 1  --uuid updated_ext >> log.txt 2>&1
 
-./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name purple_plate --object_idx 2  --uuid 0712_plate_20iter --track_refine_iter 20 >> log.txt 2>&1
+# ./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name purple_plate --object_idx 2  --uuid 0712_plate_20iter --track_refine_iter 20 >> log.txt 2>&1
 
-./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name purple_plate --object_idx 2  --uuid 0712_plate_40iter --track_refine_iter 40 >> log.txt 2>&1
+# ./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name purple_plate --object_idx 2  --uuid 0712_plate_40iter --track_refine_iter 40 >> log.txt 2>&1
 
-./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0712_pestle_40iter --track_refine_iter 40 >> log.txt 2>&1
+# ./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0712_pestle_40iter --track_refine_iter 40 >> log.txt 2>&1
 
-./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0712_pestle_20iter --track_refine_iter 20 >> log.txt 2>&1
+# ./run_local.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0712_pestle_20iter --track_refine_iter 20 >> log.txt 2>&1
 
-./run_whole_process.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0714_whole_process --hand 1>> log.txt 2>&1
+# ./run_whole_process.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0714_whole_process --hand 1>> log.txt 2>&1
 
-./run_optimize.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0714_whole_process --hand 1 --optimize 1>> log.txt 2>&1
+# ./run_optimize.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0714_whole_process --hand 1 --optimize 1>> log.txt 2>&1
 
-./run_whole_process.sh --sequence_name blue_scooper_1/20250704_202733 --tool_name blue_scooper  --uuid 0715 --hand 1 --optimize 1  >> log.txt 2>&1
-./run_whole_process.sh --sequence_name blue_scooper_1/20250704_172530 --tool_name blue_scooper  --uuid 0715 --hand 1 --optimize 1  >> log.txt 2>&1
+# ./run_whole_process.sh --sequence_name blue_scooper_1/20250704_202733 --tool_name blue_scooper  --uuid 0716 --hand 1 --optimize 1  >> log.txt 2>&1
+# ./run_whole_process.sh --sequence_name blue_scooper_1/20250704_172530 --tool_name blue_scooper  --uuid 0716 --hand 1 --optimize 1  >> log.txt 2>&1
+# ./run_whole_process.sh --sequence_name pestle_1/20250703_132710 --tool_name pestle --object_idx 1  --uuid 0716 --hand 1 --optimize 1>> log.txt 2>&1
+./run_whole_process.sh --sequence_name wooden_spoon_1/20250705_210948 --tool_name wooden_spoon --object_idx 1  --uuid 0716_newext  --optimize 1 
+./run_whole_process.sh --sequence_name wooden_spoon_1/20250704_202115 --tool_name wooden_spoon --object_idx 1  --uuid 0716_newext  --optimize 1 --hand 1
+
 
 
 # 运行目标姿态求解

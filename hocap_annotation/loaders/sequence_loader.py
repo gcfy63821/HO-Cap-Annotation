@@ -45,7 +45,12 @@ class SequenceLoader:
         # Y_THRESHOLD = (-0.3, 0.3)
         # Z_THRESHOLD = (0.5, 0.95)
         # Crop limits in world frame, [x_min, x_max, y_min, y_max, z_min, z_max]
-        self._crop_lim = [-0.3, +0.2, -0.3, +0.3, 0.5, +0.95]
+        # self._crop_lim = [-0.3, +0.2, -0.3, +0.3, 0.5, +0.95] # old extrinsics
+        # X_THRESHOLD = (-0.3, 0.3)
+        # Y_THRESHOLD = (-0.3, 0.3)
+        # Z_THRESHOLD = (-0.2, 0.4)
+        self._crop_lim = [-0.3, +0.3, -0.3, +0.3, -0.2, +0.4] # new extrinsics
+        
 
         # Load metadata
         self._load_metadata()
