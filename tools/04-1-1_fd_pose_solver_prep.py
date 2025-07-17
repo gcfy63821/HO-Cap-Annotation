@@ -298,7 +298,7 @@ def detect_pose_outliers(poses, threshold_factor=2.0, outlier_ratio=0.2):
     return inlier_rots, inlier_trans, is_rot_noisy, is_trans_noisy
 
 
-def is_valid_pose(pose_w):
+def is_valid_pose(pose_w, x_threshold, y_threshold, z_threshold):
     """
     Check if pose in world space is valid.
 
@@ -312,19 +312,19 @@ def is_valid_pose(pose_w):
     # return -1 < x < 1 and -1 < y < 1 and -1 < z < 1
 
     # return -0.2 < x < 0.4 and 0.0 < y < 0.8 and 0.0 < z < 0.8
-    return (X_THRESHOLD[0] < x < X_THRESHOLD[1] and
-            Y_THRESHOLD[0] < y < Y_THRESHOLD[1] and
-            Z_THRESHOLD[0] < z < Z_THRESHOLD[1])
+    return (x_threshold[0] < x < x_threshold[1] and
+            y_threshold[0] < y < y_threshold[1] and
+            z_threshold[0] < z < z_threshold[1])
 
 
-def transform_poses_to_world(mat_poses_c, cam_RTs):
+def transform_poses_to_world(mat_poses_c, cam_RTs, x_threshold, y_threshold, z_threshold):
     poses_w = []
     for mat_pose, cam_RT in zip(mat_poses_c, cam_RTs):
         if np.all(mat_pose == -1):  # invalid pose
             continue
         mat_pose_w = cam_RT @ mat_pose
         quat_pose_w = mat_to_quat(mat_pose_w)
-        if is_valid_pose(quat_pose_w):
+        if is_valid_pose(quat_pose_w, x_threshold, y_threshold, z_threshold):
             poses_w.append(quat_pose_w)
     return poses_w
 
@@ -455,6 +455,9 @@ def get_consistent_pose_w(
     trans_thresh=0.01,
     thresh_factor=2.0,
     outlier_ratio=0.2,
+    x_threshold=(-0.3, 0.3),
+    y_threshold=(-0.3, 0.3),
+    z_threshold=(-0.2, 0.4),
 ):
     """
     Get consistent pose in world space using RANSAC on inlier rotations and translations.
@@ -477,7 +480,7 @@ def get_consistent_pose_w(
     flag = 1
 
     # Step 1: transform all poses to world space
-    poses_w = transform_poses_to_world(mat_poses_c, cam_RTs)
+    poses_w = transform_poses_to_world(mat_poses_c, cam_RTs, x_threshold, y_threshold, z_threshold)
 
     
     # if len(poses_w) == 0:
@@ -551,7 +554,7 @@ def get_consistent_pose_w(
     return np.concatenate([curr_rot, curr_trans, [flag]], axis=0)
 
 
-def is_valid_ob_pose(ob_in_cam, cam_RT=None):
+def is_valid_ob_pose(ob_in_cam, x_threshold, y_threshold, z_threshold, cam_RT=None):
     if np.all(ob_in_cam == -1):
         return False
     elif cam_RT is None:
@@ -563,9 +566,9 @@ def is_valid_ob_pose(ob_in_cam, cam_RT=None):
     # print(f"DEBUG: ob_in_world: {ob_in_world if cam_RT is not None else ob_in_cam[:3, 3]}")
 
     # return -0.2 < x < 0.4 and 0.0 < y < 0.8 and 0.0 < z < 0.8
-    return (X_THRESHOLD[0] < x < X_THRESHOLD[1] and
-            Y_THRESHOLD[0] < y < Y_THRESHOLD[1] and
-            Z_THRESHOLD[0] < z < Z_THRESHOLD[1])
+    return (x_threshold[0] < x < x_threshold[1] and
+            y_threshold[0] < y < y_threshold[1] and
+            z_threshold[0] < z < z_threshold[1])
 
 
 def initialize_fd_pose_estimator(textured_mesh_path, cleaned_mesh_path, debug_dir):
@@ -858,7 +861,7 @@ def run_pose_estimation(
             #         iteration=track_refine_iter,
             #         prev_pose=ob_in_cam_poses[serial_idx],
             #     )
-            elif is_valid_ob_pose(ob_in_world_refined):
+            elif is_valid_ob_pose(ob_in_world_refined, x_threshold, y_threshold, z_threshold):
                 # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: using refined ob_in_world pose.")
                 ob_in_cam_mat = estimator.track_one(
                     rgb=color,
@@ -896,7 +899,7 @@ def run_pose_estimation(
                     )
                     # print(f"[DEBUG] register result:  Frame {frame_id}, Cam {serial}: ob_in_cam_mat = {ob_in_cam_mat.flatten()[:4]}")
                     # the register result is not working
-                    if not is_valid_ob_pose(ob_in_cam_mat, valid_RTs[serial_idx]):
+                    if not is_valid_ob_pose(ob_in_cam_mat, x_threshold, y_threshold, z_threshold):
                         # here
                         print(f"[DEBUG]!!! Frame {frame_idx}, Cam {serial}: Register failed! using empty pose.")
                         debug_ob_in_world = valid_RTs[serial_idx] @ ob_in_cam_mat
@@ -938,6 +941,9 @@ def run_pose_estimation(
             trans_thresh=trans_thresh,
             thresh_factor=2.0,
             outlier_ratio=0.2,
+            x_threshold=x_threshold,
+            y_threshold=y_threshold,
+            z_threshold=z_threshold,
         )
         # print(curr_pose_w)
 
@@ -1034,6 +1040,11 @@ if __name__ == "__main__":
     # 
     logger.setLevel(logging.WARNING)  # 只显示WARNING及以上
     logging.getLogger().setLevel(logging.WARNING)  # 全局也设为WARNING
+
+    loader = HOCapLoader(args.sequence_folder)
+    x_threshold = loader.x_threshold
+    y_threshold = loader.y_threshold
+    z_threshold = loader.z_threshold
 
     run_pose_estimation(
         args.sequence_folder,

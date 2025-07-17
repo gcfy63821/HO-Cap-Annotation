@@ -66,7 +66,7 @@
 ./run_whole_process.sh --sequence_name wooden_spoon_1/20250705_210948 --tool_name wooden_spoon --object_idx 1  --uuid 0716_newext  --optimize 1 
 ./run_whole_process.sh --sequence_name wooden_spoon_1/20250704_202115 --tool_name wooden_spoon --object_idx 1  --uuid 0716_newext  --optimize 1 --hand 1
 
-
+./run_hand.sh --sequence_name squeegee_1/20250704_151206 --tool_name squeegee --object_idx 1  --uuid 0716_new_hand  --optimize 1 
 
 # 运行目标姿态求解
 # python tools/06_object_pose_solver.py --sequence_folder /home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/test_1/20250702_003042

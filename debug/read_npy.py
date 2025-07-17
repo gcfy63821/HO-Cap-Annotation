@@ -20,5 +20,5 @@ def inspect_npy_file(file_path, print_values=False, max_elements=20):
 
 # 示例用法
 if __name__ == "__main__":
-    file_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/squeegee_1/20250704_151206/processed/object_pose_solver/poses_o.npy"  # 替换为你的文件路径
+    file_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/squeegee_1/20250704_151206/processed/joint_pose_solver/poses_m.npy"  # 替换为你的文件路径
     inspect_npy_file(file_path, print_values=True)

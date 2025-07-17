@@ -317,7 +317,8 @@ if __name__ == "__main__":
     pose_data = pose_data.reshape(-1, 7)
 
     # 加载pkl手部数据
-    pkl_file_path = f"/home/wys/learning-compliant/crq_ws/robotool/HandReconstruction/coffee/2379b837_coffee_1/result_hand_optimized.pkl"  # 可参数化
+    # pkl_file_path = f"/home/wys/learning-compliant/crq_ws/robotool/HandReconstruction/coffee/2379b837_coffee_1/result_hand_optimized.pkl"  # 可参数化
+    pkl_file_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/squeegee_1/20250704_151206/processed/result_hand_optimized.pkl"
     hand_data = load_pkl_and_get_hand_data(pkl_file_path)
 
     # 初始化MANOGroupLayer，分别为左右手加载betas

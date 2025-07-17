@@ -49,7 +49,8 @@ class SequenceLoader:
         # X_THRESHOLD = (-0.3, 0.3)
         # Y_THRESHOLD = (-0.3, 0.3)
         # Z_THRESHOLD = (-0.2, 0.4)
-        self._crop_lim = [-0.3, +0.3, -0.3, +0.3, -0.2, +0.4] # new extrinsics
+        # self._crop_lim = [-0.3, +0.3, -0.3, +0.3, -0.2, +0.4] # new extrinsics
+        
         
 
         # Load metadata
@@ -126,6 +127,10 @@ class SequenceLoader:
         if self.have_mano:
             # Load MANO shape parameters
             self._mano_beta = self._load_mano_beta()
+
+        # crop limits for 3d points
+        self._crop_lim = data.get("thresholds", [-0.3, 0.3, -0.3, 0.3, 0.5, 0.95])
+
 
     def _load_intrinsics(self):
         def read_K_from_yaml(serial, cam_type="color"):

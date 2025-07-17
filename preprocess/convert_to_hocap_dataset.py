@@ -216,6 +216,12 @@ def convert_to_hocap_format(h5_path, mask_root_dir, extrinsics_yaml_path, output
         "have_hololens": False,
         "have_mano": True,
         "task_id": 1,
+        # "thresholds": {
+        #     "x": [-0.3, 0.3],
+        #     "y": [-0.3, 0.3],
+        #     "z": [-0.2, 0.4], # new extrinsics
+        # },
+        "thresholds": [-0.3, 0.3, -0.3, 0.3, -0.2, 0.4],
     }
 
     with open(output_folder / "meta.yaml", "w") as f:

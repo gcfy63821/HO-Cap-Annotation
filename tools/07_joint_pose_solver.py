@@ -75,7 +75,8 @@ class JointPoseSolver:
             self._data_folder / "processed" / "object_pose_solver" / "poses_o.npy"
         )
         self._pose_m_file = (
-            self._data_folder / "processed" / "hand_pose_solver" / "poses_m.npy"
+            # self._data_folder / "processed" / "hand_pose_solver" / "poses_m.npy"
+            self._data_folder / "processed" /  "poses_m.npy"
         )
         msg = "File not found: {}"
         if not self._pose_o_file.exists():

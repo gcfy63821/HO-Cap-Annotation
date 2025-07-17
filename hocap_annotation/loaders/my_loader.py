@@ -164,6 +164,18 @@ class MyLoader:
             for obj_id in self._object_ids
         ]
 
+        # Load thresholds from meta.yaml if present
+        # X_THRESHOLD = (-0.3, 0.2)
+        # Y_THRESHOLD = (-0.3, 0.3)
+        # Z_THRESHOLD = (0.5, 0.95)
+        # thresholds = data.get("thresholds", {})
+        # self._thresholds = {
+        #     "x": thresholds.get("x", [-0.3, 0.3]),
+        #     "y": thresholds.get("y", [-0.3, 0.3]),
+        #     "z": thresholds.get("z", [0.5, 0.95]),
+        # }
+        self._thresholds = data.get("thresholds", [-0.3, 0.3, -0.3, 0.3, 0.5, 0.95])
+
         # self._texture_files = [
         #     self._models_folder / obj_id / "textured_mesh_0.jpg"
         #     for obj_id in self._object_ids
@@ -383,3 +395,18 @@ class MyLoader:
     @property
     def object_cleaned_files(self):
         return self._object_cleaned_files
+
+    @property
+    def x_threshold(self):
+        return self._thresholds[0:2]
+        # return tuple(self._thresholds["x"])
+
+    @property
+    def y_threshold(self):
+        return self._thresholds[2:4]
+        # return tuple(self._thresholds["y"])
+
+    @property
+    def z_threshold(self):
+        return self._thresholds[4:6]
+        # return tuple(self._thresholds["z"])
