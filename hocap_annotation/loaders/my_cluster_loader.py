@@ -37,7 +37,7 @@ class MyClusterLoader:
 
     def _load_h5_and_masks(self):
         """
-        Load all color images, depth images, and masks into memory from .h5 and .npy files.
+        Load all color images, depth images, and masks into memory from .h5 and h5 mask files (or .npy files if h5 not present).
         Sets:
             self._all_colors: np.ndarray, shape (N, num_cams, H, W, 3)
             self._all_depths: np.ndarray, shape (N, num_cams, H, W)
@@ -53,30 +53,32 @@ class MyClusterLoader:
             self._all_depths = self._all_depths * 0.001
         self._num_frames, self._num_cams = self._all_colors.shape[:2]
         self._rs_height, self._rs_width = self._all_colors.shape[2:4]
-        self._all_masks = self._load_masks_from_folder(self._seg_folder, self._num_frames, self._num_cams)
+        self._all_masks = self._load_masks_from_folder(self._seg_folder, self._num_frames, self._num_cams, h5_name="masks.h5", h5_dataset="masks")
         object_mask_dir = self._object_masks_folder
         if object_mask_dir.exists():
-            self._all_object_masks = self._load_masks_from_folder(object_mask_dir, self._num_frames, self._num_cams)
+            self._all_object_masks = self._load_masks_from_folder(object_mask_dir, self._num_frames, self._num_cams, h5_name="object_masks.h5", h5_dataset="object_masks")
         else:
             self._all_object_masks = None
 
-        # debug: get max and min color, depth, mask
-        # print(f"[DEBUG] max color: {np.max(self._all_colors)}, min color: {np.min(self._all_colors)}")
-        # print(f"[DEBUG] max depth: {np.max(self._all_depths)}, min depth: {np.min(self._all_depths)}")
-        # print(f"[DEBUG] max mask: {np.max(self._all_masks)}, min mask: {np.min(self._all_masks)}")
-        # print(f"[DEBUG] max object mask: {np.max(self._all_object_masks)}, min object mask: {np.min(self._all_object_masks)}")
-
-    def _load_masks_from_folder(self, mask_root_dir, num_frames, num_cams):
+    def _load_masks_from_folder(self, mask_root_dir, num_frames, num_cams, h5_name=None, h5_dataset=None):
         """
-        Load all masks from a folder of .npy files.
+        Load all masks from an h5 file if present, otherwise from a folder of .npy files.
         Args:
             mask_root_dir (Path): Path to the root mask folder.
             num_frames (int): Number of frames.
             num_cams (int): Number of cameras.
+            h5_name (str or None): Name of the h5 file to look for.
+            h5_dataset (str or None): Name of the dataset in the h5 file.
         Returns:
             np.ndarray: Array of shape (num_frames, num_cams, H, W)
         """
         mask_root_dir = Path(mask_root_dir)
+        if h5_name is not None and (mask_root_dir / h5_name).exists():
+            with h5py.File(mask_root_dir / h5_name, 'r') as f:
+                masks = f[h5_dataset][:]
+            print(f"[INFO] Loaded masks from {mask_root_dir / h5_name}")
+            return masks
+        # fallback to npy loading
         all_masks = []
         for frame_idx in range(num_frames):
             frame_masks = []
@@ -84,8 +86,6 @@ class MyClusterLoader:
                 cam_folder = mask_root_dir / f"cam{cam_idx:02d}.mp4"
                 npy_path = cam_folder / f"{frame_idx}.npy"
                 if not npy_path.exists():
-                    # raise FileNotFoundError(f"Mask file missing: {npy_path}")
-                    # print(f"[WARNING] Mask file missing: {npy_path}")
                     frame_masks.append(np.zeros((self._rs_height, self._rs_width), dtype=np.uint8))
                     continue
                 mask = np.load(npy_path)

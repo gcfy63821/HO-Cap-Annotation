@@ -5,9 +5,47 @@ import numpy as np
 from pathlib import Path
 import argparse
 
+def load_masks_from_folder(mask_root_dir, num_frames, num_cams):
+    """
+    根据mask根目录读取所有摄像头的mask，返回形状 (N, 8, H, W)
+    mask_root_dir路径格式:
+    tool_masks/
+      cam00.mp4/
+        0.npy
+        1.npy
+        ...
+      cam01.mp4/
+      ...
+      cam07.mp4/
+    """
+    H, W = 480, 640
+    mask_root_dir = Path(mask_root_dir)
+    all_masks = []
+    for frame_idx in range(num_frames):
+        frame_masks = []
+        for cam_idx in range(num_cams):
+            cam_folder = mask_root_dir / f"cam{cam_idx:02d}.mp4"
+            npy_path = cam_folder / f"{frame_idx}.npy"
+            if not npy_path.exists():
+                frame_masks.append(np.zeros((H, W), dtype=np.uint8))
+                continue
+            mask = np.load(npy_path)
+            frame_masks.append(mask)
+        all_masks.append(frame_masks)
+    all_masks = np.array(all_masks)  # (N, 8, H, W)
+    return all_masks
+
+def save_masks_to_h5(masks, h5_path, dataset_name="masks"):
+    """
+    Save masks numpy array to an h5 file with the given dataset name.
+    """
+    with h5py.File(h5_path, 'w') as f:
+        f.create_dataset(dataset_name, data=masks, compression="gzip")
+    print(f"[INFO] Saved {dataset_name} to {h5_path}")
+
 def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_root, subject_id="subject_5", tool_name="blue_scooper", models_folder="models", object_mask_dir=None):
     """
-    Generate meta.yaml for a HO-Cap dataset sequence. Does not save any images or masks.
+    Generate meta.yaml for a HO-Cap dataset sequence. Also saves masks as h5 files in their respective directories.
     Args:
         h5_path (str): Path to the .h5 file containing imgs and depths.
         mask_root_dir (str): Path to the tool_masks folder.
@@ -22,6 +60,17 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
     with h5py.File(h5_path, 'r') as f:
         imgs = f["imgs"][:]  # (N, num_cams, H, W, 3)
     num_frames, num_cams = imgs.shape[0], imgs.shape[1]
+
+    # Save masks as h5 file in mask_root_dir
+    masks = load_masks_from_folder(mask_root_dir, num_frames, num_cams)  # (N, 8, H, W)
+    masks_h5_path = Path(mask_root_dir) / "masks.h5"
+    save_masks_to_h5(masks, masks_h5_path, dataset_name="masks")
+
+    # Save object masks if provided
+    if object_mask_dir is not None:
+        object_masks = load_masks_from_folder(object_mask_dir, num_frames, num_cams)
+        object_masks_h5_path = Path(object_mask_dir) / "object_masks.h5"
+        save_masks_to_h5(object_masks, object_masks_h5_path, dataset_name="object_masks")
 
     # Get camera serials from calibration YAML
     with open(calibration_yaml_path, 'r') as f:
@@ -93,6 +142,8 @@ if __name__ == "__main__":
     # Infer mask_root_dir and object_mask_dir
     mask_root_dir = h5_path.parent.parent.parent / f"{folder_name}_annotated" / sequence_name / "tool_masks"
     object_mask_dir = h5_path.parent.parent.parent / f"{folder_name}_annotated" / sequence_name / "object_masks"
+    if not mask_root_dir.exists():
+        mask_root_dir = h5_path.parent.parent.parent / f"{folder_name}_annotated" / sequence_name / "masks"
     if not object_mask_dir.exists():
         object_mask_dir = None
 

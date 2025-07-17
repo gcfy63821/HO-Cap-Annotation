@@ -730,8 +730,8 @@ def run_pose_estimation(
 
     logging.info(f"start_frame: {start_frame}, end_frame: {end_frame}")
 
-    save_folder = f"{sequence_folder}/../{sequence_folder}_annotated/processed/fd_pose_solver"
-    save_folder = Path(save_folder)
+    save_folder = Path(f"{data_loader._data_folder.parent.parent}/{data_loader._folder_name}_annotated/{data_loader._sequence_name}/processed/fd_pose_solver")
+
     save_folder.mkdir(parents=True, exist_ok=True)
 
     logger.setLevel(logging.WARNING)
