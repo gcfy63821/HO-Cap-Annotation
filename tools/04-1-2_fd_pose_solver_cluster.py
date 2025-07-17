@@ -7,7 +7,8 @@ import copy
 from itertools import combinations
 from hocap_annotation.utils import *
 # from hocap_annotation.loaders import HOCapLoader
-from hocap_annotation.loaders import ClusterLoader as HOCapLoader
+# from hocap_annotation.loaders import MyLoader as HOCapLoader
+from hocap_annotation.loaders import MyClusterLoader as HOCapLoader
 from hocap_annotation.wrappers.foundationpose import (
     FoundationPose,
     ScorePredictor,
@@ -39,10 +40,16 @@ import logging
 
 # more general
 
-# squeegee
-X_THRESHOLD = (-0.3, 0.2)
-Y_THRESHOLD = (-0.1, 0.3)
-Z_THRESHOLD = (0.5, 0.95)
+# X_THRESHOLD = (-0.3, 0.2)
+# Y_THRESHOLD = (-0.3, 0.3)
+# Z_THRESHOLD = (0.5, 0.95)
+
+# new trinsics
+
+X_THRESHOLD = (-0.3, 0.3)
+Y_THRESHOLD = (-0.3, 0.3)
+Z_THRESHOLD = (-0.2, 0.4)
+
 
 def slerp(q1, q2, t):
     """
@@ -292,7 +299,7 @@ def detect_pose_outliers(poses, threshold_factor=2.0, outlier_ratio=0.2):
     return inlier_rots, inlier_trans, is_rot_noisy, is_trans_noisy
 
 
-def is_valid_pose(pose_w):
+def is_valid_pose(pose_w, x_threshold, y_threshold, z_threshold):
     """
     Check if pose in world space is valid.
 
@@ -306,19 +313,19 @@ def is_valid_pose(pose_w):
     # return -1 < x < 1 and -1 < y < 1 and -1 < z < 1
 
     # return -0.2 < x < 0.4 and 0.0 < y < 0.8 and 0.0 < z < 0.8
-    return (X_THRESHOLD[0] < x < X_THRESHOLD[1] and
-            Y_THRESHOLD[0] < y < Y_THRESHOLD[1] and
-            Z_THRESHOLD[0] < z < Z_THRESHOLD[1])
+    return (x_threshold[0] < x < x_threshold[1] and
+            y_threshold[0] < y < y_threshold[1] and
+            z_threshold[0] < z < z_threshold[1])
 
 
-def transform_poses_to_world(mat_poses_c, cam_RTs):
+def transform_poses_to_world(mat_poses_c, cam_RTs, x_threshold, y_threshold, z_threshold):
     poses_w = []
     for mat_pose, cam_RT in zip(mat_poses_c, cam_RTs):
         if np.all(mat_pose == -1):  # invalid pose
             continue
         mat_pose_w = cam_RT @ mat_pose
         quat_pose_w = mat_to_quat(mat_pose_w)
-        if is_valid_pose(quat_pose_w):
+        if is_valid_pose(quat_pose_w, x_threshold, y_threshold, z_threshold):
             poses_w.append(quat_pose_w)
     return poses_w
 
@@ -449,6 +456,9 @@ def get_consistent_pose_w(
     trans_thresh=0.01,
     thresh_factor=2.0,
     outlier_ratio=0.2,
+    x_threshold=(-0.3, 0.3),
+    y_threshold=(-0.3, 0.3),
+    z_threshold=(-0.2, 0.4),
 ):
     """
     Get consistent pose in world space using RANSAC on inlier rotations and translations.
@@ -471,7 +481,7 @@ def get_consistent_pose_w(
     flag = 1
 
     # Step 1: transform all poses to world space
-    poses_w = transform_poses_to_world(mat_poses_c, cam_RTs)
+    poses_w = transform_poses_to_world(mat_poses_c, cam_RTs, x_threshold, y_threshold, z_threshold)
 
     
     # if len(poses_w) == 0:
@@ -493,7 +503,7 @@ def get_consistent_pose_w(
     poses_w = np.stack(poses_w, axis=0)
 
     #####debug
-    debug_save_poses(poses_w)
+    # debug_save_poses(poses_w)
 
 
     # Step 2: detect check if poses are noisy
@@ -545,7 +555,7 @@ def get_consistent_pose_w(
     return np.concatenate([curr_rot, curr_trans, [flag]], axis=0)
 
 
-def is_valid_ob_pose(ob_in_cam, cam_RT=None):
+def is_valid_ob_pose(ob_in_cam, x_threshold, y_threshold, z_threshold, cam_RT=None):
     if np.all(ob_in_cam == -1):
         return False
     elif cam_RT is None:
@@ -556,10 +566,11 @@ def is_valid_ob_pose(ob_in_cam, cam_RT=None):
 
     # print(f"DEBUG: ob_in_world: {ob_in_world if cam_RT is not None else ob_in_cam[:3, 3]}")
 
-    # return -0.2 < x < 0.4 and 0.0 < y < 0.8 and 0.0 < z < 0.8
-    return (X_THRESHOLD[0] < x < X_THRESHOLD[1] and
-            Y_THRESHOLD[0] < y < Y_THRESHOLD[1] and
-            Z_THRESHOLD[0] < z < Z_THRESHOLD[1])
+    # print(f"[DEBUG] x_threshold: {x_threshold}, y_threshold: {y_threshold}, z_threshold: {z_threshold}")
+    # print(f"[DEBUG] x: {x}, y: {y}, z: {z}")
+    return (x_threshold[0] < x < x_threshold[1] and
+            y_threshold[0] < y < y_threshold[1] and
+            z_threshold[0] < z < z_threshold[1])
 
 
 def initialize_fd_pose_estimator(textured_mesh_path, cleaned_mesh_path, debug_dir):
@@ -577,6 +588,52 @@ def initialize_fd_pose_estimator(textured_mesh_path, cleaned_mesh_path, debug_di
         rotation_grid_min_n_views=120,
         rotation_grid_inplane_step=60,
     )
+
+
+def crop_mask_and_adjust_intrinsics(mask, K):
+    """
+    Given a binary mask (shape [480, 640]) and a camera intrinsic matrix K (3x3),
+    returns the bounding box (ymin, ymax, xmin, xmax) for a 200x200 region (with 20px padding)
+    centered on the mask==1 region, and a new intrinsic matrix K_new that incorporates the cropping.
+    Handles edge cases where the crop would go out of bounds.
+    """
+    H, W = mask.shape
+    ys, xs = np.where(mask == 255)
+    if len(xs) == 0 or len(ys) == 0:
+        # No foreground, return full image and original K
+        return (0, H, 0, W), K.copy()
+    # Center of the mask region
+    y_center = int(np.round(ys.mean()))
+    x_center = int(np.round(xs.mean()))
+    crop_size = 200
+    pad = 20
+
+    # Compute crop bounds
+    ymin = y_center - crop_size // 2 - pad
+    ymax = y_center + crop_size // 2 + pad
+    xmin = x_center - crop_size // 2 - pad
+    xmax = x_center + crop_size // 2 + pad
+
+    # Adjust crop to take the appropriate corner if at the borders
+    if ymin < 0:
+        ymax = min(H, ymax - ymin)
+        ymin = 0
+    if xmin < 0:
+        xmax = min(W, xmax - xmin)
+        xmin = 0
+    if ymax > H:
+        ymin = max(0, ymin - (ymax - H))
+        ymax = H
+    if xmax > W:
+        xmin = max(0, xmin - (xmax - W))
+        xmax = W
+
+    # If crop is smaller than 200+2*pad due to image edge, adjust to get as close as possible
+    # (optional: could shift crop to keep size, but here we just clamp)
+    K_new = K.copy().astype(np.float32)
+    K_new[0, 2] -= xmin
+    K_new[1, 2] -= ymin
+    return (ymin, ymax, xmin, xmax), K_new
 
 
 def run_pose_estimation(
@@ -610,8 +667,14 @@ def run_pose_estimation(
     object_mesh_cleaned = trimesh.load(data_loader.object_cleaned_files[object_idx])
     empty_mat_pose = np.full((4, 4), -1.0, dtype=np.float32)
 
-    # object_mesh_small = object_mesh_cleaned.simplify_quadric_decimation(0.4)
-    # object_mesh_small.vertices *= 0.001
+    object_mesh_small = object_mesh_cleaned.simplify_quadric_decimation(0.4)
+    object_mesh_small.vertices *= 0.001
+
+
+    x_threshold = data_loader._thresholds[:2]
+    y_threshold = data_loader._thresholds[2:4]
+    z_threshold = data_loader._thresholds[4:]
+    print(f"[DEBUG] x_threshold: {x_threshold}, y_threshold: {y_threshold}, z_threshold: {z_threshold}")
 
     #### process mesh ###
 
@@ -638,8 +701,9 @@ def run_pose_estimation(
             print(f"Error loading texture file: {texture_file}")
     mesh=None 
     # print(len(other_mesh.vertices))
-    if len(other_mesh.vertices) > 200000: # fix
+    if len(other_mesh.vertices) > 100000: # fix
         mesh = other_mesh.simplify_quadric_decimation(0.8)
+        print("Decim mesh.")
         # mesh = other_mesh.simplify_quadric_decimation(200000) #trimesh.Trimesh(vertices=samples, process=True)
         del other_mesh
     else:
@@ -666,7 +730,8 @@ def run_pose_estimation(
 
     logging.info(f"start_frame: {start_frame}, end_frame: {end_frame}")
 
-    save_folder = sequence_folder / "processed" / "fd_pose_solver"
+    save_folder = f"{sequence_folder}/../{sequence_folder}_annotated/processed/fd_pose_solver"
+    save_folder = Path(save_folder)
     save_folder.mkdir(parents=True, exist_ok=True)
 
     logger.setLevel(logging.WARNING)
@@ -732,13 +797,59 @@ def run_pose_estimation(
     # fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     # video_writer = None  # 等第一帧确定尺寸再初始化
 
-
+    ################ Tricks #################
+    REVERSE = False
+    MASKED_DEPTH = True  # whether to use masked depth or not
+    MASKED_IMAGE = False  # whether to use masked image or not
+    CROP_VIEW = False  # whether to crop the view or not
+    MASKED_OBJECT = True
 
     for frame_id in range(start_frame, end_frame, 1):
+        frame_idx = frame_id
         for serial_idx, serial in enumerate(valid_serials):
-            color = data_loader.get_color(serial, frame_id)
-            depth = data_loader.get_depth(serial, frame_id)
-            mask = data_loader.get_mask(serial, frame_id, object_idx)
+            if not REVERSE:
+                color = data_loader.get_color(serial, frame_id)
+                depth = data_loader.get_depth(serial, frame_id)
+                mask = data_loader.get_mask(serial, frame_id, object_idx)
+                frame_idx = frame_id
+            else:
+                color = data_loader.get_color(serial, num_frames - frame_id - 1)
+                depth = data_loader.get_depth(serial, num_frames - frame_id - 1)
+                mask = data_loader.get_mask(serial, num_frames - frame_id - 1, object_idx)
+                frame_idx = num_frames - frame_id - 1
+            # print("mask shape:", mask.shape)
+            # 只保留mask区域的深度
+            if MASKED_DEPTH:
+                depth = depth.copy()
+                depth[mask == 0] = 0
+                
+                if MASKED_OBJECT:
+                    object_mask = data_loader.get_object_mask(serial, frame_idx) # 如果没有会返回0
+                    depth[object_mask != 0] = 0
+                    if frame_idx == 0:
+                        # print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: object_mask.sum() = {object_mask.sum()}")
+                        # 保存depth图片debug
+                        debug_depth_path = save_folder / "debug" / f"processed_depth_{object_id}" / serial
+                        debug_depth_path.mkdir(parents=True, exist_ok=True)
+                        view_depth = depth.copy()
+                        # 让深度图可视化
+                        view_depth = (view_depth - np.min(view_depth)) / (np.max(view_depth) - np.min(view_depth)) * 255
+                        view_depth = view_depth.astype(np.uint8)
+                        cv2.imwrite(str(debug_depth_path / f"depth_{frame_idx:06d}_object_mask.png"), view_depth)
+                        cv2.imwrite(str(debug_depth_path / f"depth_{frame_idx:06d}.png"), depth)
+
+            if MASKED_IMAGE:
+                color = color.copy()
+                color[mask == 0] = 0
+            
+            if CROP_VIEW:
+                # TODO: crop K
+                pass
+                # coords, cropped_intrinsics = crop_mask_and_adjust_intrinsics(sam_masks[i, CAMERA_IDXS[0]], all_camera_intrinsics[CAMERA_IDXS[0]])
+                # cropped_rgb = all_colors[CAMERA_IDXS[0]][coords[0]:coords[1], coords[2]:coords[3]]
+                # cropped_depth = all_depths[CAMERA_IDXS[0]][coords[0]:coords[1], coords[2]:coords[3]]
+                # cropped_mask = sam_masks[i, CAMERA_IDXS[0]][coords[0]:coords[1], coords[2]:coords[3]]
+
             K = valid_Ks[serial_idx]
             ## DEBUG ##
 
@@ -747,22 +858,21 @@ def run_pose_estimation(
 
 
             # print(f"[DEBUG] Cam {serial}: mask.sum() = {mask.sum()}, depth.mean() = {np.mean(depth):.2f}")
-            # print(mask)
 
 
             if mask.sum() < 10:
                 ob_in_cam_mat = empty_mat_pose.copy()
-                print(f"[DEBUG] Frame {frame_id}, Cam {serial}: mask.sum() = {mask.sum()} is less than 100, skipping.")
-            elif serial_idx == 7 and is_valid_ob_pose(ob_in_cam_poses[serial_idx], valid_RTs[serial_idx]):
-                print("using cam pose")
-                ob_in_cam_mat = estimator.track_one(
-                    rgb=color,
-                    depth=depth,
-                    K=K,
-                    iteration=track_refine_iter,
-                    prev_pose=ob_in_cam_poses[serial_idx],
-                )
-            elif is_valid_ob_pose(ob_in_world_refined):
+                print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: mask.sum() = {mask.sum()} is less than 100, skipping.")
+            # elif serial_idx == 0 and is_valid_ob_pose(ob_in_cam_poses[serial_idx], valid_RTs[serial_idx]):
+            #     print("using cam pose")
+            #     ob_in_cam_mat = estimator.track_one(
+            #         rgb=color,
+            #         depth=depth,
+            #         K=K,
+            #         iteration=track_refine_iter,
+            #         prev_pose=ob_in_cam_poses[serial_idx],
+            #     )
+            elif is_valid_ob_pose(ob_in_world_refined, x_threshold, y_threshold, z_threshold):
                 # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: using refined ob_in_world pose.")
                 ob_in_cam_mat = estimator.track_one(
                     rgb=color,
@@ -771,7 +881,7 @@ def run_pose_estimation(
                     iteration=track_refine_iter,
                     prev_pose=valid_RTs_inv[serial_idx] @ ob_in_world_refined,
                 )
-            elif is_valid_ob_pose(ob_in_cam_poses[serial_idx], valid_RTs[serial_idx]):
+            elif is_valid_ob_pose(ob_in_cam_poses[serial_idx], x_threshold, y_threshold, z_threshold, valid_RTs[serial_idx]):
                 print(f"DEBUG {ob_in_world_refined} is not valid, but ob_in_cam_poses is valid.")
                 print("ob in world refined:", ob_in_world_refined[:3, 3])
                 # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: using previous ob_in_cam pose.")
@@ -783,13 +893,19 @@ def run_pose_estimation(
                     prev_pose=ob_in_cam_poses[serial_idx],
                 )
             else:
-                print(f"[DEBUG] Frame {frame_id}, Cam {serial}: estimating new pose.")
+                print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: estimating new pose.")
                 init_ob_pos_center = data_loader.get_init_translation(
-                    frame_id, [serial], object_idx, kernel_size=5
+                    frame_idx, [serial], object_idx, kernel_size=5
                 )[0][0]
                 # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: init_ob_pos_center = {init_ob_pos_center}")
 
                 if init_ob_pos_center is not None:
+                    # print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: init_ob_pos_center = {init_ob_pos_center}")
+                    # print(f"[debug] color shape: {color.shape}, depth shape: {depth.shape}, mask shape: {mask.shape}, K shape: {K.shape}")
+                    # print(f"[debug] color min: {np.min(color)}, color max: {np.max(color)}")
+                    # print(f"[debug] depth min: {np.min(depth)}, depth max: {np.max(depth)}")
+                    # print(f"[debug] mask min: {np.min(mask)}, mask max: {np.max(mask)}")
+                    # print(f"[debug] K: {K}")
                     ob_in_cam_mat = estimator.register(
                         rgb=color,
                         depth=depth,
@@ -800,17 +916,14 @@ def run_pose_estimation(
                     )
                     # print(f"[DEBUG] register result:  Frame {frame_id}, Cam {serial}: ob_in_cam_mat = {ob_in_cam_mat.flatten()[:4]}")
                     # the register result is not working
-                    if debug >=1 :
-                        debug_ob_in_world = valid_RTs[serial_idx] @ ob_in_cam_mat
-                        print("registered result in world:", debug_ob_in_world[:3,3])
-                    if not is_valid_ob_pose(ob_in_cam_mat, valid_RTs[serial_idx]):
+                    if not is_valid_ob_pose(ob_in_cam_mat, x_threshold, y_threshold, z_threshold, valid_RTs[serial_idx]):
                         # here
-                        print(f"[DEBUG]!!! Frame {frame_id}, Cam {serial}: Register failed! using empty pose.")
+                        print(f"[DEBUG]!!! Frame {frame_idx}, Cam {serial}: Register failed! using empty pose.")
                         debug_ob_in_world = valid_RTs[serial_idx] @ ob_in_cam_mat
                         print(debug_ob_in_world[:3,3])
                         ob_in_cam_mat = empty_mat_pose.copy()
                 else:
-                    print(f"[DEBUG] Frame {frame_id}, Cam {serial}: init_ob_pos_center is None, using empty pose.")
+                    print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: init_ob_pos_center is None, using empty pose.")
                     ob_in_cam_mat = empty_mat_pose.copy()
 
             # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: ob_in_cam_mat = {ob_in_cam_mat}")
@@ -820,7 +933,7 @@ def run_pose_estimation(
             save_pose_folder = save_folder / object_id / "ob_in_cam" / serial
             save_pose_folder.mkdir(parents=True, exist_ok=True)
             write_pose_to_txt(
-                save_pose_folder / f"{frame_id:06d}.txt", mat_to_quat(ob_in_cam_mat)
+                save_pose_folder / f"{frame_idx:06d}.txt", mat_to_quat(ob_in_cam_mat)
             )
             
             if debug > 1:
@@ -845,6 +958,9 @@ def run_pose_estimation(
             trans_thresh=trans_thresh,
             thresh_factor=2.0,
             outlier_ratio=0.2,
+            x_threshold=x_threshold,
+            y_threshold=y_threshold,
+            z_threshold=z_threshold,
         )
         # print(curr_pose_w)
 
@@ -852,13 +968,13 @@ def run_pose_estimation(
         # print(f"[DEBUG] Register result: \n{ob_in_cam_mat}")
         # print(f"[DEBUG] Valid? {is_valid_ob_pose(ob_in_cam_mat, valid_RTs[serial_idx])}")
 
-        print(f"[RESULT] ob_in_world (Frame {frame_id}): {curr_pose_w[4:7]}")
+        print(f"[RESULT] ob_in_world (Frame {frame_idx}): {curr_pose_w[4:7]}")
 
 
         # save pose to file
         save_pose_folder = save_folder / object_id / "ob_in_world"
         save_pose_folder.mkdir(parents=True, exist_ok=True)
-        write_pose_to_txt(save_pose_folder / f"{frame_id:06d}.txt", curr_pose_w)
+        write_pose_to_txt(save_pose_folder / f"{frame_idx:06d}.txt", curr_pose_w)
 
         ob_in_world_refined = quat_to_mat(curr_pose_w[:7])
 
@@ -905,13 +1021,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--est_refine_iter",
         type=int,
-        default=15,
+        default=10, # 15
         help="number of iterations for estimation",
     )
     parser.add_argument(
         "--track_refine_iter",
         type=int,
-        default=5,
+        default=10, # 50 5
         help="number of iterations for tracking",
     )
     parser.add_argument("--start_frame", type=int, default=0, help="start frame")
@@ -941,6 +1057,8 @@ if __name__ == "__main__":
     # 
     logger.setLevel(logging.WARNING)  # 只显示WARNING及以上
     logging.getLogger().setLevel(logging.WARNING)  # 全局也设为WARNING
+
+    # loader = HOCapLoader(args.sequence_folder)
 
     run_pose_estimation(
         args.sequence_folder,
