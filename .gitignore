@@ -159,3 +159,5 @@ config/
 log.txt
 
 worklog.md
+
+slurm_outs/

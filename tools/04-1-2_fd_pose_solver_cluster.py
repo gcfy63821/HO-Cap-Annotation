@@ -701,7 +701,7 @@ def run_pose_estimation(
             print(f"Error loading texture file: {texture_file}")
     mesh=None 
     # print(len(other_mesh.vertices))
-    if len(other_mesh.vertices) > 100000: # fix
+    if len(other_mesh.vertices) > 200000: # fix
         mesh = other_mesh.simplify_quadric_decimation(0.8)
         print("Decim mesh.")
         # mesh = other_mesh.simplify_quadric_decimation(200000) #trimesh.Trimesh(vertices=samples, process=True)
