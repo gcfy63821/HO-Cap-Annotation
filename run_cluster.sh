@@ -83,14 +83,14 @@ TOOL_NAME=${TOOL_NAME:-""}  # 默认值为空
 # fi
 
 # 运行 04-1-1_fd_pose_solver_prep.py
-if [ -n "$OBJECT_IDX" ]; then
-    echo "Running fd_pose_solver with object_idx=$OBJECT_IDX..."
-    python tools/04-1-2_fd_pose_solver_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER"
-fi
+# if [ -n "$OBJECT_IDX" ]; then
+#     echo "Running fd_pose_solver with object_idx=$OBJECT_IDX..."
+#     python tools/04-1-2_fd_pose_solver_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER"
+# fi
 
 # # 运行 04-2_fd_pose_merger.py
 echo "Running fd_pose_merger..."
-python tools/04-2_fd_pose_merger.py --sequence_folder "$SEQUENCE_FOLDER"
+python tools/04-2-2_fd_pose_merger_cluster.py --sequence_folder "$SEQUENCE_FOLDER"
 
 # # 运行 04-2-1_adaptive_fd_merger.py
 # echo "Running adaptive fd_pose_merger..."
