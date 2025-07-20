@@ -27,11 +27,14 @@ def load_masks_from_folder(mask_root_dir, num_frames, num_cams):
             cam_folder = mask_root_dir / f"cam{cam_idx:02d}.mp4"
             npy_path = cam_folder / f"{frame_idx}.npy"
             if not npy_path.exists():
-                frame_masks.append(np.zeros((H, W), dtype=np.uint8))
+                frame_masks.append(np.zeros((1, H, W), dtype=np.uint8))
+                # print("is none:", cam_folder, frame_idx)
                 continue
             mask = np.load(npy_path)
+            # print("mask_shape", mask.shape)
             frame_masks.append(mask)
         all_masks.append(frame_masks)
+    # print("all_masks", len(all_masks))
     all_masks = np.array(all_masks)  # (N, 8, H, W)
     return all_masks
 
@@ -103,7 +106,7 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
         "have_hololens": False,
         "have_mano": True,
         "task_id": 1,
-        "thresholds": [-0.3, 0.3, -0.3, 0.3, -0.2, 0.4],
+        "thresholds": [-0.4, 0.3, -0.4, 0.3, -0.3, 0.4],
         "calibration_yaml_path": calibration_yaml_path,
         "models_folder": models_folder,
         "betas": [

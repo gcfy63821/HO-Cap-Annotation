@@ -24,7 +24,8 @@ class MyClusterLoader:
         tool_masks_folder = Path(f"{self._data_folder.parent.parent}/{self._folder_name}_annotated/{self._sequence_name}/tool_masks")
         masks_folder = Path(f"{self._data_folder.parent.parent}/{self._folder_name}_annotated/{self._sequence_name}/masks")
         self._object_masks_folder = Path(f"{self._data_folder.parent.parent}/{self._folder_name}_annotated/{self._sequence_name}/object_masks")
-
+        print(f"[INFO] tool mask folder_name: {tool_masks_folder}, is dir: {tool_masks_folder.is_dir()}")
+        
         if tool_masks_folder.exists() and tool_masks_folder.is_dir():
             self._seg_folder = tool_masks_folder
         elif masks_folder.exists() and masks_folder.is_dir():

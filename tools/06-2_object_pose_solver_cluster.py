@@ -13,7 +13,7 @@ from hocap_annotation.loss import (
     PoseAlignmentLoss,
     PoseSmoothnessLoss,
 )
-from hocap_annotation.loaders import SequenceLoader
+from hocap_annotation.loaders import MySequenceLoader as SequenceLoader
 from hocap_annotation.rendering import HOCapRenderer
 
 
@@ -22,7 +22,11 @@ class ObjectPoseSolver:
         self._data_folder = Path(sequence_folder)
         self._debug = debug
         self._device = CFG.device
-        self._save_folder = self._data_folder / "processed" / "object_pose_solver"
+        # self._save_folder = self._data_folder / "processed" / "object_pose_solver"
+        # self._save_folder.mkdir(parents=True, exist_ok=True)
+        self._folder_name = self._data_folder.parent.name
+        self._sequence_name = self._data_folder.name
+        self._save_folder = Path(f"{self._data_folder.parent.parent}/{self._folder_name}_annotated/{self._sequence_name}/processed/object_pose_solver")
         self._save_folder.mkdir(parents=True, exist_ok=True)
 
         self._log_file = self._save_folder / "object_pose_solver.log"
@@ -69,7 +73,9 @@ class ObjectPoseSolver:
 
     def _check_required_files(self):
         self._logger.info("Checking existence of required files...")
-        fd_pose_folder = self._data_folder / "processed/fd_pose_solver"
+        # fd_pose_folder = self._data_folder / "processed/fd_pose_solver"
+        fd_pose_folder = Path(f"{self._data_folder.parent.parent}/{self._folder_name}_annotated/{self._sequence_name}/processed/fd_pose_solver")
+        
         poses_o_files = [fd_pose_folder / "fd_poses_merged_fixed.npy"]
         for f in poses_o_files:
             if f.exists():
@@ -178,7 +184,7 @@ class ObjectPoseSolver:
 
                 if self._use_object_masks:
                     seg_masks = [
-                        erode_mask(self._data_loader.get_mask_image(f_idx, s), 3)
+                        erode_mask(self._data_loader.get_mask_image(f_idx, s)[0], 3)
                         for s in self._rs_serials
                     ]
                     seg_masks = np.stack(seg_masks, axis=0).reshape(

@@ -21,10 +21,10 @@ def inspect_obj_model(obj_path):
     print(f"质心 (centroid): {mesh.centroid}")
 
     # 如果需要，也可以显示模型
-    mesh.show()
+    # mesh.show()
 
 if __name__ == "__main__":
     # 替换为你的 .obj 文件路径
     # obj_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/datasets/models/G01_1/cleaned_mesh_10000.obj"
-    obj_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/models/wooden_spoon/cleaned_mesh_10000.obj"
+    obj_path = "/viscam/u/chenrq/0718_mesh_files/decim_mesh_files/peeler-decimated_to_80000_vertices-decimated_to_40000_vertices.obj"
     inspect_obj_model(obj_path)

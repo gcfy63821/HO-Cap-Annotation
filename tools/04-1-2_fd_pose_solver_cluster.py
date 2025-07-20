@@ -825,6 +825,8 @@ def run_pose_estimation(
                 
                 if MASKED_OBJECT:
                     object_mask = data_loader.get_object_mask(serial, frame_idx) # 如果没有会返回0
+                    if object_mask.ndim ==3:
+                        object_mask = object_mask.squeeze(0)
                     depth[object_mask != 0] = 0
                     if frame_idx == 0:
                         # print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: object_mask.sum() = {object_mask.sum()}")
