@@ -88,7 +88,7 @@ def save_calibration(extrinsics, intrinsics, calib_root):
 # 示例调用
 if __name__ == "__main__":
     # 输入相机参数的路径
-    camera_params_file = "/home/wys/learning-compliant/crq_ws/reconstructed_cameras_scaled.yaml"
+    camera_params_file = "/home/wys/learning-compliant/crq_ws/updated_extrinsics_10_sand.yaml"
 
     # 输出路径
     calib_root = Path("/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset")

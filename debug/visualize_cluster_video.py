@@ -12,6 +12,7 @@ import torch
 from hocap_annotation.layers import MANOGroupLayer
 from hocap_annotation.utils.color_info import *
 from hocap_annotation.utils.mano_info import *
+from hocap_annotation.loaders.my_cluster_loader import MyClusterLoader
 
 
 
@@ -32,14 +33,9 @@ def load_mano_sequence(mano_file):
     print(f"[INFO] Loaded MANO sequence from {mano_file}, shape: {mano_data.shape}")
     return mano_data  # 返回形状为(2, N, 51)的数组
 
-def load_mano_beta():
-    file_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/mano/squeegee_1.yaml"
-    with open(file_path, 'r') as f:
-        data = yaml.safe_load(f)
-    return np.array(data['betas'], dtype=np.float32)
+# Remove load_mano_beta and load_extrinsics_yaml, and update init_mano_group_layer to use loader.mano_beta
 
-def init_mano_group_layer():
-    betas = load_mano_beta()
+def init_mano_group_layer(betas):
     mano_group_layer = MANOGroupLayer(['left','right'], [betas] * 2).to('cuda')
     return mano_group_layer
 
@@ -75,62 +71,6 @@ def project_points(vertices, K):
     return pts
 
 
-def load_extrinsics_yaml(yaml_path, serials):
-    def create_mat(values):
-        return np.array([values[0:4], values[4:8], values[8:12], [0, 0, 0, 1]], dtype=np.float32)
-    with open(yaml_path, 'r') as f:
-        data = yaml.safe_load(f)
-    extr = data["extrinsics"]
-    return {s: create_mat(extr[s]) for s in serials}
-
-
-def concat_frames_grid(frames, grid_shape=(2, 4)):
-    """将8帧拼成2x4 grid"""
-    assert len(frames) == grid_shape[0] * grid_shape[1]
-    h, w = frames[0].shape[:2]
-    rows = []
-    for i in range(grid_shape[0]):
-        row = np.concatenate(frames[i*grid_shape[1]:(i+1)*grid_shape[1]], axis=1)
-        rows.append(row)
-    grid = np.concatenate(rows, axis=0)
-    return grid
-
-class IMGLoader():
-    def __init__(self,data_path):
-
-        self.serials = [f"{i:02d}" for i in range(8)]
-        self.K = np.array([[607.4, 0.0, 320.0],
-                    [0.0, 607.4, 240.0],
-                    [0.0, 0.0, 1.0]])
-        serials = self.serials
-        self.Ks = {s: K for s in serials}
-        
-        self.base_path = f"/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/{data_path}"
-        self.sam_base = f"{self.base_path}/processed/segmentation/sam2"
-        self.color_roots = {s: f"{self.base_path}/{s}" for s in serials}
-        self.sam_mask_roots = {s: f"{self.sam_base}/{s}/mask" for s in serials}
-        extrinsics_yaml = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml"
-        self.extrinsics_dict = load_extrinsics_yaml(extrinsics_yaml, serials)
-
-    # 修改frame读取逻辑
-    def get_color_img(self, frame_idx, serial_idx):
-        use_h5 = False
-        if use_h5:
-            img = self.colors_h5[frame_idx, serial_idx]
-            return img[..., ::-1].copy()  # RGB->BGR for cv2
-        else:
-            serial = self.serials[serial_idx]
-            return cv2.imread(str(Path(self.color_roots[serial]) / f"color_{frame_idx:06d}.jpg"))
-
-    def get_mask_img(self, frame_idx, serial_idx):
-        use_h5 = False
-        if use_h5:
-            mask = masks_h5[frame_idx, serial_idx]
-            return (mask > 0).astype(np.uint8) * 255
-        else:
-            serial = self.serials[serial_idx]
-            return cv2.imread(str(Path(self.sam_mask_roots[serial]) / f"mask_{frame_idx:06d}.png"), cv2.IMREAD_GRAYSCALE)
-
 def render_hand_mesh(hand_mesh, K, W, H):
     """
     使用Trimesh渲染手的网格并将其投影到2D图像平面
@@ -150,13 +90,26 @@ def render_hand_mesh(hand_mesh, K, W, H):
 
     return hand_img
 
+# Restore concat_frames_grid function
+
+def concat_frames_grid(frames, grid_shape=(2, 4)):
+    """将8帧拼成2x4 grid"""
+    assert len(frames) == grid_shape[0] * grid_shape[1]
+    h, w = frames[0].shape[:2]
+    rows = []
+    for i in range(grid_shape[0]):
+        row = np.concatenate(frames[i*grid_shape[1]:(i+1)*grid_shape[1]], axis=1)
+        rows.append(row)
+    grid = np.concatenate(rows, axis=0)
+    return grid
+
 def process_frame_pose_npy_h5(args):
-    i, pose_data, verts_m, faces_m, outlier_idxs, orig_vertices, orig_mesh, dataloader = args
+    i, pose_data, verts_m, faces_m, outlier_idxs, orig_vertices, orig_mesh, dataloader, object_idx = args
     W, H = 640, 480
     frame_tiles = []
 
     if i >= len(pose_data):
-        frame_tiles = [np.ones((H, W, 3), dtype=np.uint8) * 255 for _ in dataloader.serials]
+        frame_tiles = [np.ones((H, W, 3), dtype=np.uint8) * 255 for _ in dataloader.rs_serials]
         return concat_frames_grid(frame_tiles, (2, 4))
 
     # 读取物体位姿
@@ -172,11 +125,11 @@ def process_frame_pose_npy_h5(args):
     mano_verts = verts_m[i, :, :]
     
     colors_m = [(0.0, 1.0, 1.0), (0.9803921568627451, 0.2901960784313726, 0.16862745098039217)]
-    Ks = dataloader.Ks
+    extrinsics_dict = {s: dataloader.extr2world_inv[i] for i, s in enumerate(dataloader.rs_serials)}
 
-    for serial_idx, serial in enumerate(dataloader.serials):
-        color = dataloader.get_color_img(i, serial_idx)
-        sam_mask = dataloader.get_mask_img(i, serial_idx)
+    for serial_idx, serial in enumerate(dataloader.rs_serials):
+        color = dataloader.get_color(serial, i)
+        sam_mask = dataloader.get_mask(serial, i, object_idx - 1)
         if color is None or sam_mask is None:
             frame_tiles.append(np.ones((H, W, 3), dtype=np.uint8) * 255)
             continue
@@ -187,9 +140,10 @@ def process_frame_pose_npy_h5(args):
         mesh = orig_mesh.copy()
         mesh.vertices = orig_vertices.copy()
         mesh.apply_transform(T)
-        world2cam = np.linalg.inv(dataloader.extrinsics_dict[serial])
+        world2cam = extrinsics_dict[serial]
         mesh.apply_transform(world2cam)
-        pts = project_points(mesh.vertices, Ks[serial])
+        K = dataloader.rs_Ks[serial_idx]
+        pts = project_points(mesh.vertices, K)
         pts = pts[(pts[:, 0] >= 0) & (pts[:, 0] < W) & (pts[:, 1] >= 0) & (pts[:, 1] < H)]
         pts = pts.astype(np.int32)[::200]
         
@@ -210,7 +164,7 @@ def process_frame_pose_npy_h5(args):
         # 创建Trimesh对象
         hand_mesh = trimesh.Trimesh(vertices=mano_verts_cpu, faces=faces_m_cpu, process=False)
         hand_mesh.apply_transform(world2cam)
-        hand_img = render_hand_mesh(hand_mesh, Ks[serial], W, H)
+        hand_img = render_hand_mesh(hand_mesh, K, W, H)
 
         # 合并结果
         vis = cv2.addWeighted(vis, 0.6, hand_img, 0.4, 0)
@@ -234,81 +188,56 @@ if __name__ == "__main__":
     parser.add_argument("--object_idx", type=int, default=1, help="物体索引，默认为0")
     args = parser.parse_args()
 
-    serials = [f"{i:02d}" for i in range(8)]
-    K = np.array([[607.4, 0.0, 320.0],
-                  [0.0, 607.4, 240.0],
-                  [0.0, 0.0, 1.0]])
-    Ks = {s: K for s in serials}
-    ################
-    data_path = args.data_path
-    tool_name = args.tool_name
-    output_idx = args.output_idx
-    pose_file = args.pose_file
-    uuid = "_" + args.uuid if args.uuid else ""
-    ################
+    # Use MyClusterLoader instead of IMGLoader
+    sequence_folder = f"/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/{args.data_path}"
+    loader = MyClusterLoader(sequence_folder)
 
-    data_loader = IMGLoader(data_path)
+    serials = loader.rs_serials
+    K = loader.rs_Ks[0]  # Assume all cameras have the same intrinsics for now
+    Ks = {s: loader.rs_Ks[i] for i, s in enumerate(serials)}
+    W, H = loader.rs_width, loader.rs_height
+    num_frames = loader.num_frames
 
-    base_path = f"/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/{data_path}"
-    sam_base = f"{base_path}/processed/segmentation/sam2"
-    color_roots = {s: f"{base_path}/{s}" for s in serials}
-    sam_mask_roots = {s: f"{sam_base}/{s}/mask" for s in serials}
+    # Get color and mask access functions
+    def get_color_img(frame_idx, serial_idx):
+        serial = serials[serial_idx]
+        return loader.get_color(serial, frame_idx)
 
-   
+    def get_mask_img(frame_idx, serial_idx):
+        serial = serials[serial_idx]
+        return loader.get_mask(serial, frame_idx, args.object_idx - 1)
 
-    
-    h5_path = Path(base_path) / "all_data.h5"
-    use_h5 = h5_path.exists()
-    if use_h5:
-        h5_file = h5py.File(h5_path, "r")
-        colors_h5 = h5_file["colors"]  # (N, 8, H, W, 3)
-        masks_h5 = h5_file["masks"]    # (N, 8, H, W)
-
-    extrinsics_yaml = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml"
-    extrinsics_dict = load_extrinsics_yaml(extrinsics_yaml, serials)
-
-
-    # 自动获取帧数
-    if use_h5:
-        num_frames = colors_h5.shape[0]
-    else:
-        color_dir = Path(color_roots[serials[0]])
-        num_frames = len(list(color_dir.glob("color_*.jpg")))
-
-    
-
-    orig_mesh = trimesh.load(f"{base_path}/../../models/{tool_name}/cleaned_mesh_10000.obj", process=False)
+    # Load mesh
+    orig_mesh = trimesh.load(str(loader.object_cleaned_files[args.object_idx - 1]), process=False)
     orig_vertices = orig_mesh.vertices.copy()
-    W, H = 640, 480
-
 
     # pose_npy_in_cams
-    if pose_file == "fd":
-        pose_npy_path = f"{base_path}/processed/fd_pose_solver/fd_poses_merged_fixed.npy"
-    elif pose_file == "adaptive":
-        pose_npy_path = f"{base_path}/processed/fd_pose_solver/adaptive_fd_poses_merged_fixed.npy"
-    elif pose_file == "optimized":
-        pose_npy_path = f"{base_path}/processed/joint_pose_solver/poses_o.npy"
-    output_path2 = Path(f"debug_output/{data_path}/pose_npy_in_cams_video")
+    # Use the same structure as MyClusterLoader for annotated data
+    annotated_base = loader._data_folder.parent.parent / f"{loader._folder_name}_annotated" / loader._sequence_name
+    if args.pose_file == "fd":
+        pose_npy_path = str(annotated_base / "processed/fd_pose_solver/fd_poses_merged_fixed.npy")
+    elif args.pose_file == "adaptive":
+        pose_npy_path = str(annotated_base / "processed/fd_pose_solver/adaptive_fd_poses_merged_fixed.npy")
+    elif args.pose_file == "optimized":
+        pose_npy_path = str(annotated_base / "processed/object_pose_solver/poses_o.npy")
+    output_path2 = Path(f"debug_output/{args.data_path}/pose_npy_in_cams_video")
     output_path2.mkdir(parents=True, exist_ok=True)
     video_out2 = cv2.VideoWriter(
-        str(output_path2 / f"{output_idx}{uuid}_{pose_file}_pose_npy_in_cams_2x4.mp4"),
+        str(output_path2 / f"{args.output_idx}{'_' + args.uuid if args.uuid else ''}_{args.pose_file}_pose_npy_in_cams_2x4.mp4"),
         cv2.VideoWriter_fourcc(*'mp4v'),
         20, (W * 4, H * 2)
     )
-    
+
     pose_data = np.load(pose_npy_path)
     print(f"[INFO] Loaded pose data from {pose_npy_path}, shape: {pose_data.shape}")
-    # 根据object_idx选择对应物体
     if pose_data.ndim == 3:
         pose_data = pose_data[args.object_idx - 1]
         print(f"[INFO] Using pose_data[{args.object_idx - 1}], shape: {pose_data.shape}")
     pose_data = pose_data.reshape(-1, 7)
 
-    # 加载MANO手部序列数据
-    mano_file = f"{base_path}/processed/joint_pose_solver/poses_m.npy"
-    # mano_data = load_mano_sequence(mano_file)
-    mano_layer = init_mano_group_layer()
+    # MANO hand sequence
+    mano_file = str(annotated_base / "processed/joint_pose_solver/poses_m.npy")
+    mano_layer = init_mano_group_layer(loader.mano_beta)
     verts_m, joints_m = load_mano_data(mano_file, mano_layer)
     subset_m = list(range(2))
     faces_m, _ = mano_layer.get_f_from_inds(subset_m)
@@ -320,25 +249,18 @@ if __name__ == "__main__":
         colors_m.append(HAND_COLORS[1 if side == "right" else 2].rgb_norm)
     faces_m = np.concatenate(faces_m, axis=0).astype(np.int64)
 
-    
-    print("verts_m:",verts_m.shape)
-    print("joints_m:",joints_m.shape)
-    print("faces_m:",faces_m.shape)
+    print("verts_m:", verts_m.shape)
+    print("joints_m:", joints_m.shape)
+    print("faces_m:", faces_m.shape)
     multiprocessing.set_start_method('spawn', force=True)
-    pool = multiprocessing.Pool(processes=min(8, os.cpu_count()))
+    pool = multiprocessing.Pool(processes=min(8, os.cpu_count() or 8))
     args_list2 = [
-        (i, pose_data, verts_m, faces_m, [], orig_vertices, orig_mesh, data_loader)
+        (i, pose_data, verts_m, faces_m, [], orig_vertices, orig_mesh, loader, args.object_idx)
         for i in range(num_frames)
     ]
     for frame in tqdm(pool.imap(process_frame_pose_npy_h5, args_list2), total=num_frames):
-        # 如果用h5，frame为RGB，需转为BGR再写入
-        if use_h5:
-            frame = frame[..., ::-1].copy()
         video_out2.write(frame)
     pool.close()
     pool.join()
     video_out2.release()
-    print(f"[INFO] pose_npy_in_cams_2x4.mp4 saved to {output_path2}{uuid}")
-
-    if use_h5:
-        h5_file.close()
+    print(f"[INFO] pose_npy_in_cams_2x4.mp4 saved to {output_path2}{'_' + args.uuid if args.uuid else ''}")

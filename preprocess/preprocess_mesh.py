@@ -49,8 +49,8 @@ if __name__ == "__main__":
     parser.add_argument("--tool_name", type=str, required=True, help="工具名称")
     # parser.add_argument("--mesh_dir", type=str, default="/home/wys/learning-compliant/crq_ws/data/mesh/decim_mesh_files", help="mesh目录")
 
-    parser.add_argument("--mesh_dir", type=str, default="/home/wys/learning-compliant/crq_ws/data/mesh/0711_mesh_files", help="mesh目录")
-    parser.add_argument("--texture_dir", type=str, default="/home/wys/learning-compliant/crq_ws/data/mesh/textures", help="纹理图片目录")
+    parser.add_argument("--mesh_dir", type=str, default="/home/wys/learning-compliant/crq_ws/data/mesh_files", help="mesh目录")
+    parser.add_argument("--texture_dir", type=str, default="/home/wys/learning-compliant/crq_ws/data/mesh/textures/textures", help="纹理图片目录")
     parser.add_argument("--output_dir", type=str, default="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/models", help="输出目录")
     args = parser.parse_args()
 

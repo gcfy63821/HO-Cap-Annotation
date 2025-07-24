@@ -10,6 +10,7 @@ OPTIMIZE=""
 UUID=""
 TRACK_REFINE_ITER="20"
 HAND=""
+CROP_VIEW=""
 # 解析命令行参数
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -45,6 +46,10 @@ while [[ "$#" -gt 0 ]]; do
             HAND="$2"
             shift 2
             ;;
+        --crop_view)
+            CROP_VIEW="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option $1"
             exit 1
@@ -61,7 +66,9 @@ fi
 # 自动拼接文件夹路径
 SEQUENCE_FOLDER="${BASE_PATH}${SEQUENCE_NAME}"
 TOOL_NAME=${TOOL_NAME:-""}  # 默认值为空
-
+source ~/anaconda3/etc/profile.d/conda.sh
+conda activate hocap-annotation
+cd /home/wys/learning-compliant/crq_ws/HO-Cap-Annotation
 # if [ -n "$HAND" ]; then
 
 #     echo "Runnning hand detection"
@@ -72,14 +79,14 @@ TOOL_NAME=${TOOL_NAME:-""}  # 默认值为空
 
 # fi
 # # 运行 04-1-1_fd_pose_solver_prep.py
-# if [ -n "$OBJECT_IDX" ]; then
-#     echo "Running fd_pose_solver with object_idx=$OBJECT_IDX..."
-#     python tools/04-1-1_fd_pose_solver_prep.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER"
-# fi
+if [ -n "$OBJECT_IDX" ]; then
+    echo "Running fd_pose_solver with object_idx=$OBJECT_IDX..."
+    python tools/04-1-1_fd_pose_solver_prep.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --crop_view "$CROP_VIEW"
+fi
 
-# # # 运行 04-2_fd_pose_merger.py
-# echo "Running fd_pose_merger..."
-# python tools/04-2_fd_pose_merger.py --sequence_folder "$SEQUENCE_FOLDER"
+# # 运行 04-2_fd_pose_merger.py
+echo "Running fd_pose_merger..."
+python tools/04-2_fd_pose_merger.py --sequence_folder "$SEQUENCE_FOLDER"
 
 # # 运行 04-2-1_adaptive_fd_merger.py
 # echo "Running adaptive fd_pose_merger..."
@@ -105,30 +112,41 @@ TOOL_NAME=${TOOL_NAME:-""}  # 默认值为空
 #     python debug/visualize_and_evaluate_result.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "adaptive"
 # fi
 
+if [ -n "$TOOL_NAME" ]; then
+    echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
+    python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID"  --object_idx "$OBJECT_IDX"
 
-# hand
-cd /home/wys/learning-compliant/crq_ws/robotool/HandReconstruction
-source ~/anaconda3/etc/profile.d/conda.sh
+    # python debug/visualize_ob_in_cam.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME"
+    # echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
+    # python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "adaptive"
+fi
 
-conda activate reconstruct-hand
+if [ -n "$HAND" ]; then
 
-HAND_FILE="${BASE_PATH}${SEQUENCE_NAME}/processed/hand_reconstruction_result.pkl"
+    # hand
+    cd /home/wys/learning-compliant/crq_ws/robotool/HandReconstruction
+    source ~/anaconda3/etc/profile.d/conda.sh
 
-python pipeline_reconstruct.py --data_path "$SEQUENCE_FOLDER"
+    conda activate reconstruct-hand
 
-python pipeline_optimize_hand.py --file_name "$HAND_FILE"
+    HAND_FILE="${BASE_PATH}${SEQUENCE_NAME}/processed/hand_reconstruction_result.pkl"
 
-conda deactivate
-conda activate hocap-annotation
+    python pipeline_reconstruct.py --data_path "$SEQUENCE_FOLDER"
 
-cd /home/wys/learning-compliant/crq_ws/HO-Cap-Annotation
+    python pipeline_optimize_hand.py --file_name "$HAND_FILE"
+
+    conda deactivate
+    conda activate hocap-annotation
+
+    cd /home/wys/learning-compliant/crq_ws/HO-Cap-Annotation
+fi
 
 if [ -n "$OPTIMIZE" ]; then
     # echo "Running optimize_fd_pose with optimize=$OPTIMIZE..."
     # python tools/05_mano_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
 
-    # echo "Running optimize_fd_pose with optimize=$OPTIMIZE..."
-    # python tools/06_object_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
+    echo "Running optimize_fd_pose with optimize=$OPTIMIZE..."
+    python tools/06_object_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
 
     echo "Running joint_pose_optimization with optimize=$OPTIMIZE..."
     python tools/07_joint_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"

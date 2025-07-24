@@ -50,77 +50,7 @@ def concat_frames_grid(frames, grid_shape=(2, 4)):
     return grid
 
 
-def process_frame_world_to_cam(args):
-    i, color_roots, sam_mask_roots, ob_in_world_root, extrinsics_dict, mesh_path, Ks, serials, outlier_idxs, orig_vertices, orig_mesh = args
-    W, H = 640, 480
-    frame_tiles = []
-    pose_path = ob_in_world_root / f"{i:06d}.txt"
-    if not pose_path.exists():
-        frame_tiles = [np.ones((H, W, 3), dtype=np.uint8) * 255 for _ in serials]
-        return concat_frames_grid(frame_tiles, (2, 4))
-    ob_in_world = load_pose(pose_path)
-    for serial in serials:
-        color = cv2.imread(str(Path(color_roots[serial]) / f"color_{i:06d}.jpg"))
-        sam_mask = cv2.imread(str(Path(sam_mask_roots[serial]) / f"mask_{i:06d}.png"), cv2.IMREAD_GRAYSCALE)
-        if color is None or sam_mask is None:
-            frame_tiles.append(np.ones((H, W, 3), dtype=np.uint8) * 255)
-            continue
-        sam_overlay = color.copy()
-        sam_overlay[sam_mask > 0] = [0, 0, 255]
-        mesh = orig_mesh.copy()
-        mesh.vertices = orig_vertices.copy()
-        mesh.apply_transform(ob_in_world)
-        world2cam = np.linalg.inv(extrinsics_dict[serial])
-        mesh.apply_transform(world2cam)
-        pts = project_points(mesh.vertices, Ks[serial])
-        pts = pts[(pts[:, 0] >= 0) & (pts[:, 0] < W) & (pts[:, 1] >= 0) & (pts[:, 1] < H)]
-        pts = pts.astype(np.int32)[::200]
-        vis = sam_overlay.copy()
-        color_dot = (0, 0, 255) if i in outlier_idxs else (255, 0, 0)
-        for x, y in pts:
-            cv2.circle(vis, (x, y), 2, color_dot, -1)
-        frame_tiles.append(vis)
-    return concat_frames_grid(frame_tiles, (2, 4))
 
-
-def process_frame_pose_npy(args):
-    i, color_roots, sam_mask_roots, pose_data, extrinsics_dict, mesh_path, Ks, serials, outlier_idxs, orig_vertices, orig_mesh = args
-    W, H = 640, 480
-    frame_tiles = []
-    if i >= len(pose_data):
-        frame_tiles = [np.ones((H, W, 3), dtype=np.uint8) * 255 for _ in serials]
-        return concat_frames_grid(frame_tiles, (2, 4))
-    qx, qy, qz, qw, tx, ty, tz = pose_data[i]
-    q = np.array([qx, qy, qz, qw])
-    t = np.array([tx, ty, tz])
-    R_mat = R.from_quat(q).as_matrix()
-    T = np.eye(4)
-    T[:3, :3] = R_mat
-    T[:3, 3] = t
-    for serial in serials:
-        color = cv2.imread(str(Path(color_roots[serial]) / f"color_{i:06d}.jpg"))
-        sam_mask = cv2.imread(str(Path(sam_mask_roots[serial]) / f"mask_{i:06d}.png"), cv2.IMREAD_GRAYSCALE)
-        if color is None or sam_mask is None:
-            frame_tiles.append(np.ones((H, W, 3), dtype=np.uint8) * 255)
-            continue
-        sam_overlay = color.copy()
-        sam_overlay[sam_mask > 0] = [0, 0, 255]
-        mesh = orig_mesh.copy()
-        mesh.vertices = orig_vertices.copy()
-        mesh.apply_transform(T)
-        world2cam = np.linalg.inv(extrinsics_dict[serial])
-        mesh.apply_transform(world2cam)
-        pts = project_points(mesh.vertices, Ks[serial])
-        pts = pts[(pts[:, 0] >= 0) & (pts[:, 0] < W) & (pts[:, 1] >= 0) & (pts[:, 1] < H)]
-        pts = pts.astype(np.int32)[::200]
-        vis = sam_overlay.copy()
-        color_dot = (0, 0, 255) if i in outlier_idxs else (255, 0, 0)
-        for x, y in pts:
-            cv2.circle(vis, (x, y), 2, color_dot, -1)
-        frame_tiles.append(vis)
-    return concat_frames_grid(frame_tiles, (2, 4))
-
-# 修改frame读取逻辑
 def get_color_img(frame_idx, serial_idx):
     if use_h5:
         img = colors_h5[frame_idx, serial_idx]
@@ -137,21 +67,41 @@ def get_mask_img(frame_idx, serial_idx):
         serial = serials[serial_idx]
         return cv2.imread(str(Path(sam_mask_roots[serial]) / f"mask_{frame_idx:06d}.png"), cv2.IMREAD_GRAYSCALE)
 
+def compute_iou(mask_pred, mask_gt):
+    """
+    Compute IoU between two binary masks.
+    Args:
+        mask_pred: np.ndarray, predicted mask (bool or 0/1 or 0/255)
+        mask_gt: np.ndarray, ground truth mask (same shape as mask_pred)
+    Returns:
+        iou: float
+    """
+    mask_pred = (mask_pred > 0)
+    mask_gt = (mask_gt > 0)
+    intersection = np.logical_and(mask_pred, mask_gt).sum()
+    union = np.logical_or(mask_pred, mask_gt).sum()
+    if union == 0:
+        return 1.0 if intersection == 0 else 0.0
+    return intersection / union
+
 # 修改process_frame_world_to_cam和process_frame_pose_npy的color/mask读取部分
 def process_frame_world_to_cam_h5(args):
     i, Ks, serials, outlier_idxs, orig_vertices, orig_mesh = args
     W, H = 640, 480
     frame_tiles = []
+    iou_per_view = []
     pose_path = Path(base_path) / "processed" / "fd_pose_solver" / tool_name / "ob_in_world" / f"{i:06d}.txt"
     if not pose_path.exists():
         frame_tiles = [np.ones((H, W, 3), dtype=np.uint8) * 255 for _ in serials]
-        return concat_frames_grid(frame_tiles, (2, 4))
+        iou_per_view = [np.nan for _ in serials]
+        return concat_frames_grid(frame_tiles, (2, 4)), iou_per_view
     ob_in_world = load_pose(pose_path)
     for serial_idx, serial in enumerate(serials):
         color = get_color_img(i, serial_idx)
         sam_mask = get_mask_img(i, serial_idx)
         if color is None or sam_mask is None:
             frame_tiles.append(np.ones((H, W, 3), dtype=np.uint8) * 255)
+            iou_per_view.append(np.nan)
             continue
         sam_overlay = color.copy()
         sam_overlay[sam_mask > 0] = [0, 0, 255]
@@ -167,16 +117,25 @@ def process_frame_world_to_cam_h5(args):
         color_dot = (0, 0, 255) if i in outlier_idxs else (255, 0, 0)
         for x, y in pts:
             cv2.circle(vis, (x, y), 2, color_dot, -1)
+        # --- IoU computation ---
+        pred_mask = np.zeros((H, W), dtype=np.uint8)
+        for x, y in pts:
+            if 0 <= y < H and 0 <= x < W:
+                pred_mask[y, x] = 255
+        iou = compute_iou(pred_mask, sam_mask)
+        iou_per_view.append(iou)
         frame_tiles.append(vis)
-    return concat_frames_grid(frame_tiles, (2, 4))
+    return concat_frames_grid(frame_tiles, (2, 4)), iou_per_view
 
 def process_frame_pose_npy_h5(args):
     i, pose_data, Ks, serials, outlier_idxs, orig_vertices, orig_mesh = args
     W, H = 640, 480
     frame_tiles = []
+    iou_per_view = []
     if i >= len(pose_data):
         frame_tiles = [np.ones((H, W, 3), dtype=np.uint8) * 255 for _ in serials]
-        return concat_frames_grid(frame_tiles, (2, 4))
+        iou_per_view = [np.nan for _ in serials]
+        return concat_frames_grid(frame_tiles, (2, 4)), iou_per_view
     qx, qy, qz, qw, tx, ty, tz = pose_data[i]
     q = np.array([qx, qy, qz, qw])
     t = np.array([tx, ty, tz])
@@ -189,6 +148,7 @@ def process_frame_pose_npy_h5(args):
         sam_mask = get_mask_img(i, serial_idx)
         if color is None or sam_mask is None:
             frame_tiles.append(np.ones((H, W, 3), dtype=np.uint8) * 255)
+            iou_per_view.append(np.nan)
             continue
         sam_overlay = color.copy()
         sam_overlay[sam_mask > 0] = [0, 0, 255]
@@ -204,79 +164,15 @@ def process_frame_pose_npy_h5(args):
         color_dot = (0, 0, 255) if i in outlier_idxs else (255, 0, 0)
         for x, y in pts:
             cv2.circle(vis, (x, y), 2, color_dot, -1)
+        # --- IoU computation ---
+        pred_mask = np.zeros((H, W), dtype=np.uint8)
+        for x, y in pts:
+            if 0 <= y < H and 0 <= x < W:
+                pred_mask[y, x] = 255
+        iou = compute_iou(pred_mask, sam_mask)
+        iou_per_view.append(iou)
         frame_tiles.append(vis)
-    return concat_frames_grid(frame_tiles, (2, 4))
-
-def visualize_world_to_cam_tracking(
-    color_roots, sam_mask_roots, ob_in_world_root,
-    extrinsics_dict, mesh_path, Ks,
-    output_path, serials, num_frames=246, outlier_idxs=[]
-):
-    ob_in_world_root = Path(ob_in_world_root)
-    output_path = Path(output_path)
-    output_path.mkdir(parents=True, exist_ok=True)
-    orig_mesh = trimesh.load(mesh_path, process=False)
-    # orig_mesh.vertices *= 0.001
-    # to_origin, _ = trimesh.bounds.oriented_bounds(orig_mesh)
-    # # debug
-    # orig_mesh.apply_transform(to_origin)
-
-    orig_vertices = orig_mesh.vertices.copy()
-    print(f"[INFO] Loaded mesh from {mesh_path}, vertices shape: {orig_vertices.shape}")
-    W, H = 640, 480
-    video_out = cv2.VideoWriter(
-        str(output_path / "world_to_cam_tracking_2x4.mp4"),
-        cv2.VideoWriter_fourcc(*'mp4v'),
-        20, (W * 4, H * 2)
-    )
-    pool = multiprocessing.Pool(processes=min(8, os.cpu_count()))
-    args_list = [
-        (i, color_roots, sam_mask_roots, ob_in_world_root, extrinsics_dict, mesh_path, Ks, serials, outlier_idxs, orig_vertices, orig_mesh)
-        for i in range(num_frames)
-    ]
-    for frame in tqdm(pool.imap(process_frame_world_to_cam, args_list), total=num_frames):
-        video_out.write(frame)
-    pool.close()
-    pool.join()
-    video_out.release()
-    print(f"[INFO] world_to_cam_tracking_2x4.mp4 saved to {output_path}")
-
-
-def visualize_pose_npy_in_cams(
-    color_roots, sam_mask_roots, pose_npy_path,
-    extrinsics_dict, mesh_path, Ks,
-    output_path, serials, num_frames=246, outlier_idxs=[]
-):
-    output_path = Path(output_path)
-    output_path.mkdir(parents=True, exist_ok=True)
-    orig_mesh = trimesh.load(mesh_path, process=False)
-    # orig_mesh.vertices *= 0.001
-    # to_origin, _ = trimesh.bounds.oriented_bounds(orig_mesh)
-    # #
-    # orig_mesh.apply_transform(to_origin)
-    orig_vertices = orig_mesh.vertices.copy()
-    print(f"[INFO] Loaded mesh from {mesh_path}, vertices shape: {orig_vertices.shape}")
-    W, H = 640, 480
-    video_out = cv2.VideoWriter(
-        str(output_path / "pose_npy_in_cams_2x4.mp4"),
-        cv2.VideoWriter_fourcc(*'mp4v'),
-        20, (W * 4, H * 2)
-    )
-    pose_data = np.load(pose_npy_path).reshape(-1, 7)
-    import concurrent.futures
-    args_list2 = [
-        (i, pose_data, Ks, serials, [], orig_vertices, orig_mesh)
-        for i in range(num_frames)
-    ]
-    with concurrent.futures.ProcessPoolExecutor(max_workers=min(8, os.cpu_count())) as executor:
-        for frame in tqdm(executor.map(process_frame_pose_npy_h5, args_list2), total=num_frames):
-            # 如果用h5，frame为RGB，需转为BGR再写入
-            if use_h5:
-                frame = frame[..., ::-1].copy()
-            video_out2.write(frame)
-    video_out2.release()
-    print(f"[INFO] pose_npy_in_cams_2x4.mp4 saved to {output_path2}")
-
+    return concat_frames_grid(frame_tiles, (2, 4)), iou_per_view
 
 if __name__ == "__main__":
     import argparse
@@ -348,15 +244,40 @@ if __name__ == "__main__":
             (i, Ks, serials, [], orig_vertices, orig_mesh)
             for i in range(num_frames)
         ]
-        for frame in tqdm(pool.imap(process_frame_world_to_cam_h5, args_list1), total=num_frames):
+        world_to_cam_ious = []
+        for frame, iou_per_view in tqdm(pool.imap(process_frame_world_to_cam_h5, args_list1), total=num_frames):
             # 如果用h5，frame为RGB，需转为BGR再写入
             if use_h5:
                 frame = frame[..., ::-1].copy()
             video_out1.write(frame)
+            world_to_cam_ious.extend(iou_per_view)
         pool.close()
         pool.join()
         video_out1.release()
         print(f"[INFO] world_to_cam_tracking_2x4.mp4 saved to {output_path1}{uuid}")
+
+        # After collecting world_to_cam_ious and pose_npy_ious, organize by view:
+        import numpy as np
+        num_views = len(serials)
+        num_frames = num_frames  # already defined in your code
+
+        def save_per_view_iou(iou_list, num_views, num_frames, output_dir, prefix):
+            iou_array = np.array(iou_list).reshape((num_frames, num_views))
+            per_view_means = []
+            for v in range(num_views):
+                view_ious = iou_array[:, v]
+                per_view_means.append(np.nanmean(view_ious))
+                with open(output_dir / f'{prefix}_view_{v:02d}_iou.txt', 'w') as f:
+                    for idx, iou in enumerate(view_ious):
+                        f.write(f'{idx}: {iou}\n')
+                    f.write(f'Average IoU: {np.nanmean(view_ious):.4f}\n')
+            return per_view_means
+
+        per_view_means = save_per_view_iou(world_to_cam_ious, num_views, num_frames, output_path1, 'world_to_cam')
+        with open(output_path1 / 'world_to_cam_iou_summary.txt', 'a') as f:
+            for v, mean in enumerate(per_view_means):
+                f.write(f'View {v:02d} Average IoU: {mean:.4f}\n')
+        print('Per-view Average IoU (world_to_cam):', per_view_means)
 
     ########################
 
@@ -388,15 +309,23 @@ if __name__ == "__main__":
         (i, pose_data, Ks, serials, [], orig_vertices, orig_mesh)
         for i in range(num_frames)
     ]
-    for frame in tqdm(pool.imap(process_frame_pose_npy_h5, args_list2), total=num_frames):
+    pose_npy_ious = []
+    for frame, iou_per_view in tqdm(pool.imap(process_frame_pose_npy_h5, args_list2), total=num_frames):
         # 如果用h5，frame为RGB，需转为BGR再写入
         if use_h5:
             frame = frame[..., ::-1].copy()
         video_out2.write(frame)
+        pose_npy_ious.extend(iou_per_view)
     pool.close()
     pool.join()
     video_out2.release()
     print(f"[INFO] pose_npy_in_cams_2x4.mp4 saved to {output_path2}{uuid}")
+
+    per_view_means2 = save_per_view_iou(pose_npy_ious, num_views, num_frames, output_path2, 'pose_npy')
+    with open(output_path2 / 'pose_npy_iou_summary.txt', 'a') as f:
+        for v, mean in enumerate(per_view_means2):
+            f.write(f'View {v:02d} Average IoU: {mean:.4f}\n')
+    print('Per-view Average IoU (pose_npy_in_cams):', per_view_means2)
 
     if use_h5:
         h5_file.close()

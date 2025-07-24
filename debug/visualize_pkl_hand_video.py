@@ -56,20 +56,24 @@ def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer_left):
     # print(f"[DEBUG] left_hand pose shape: {pose.shape}, translation shape: {translation.shape}")
     # print(f"[DEBUG] left_hand pose: {pose}")
     # print(f"[DEBUG] left_hand translation: {translation}")
+    hand_beta = torch.tensor(hand_data['left_hand_beta']).to('cuda')
     verts, joints = mano_layer_left(pose, translation)
+
+    # verts, joints = mano_layer_left(pose, hand_beta)
     if verts.size(0) == 1:
         verts = verts.squeeze(0)
         joints = joints.squeeze(0)
     # print(f"[DEBUG] left_hand verts shape: {verts.shape}, joints shape: {joints.shape}")
-    # verts = verts[0] / 1000
-    # joints = joints[0] / 1000
-    # root_trans = joints[0].clone().detach()
-    # verts -= root_trans
+    root_trans = joints[0].clone().detach()
+    verts -= root_trans
     # joints -= root_trans
-    # verts[:, 0] *= -1
+    verts[:, 0] *= -1
     # joints[:, 0] *= -1
-    # verts = verts @ base_rot.T
+    verts = verts @ base_rot.T
     # joints = joints @ base_rot.T
+    # rotate 180 degree around x axis
+    verts = verts @ R.from_euler('x', 180, degrees=True).as_matrix()
+    verts += translation
     faces = mano_layer_left.f.detach().cpu().numpy()
     mesh = trimesh.Trimesh(verts.detach().cpu().numpy(), faces)
     return mesh
@@ -88,13 +92,9 @@ def reconstruct_right_hand_mesh(hand_data, frame_idx, mano_layer_right):
     # print(f"[DEBUG] right_hand verts shape: {verts.shape}, joints shape: {joints.shape}")
     # verts = verts[0] / 1000
     # joints = joints[0] / 1000
-    # root_trans = joints[0].clone().detach()
-    # verts -= root_trans
-    # joints -= root_trans
-    # verts[:, 0] *= -1
-    # joints[:, 0] *= -1
-    # verts = verts @ base_rot.T
-    # joints = joints @ base_rot.T
+    root_trans = joints[0].clone().detach()
+    verts -= root_trans
+    verts += translation
     faces = mano_layer_right.f.detach().cpu().numpy()
     mesh = trimesh.Trimesh(verts.detach().cpu().numpy(), faces)
     return mesh
@@ -163,6 +163,7 @@ def process_frame_pkl_hand(args):
     Ks = dataloader.Ks
     colors_m = [(0.0, 1.0, 1.0), (0.9803921568627451, 0.2901960784313726, 0.16862745098039217)]
     left_hand_mesh = reconstruct_left_hand_mesh(hand_data, i, mano_layer_left)
+    # left_hand_mesh = reconstruct_left_hand_mesh(hand_data, i, mano_layer_right)
     right_hand_mesh = reconstruct_right_hand_mesh(hand_data, i, mano_layer_right)
     
     for serial_idx, serial in enumerate(dataloader.serials):
@@ -252,6 +253,7 @@ if __name__ == "__main__":
     parser.add_argument("--pose_file", type=str, default="fd", choices=["fd", "adaptive", "optimized"], help="选择foundation pose 或 optimized")
     parser.add_argument("--uuid", type=str, default="", help="唯一标识符，用于区分不同运行")
     parser.add_argument("--object_idx", type=int, default=1, help="物体索引，默认为0")
+    # parser.add_argument("--hand_file", type=str, default="", help="手部文件，如 /home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/squeegee_1/20250704_151206/processed/result_hand_optimized.pkl")
     args = parser.parse_args()
 
     serials = [f"{i:02d}" for i in range(8)]
@@ -318,7 +320,8 @@ if __name__ == "__main__":
 
     # 加载pkl手部数据
     # pkl_file_path = f"/home/wys/learning-compliant/crq_ws/robotool/HandReconstruction/coffee/2379b837_coffee_1/result_hand_optimized.pkl"  # 可参数化
-    pkl_file_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/squeegee_1/20250704_151206/processed/result_hand_optimized.pkl"
+    # pkl_file_path = args.hand_file
+    pkl_file_path = f"{base_path}/processed/result_hand_optimized.pkl"
     hand_data = load_pkl_and_get_hand_data(pkl_file_path)
 
     # 初始化MANOGroupLayer，分别为左右手加载betas
