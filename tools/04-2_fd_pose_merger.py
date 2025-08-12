@@ -192,6 +192,8 @@ class FoundationPoseMerger:
 
     def _complete_fd_poses(self, poses):
         valid_indices = np.where(poses[:, -1] > 0)[0]
+        # print invalid indices
+        print(f"invalid indices: {np.where(poses[:, -1] == 0)[0]}")
         rots = complete_rotations_by_slerp(poses[:, :4], valid_indices)
         trans = complete_positions_by_cubic_spline(poses[:, 4:7], valid_indices)
         return np.concatenate([rots, trans], axis=1).astype(np.float32)
@@ -289,9 +291,9 @@ class FoundationPoseMerger:
 
             poses_fixed = evaluate_and_fix_poses(
                 poses_fixed,
-                window_size=5,
-                rot_thresh=5.0,
-                trans_thresh=0.01,
+                window_size=25,
+                rot_thresh=3.0,
+                trans_thresh=0.003,
                 seperate_rot_trans=True,
                 use_mean_pose=True,
             )
@@ -300,14 +302,14 @@ class FoundationPoseMerger:
             poses_fixed = pose_jitter_smooth(
                 poses_fixed,
                 window_size=1,
-                rot_thresh=1.5,
-                trans_thresh=0.004,
+                rot_thresh=2.5,
+                trans_thresh=0.002,
             )
 
             poses_fixed = evaluate_and_fix_poses(
                 poses_fixed,
                 window_size=15,
-                rot_thresh=1.0,
+                rot_thresh=2.5,
                 trans_thresh=0.004,
                 seperate_rot_trans=True,
                 use_mean_pose=True,
@@ -334,7 +336,7 @@ class FoundationPoseMerger:
             poses_fixed = pose_jitter_smooth(
                 poses_fixed,
                 window_size=1,
-                rot_thresh=1.0,
+                rot_thresh=2.5,
                 trans_thresh=0.003,
             )
 

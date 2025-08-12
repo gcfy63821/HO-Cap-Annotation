@@ -2,14 +2,17 @@
 
 # 默认参数
 SEQUENCE_NAME=""
-OBJECT_IDX="1"
-OUTPUT_IDX="3"
+OBJECT_IDX=""
+OUTPUT_IDX=""
 TOOL_NAME=""
 BASE_PATH="/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/"
 OPTIMIZE=""
 UUID=""
-TRACK_REFINE_ITER="10"
+TRACK_REFINE_ITER="15"
 HAND=""
+CROP_VIEW=""
+ROT_THRESH="30"
+TRANS_THRESH="0.01"
 # 解析命令行参数
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -45,6 +48,18 @@ while [[ "$#" -gt 0 ]]; do
             HAND="$2"
             shift 2
             ;;
+        --crop_view)
+            CROP_VIEW="$2"
+            shift 2
+            ;;
+        --rot_thresh)
+            ROT_THRESH="$2"
+            shift 2
+            ;;
+        --trans_thresh)
+            TRANS_THRESH="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option $1"
             exit 1
@@ -61,9 +76,87 @@ fi
 # 自动拼接文件夹路径
 SEQUENCE_FOLDER="${BASE_PATH}${SEQUENCE_NAME}"
 TOOL_NAME=${TOOL_NAME:-""}  # 默认值为空
+source ~/anaconda3/etc/profile.d/conda.sh
+conda activate hocap-annotation
+cd /home/wys/learning-compliant/crq_ws/HO-Cap-Annotation
+# if [ -n "$HAND" ]; then
+
+#     echo "Runnning hand detection"
+#     python tools/02_mp_hand_detection.py --sequence_folder "$SEQUENCE_FOLDER"
+
+#     echo "Running hand 3d generation"
+#     python tools/03_mp_3d_joints_generation.py --sequence_folder "$SEQUENCE_FOLDER"
+
+# fi
+
+ORIGIN="${UUID}_origin"
+
+# 运行 04-1-1_fd_pose_solver_prep.py
+if [ -n "$OBJECT_IDX" ]; then
+    echo "Running fd_pose_solver with object_idx=$OBJECT_IDX..."
+    python tools/04-1-3_fd_pose_solver_separate.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --crop_view "$CROP_VIEW" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH"
+    
+    # python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$ORIGIN"  --object_idx "$OBJECT_IDX"
+
+fi
+
+# echo "Running fd_pose_optimizer..."
+python tools/04-3_fd_pose_optimizer.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --M 15
+
+# # 运行 04-2_fd_pose_merger.py
+echo "Running fd_pose_merger..."
+python tools/04-2_fd_pose_merger.py --sequence_folder "$SEQUENCE_FOLDER"
+
+# # 运行 04-2-1_adaptive_fd_merger.py
+# echo "Running adaptive fd_pose_merger..."
+# python tools/04-2-1_adaptive_fd_merger.py --sequence_folder "$SEQUENCE_FOLDER"
+
+
+# 运行 visualize_ob_in_world.py
+if [ -n "$TOOL_NAME" ]; then
+    echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
+    python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID"  --object_idx "$OBJECT_IDX"
+
+    python debug/visualize_ob_in_cam.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --uuid "$UUID"
+    
+    # echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
+    # python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "offset"
+fi
+# added evaluation
 
 
 
+# 运行 visualize 并且 分析结果
+# if [ -n "$TOOL_NAME" ]; then
+#     echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
+#     python debug/visualize_and_evaluate_result.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID"  --object_idx "$OBJECT_IDX"
+
+#     echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
+#     python debug/visualize_and_evaluate_result.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "adaptive"
+# fi
+
+if [ -n "$HAND" ]; then
+    
+    # hand
+    cd /home/wys/learning-compliant/crq_ws/robotool/HandReconstruction
+    source ~/anaconda3/etc/profile.d/conda.sh
+
+    conda activate reconstruct-hand
+
+    HAND_FILE="${BASE_PATH}${SEQUENCE_NAME}/processed/hand_reconstruction_result.pkl"
+
+    python pipeline_reconstruct.py --data_path "$SEQUENCE_FOLDER"
+
+    python pipeline_optimize_hand.py --file_name "$HAND_FILE"
+
+    conda deactivate
+    conda activate hocap-annotation
+
+    cd /home/wys/learning-compliant/crq_ws/HO-Cap-Annotation
+
+    # echo "Running visualize_hand_video with hand=$HAND..."
+    # python debug/visualize_pkl_hand_video.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID "
+fi
 
 
 if [ -n "$OPTIMIZE" ]; then
@@ -74,12 +167,17 @@ if [ -n "$OPTIMIZE" ]; then
     python tools/06_object_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
 
     echo "Running joint_pose_optimization with optimize=$OPTIMIZE..."
-    python tools/07_joint_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
-    # echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
-    # python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID" --pose_file "optimized" --uuid "$UUID" --object_idx "$OBJECT_IDX"
+    # python tools/07_joint_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
+    python tools/07-1_joint_pose_solver_wilor.py --sequence_folder "$SEQUENCE_FOLDER"
+    
+    echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
+    # python debug/visualize_hand_video.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID" --pose_file "optimized"
+
+    # python debug/visualize_trimesh.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --pose_file "optimized" --uuid "$UUID"
+    python debug/visualize_wilor_hand_video.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID" --pose_file "optimized"
+
 
 fi
 
 echo "All tasks completed!"
 
-# ./run_local.sh --sequence_name blue_scooper_1/20250704_172530 --tool_name blue_scooper --uuid mask_depth_and_object >> log.txt 2>&1

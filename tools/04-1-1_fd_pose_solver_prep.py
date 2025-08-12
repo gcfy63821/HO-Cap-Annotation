@@ -50,6 +50,32 @@ Y_THRESHOLD = (-0.3, 0.3)
 Z_THRESHOLD = (-0.2, 0.4)
 
 
+
+def flip_z_to_match_ref(pose, ref_z):
+    """
+    Given a 4x4 pose (world), flip z axis (and x to keep right-handed) if needed so that z is closer to ref_z.
+    Returns the possibly flipped pose.
+    """
+    R0 = pose[:3, :3]
+    t0 = pose[:3, 3]
+    z0 = R0[:, 2]
+    # Mirrored rotation: flip z axis
+    R_flip = R0.copy()
+    R_flip[:, 2] *= -1
+    R_flip[:, 0] *= -1
+    # Compare angle between z0 and ref_z
+    angle_orig = np.arccos(np.clip(np.dot(z0, ref_z) / (np.linalg.norm(z0) * np.linalg.norm(ref_z)), -1, 1))
+    z_flip = R_flip[:, 2]
+    angle_flip = np.arccos(np.clip(np.dot(z_flip, ref_z) / (np.linalg.norm(z_flip) * np.linalg.norm(ref_z)), -1, 1))
+    if angle_flip < angle_orig:
+        T_new = np.eye(4)
+        T_new[:3, :3] = R_flip
+        T_new[:3, 3] = t0
+        return T_new
+    else:
+        return pose
+
+
 def slerp(q1, q2, t):
     """
     Spherical Linear Interpolation (SLERP) between two quaternions.
@@ -809,6 +835,8 @@ def run_pose_estimation(
     CROP_VIEW = False  # whether to crop the view or not
     MASKED_OBJECT = True
     CROP_VIEW = crop_view
+    ob_in_cam_poses_per_cam = [ [] for _ in range(len(valid_serials)) ]  # list of lists: [cam][frame]
+    
 
     for frame_id in range(start_frame, end_frame, 1):
         for serial_idx, serial in enumerate(valid_serials):
@@ -915,9 +943,10 @@ def run_pose_estimation(
                     ob_in_cam_mat = empty_mat_pose.copy()
 
             # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: ob_in_cam_mat = {ob_in_cam_mat}")
+            ob_in_cam_poses_per_cam[serial_idx].append(ob_in_cam_mat)
 
             ob_in_cam_poses[serial_idx] = ob_in_cam_mat
-
+            
             save_pose_folder = save_folder / object_id / "ob_in_cam" / serial
             save_pose_folder.mkdir(parents=True, exist_ok=True)
             write_pose_to_txt(
@@ -935,7 +964,50 @@ def run_pose_estimation(
             # cv2.imwrite(str(debug_image_path / f"color_{frame_id:06d}.png"), color)
             # cv2.imwrite(str(debug_image_path / f"mask_{frame_id:06d}.png"), mask * 255)
 
+        # --- Direction consistency check for all cams (including cam 7 except in frame 0) ---
+        # Gather all tracked ob_in_cam poses for this frame
+        tracked_poses = []
+        for serial_idx in range(len(valid_serials)):
+            if len(ob_in_cam_poses_per_cam[serial_idx]) > 0:
+                tracked_poses.append(ob_in_cam_poses_per_cam[serial_idx][-1])
+            else:
+                # If no poses for this camera, use empty pose
+                tracked_poses.append(empty_mat_pose.copy())
+        
+        # Transform to world
+        ob_in_world_poses = [valid_RTs[serial_idx] @ tracked_poses[serial_idx] for serial_idx in range(len(valid_serials))]
+        
+        # Use cam 7's last frame's z direction as reference
+        ref_cam_idx = 7
+        if frame_id == 0:
+            ref_z = ob_in_world_poses[ref_cam_idx][:3, 2]
+        else:
+            # Use cam 7's last frame's z direction (from previous frame)
+            if len(ob_in_cam_poses_per_cam[ref_cam_idx]) > 1:
+                ref_pose_prev = ob_in_cam_poses_per_cam[ref_cam_idx][-2]
+            elif len(ob_in_cam_poses_per_cam[ref_cam_idx]) == 1:
+                ref_pose_prev = ob_in_cam_poses_per_cam[ref_cam_idx][-1]
+            else:
+                # If no previous poses for ref camera, skip direction consistency check
+                ref_pose_prev = None
+                
+            if ref_pose_prev is not None:
+                ref_pose_prev_world = valid_RTs[ref_cam_idx] @ ref_pose_prev
+                ref_z = ref_pose_prev_world[:3, 2]
+                
+                for serial_idx in range(len(valid_serials)):
+                    # For all cams, including cam 7 (except in frame 0)
+                    if frame_id == 0 and serial_idx == ref_cam_idx:
+                        continue  # skip cam 7 in frame 0
+                    pose_world = ob_in_world_poses[serial_idx]
+                    pose_flipped = flip_z_to_match_ref(pose_world, ref_z)
+                    if not np.allclose(pose_flipped, pose_world):
+                        # If flipped, update the ob_in_cam pose accordingly
+                        if len(ob_in_cam_poses_per_cam[serial_idx]) > 0:
+                            ob_in_cam_poses_per_cam[serial_idx][-1] = np.linalg.inv(valid_RTs[serial_idx]) @ pose_flipped
+                            print(f"[INFO] Frame {frame_id}, Cam {serial_idx}: flipped z axis to match cam 7's last frame direction.")
 
+        ob_in_cam_poses = [ob_in_cam_poses_per_cam[serial_idx][-1] for serial_idx in range(len(valid_serials))]
 
         # refine object pose in world coordinate system
         curr_pose_w = get_consistent_pose_w(
@@ -944,8 +1016,8 @@ def run_pose_estimation(
             prev_poses_w=all_poses_w,
             rot_thresh=rot_thresh,
             trans_thresh=trans_thresh,
-            thresh_factor=2.0,
-            outlier_ratio=0.2,
+            thresh_factor=1.0,
+            outlier_ratio=0.4,
             x_threshold=x_threshold,
             y_threshold=y_threshold,
             z_threshold=z_threshold,

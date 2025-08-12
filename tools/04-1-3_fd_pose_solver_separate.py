@@ -373,7 +373,8 @@ def ransac_consistent_rotation(inlier_rots, threshold):
             if inlier_count > max_inliers:
                 max_inliers = inlier_count
                 best_rotation = candidate
-
+    # print(f"best_rotation: {best_rotation}")
+    print(f"rotation inliers: {max_inliers}")
     return best_rotation
 
 
@@ -410,7 +411,8 @@ def ransac_consistent_translation(inlier_trans, threshold):
             if inlier_count > max_inliers:
                 max_inliers = inlier_count
                 best_translation = candidate
-
+    # print(f"best_translation: {best_translation}")
+    print(f"translation inliers: {max_inliers}")
     return best_translation
 
 
@@ -518,11 +520,12 @@ def get_consistent_pose_w(
     inlier_rots, inlier_trans, is_rot_noisy, is_trans_noisy = detect_pose_outliers(
         poses_w, thresh_factor, outlier_ratio
     )
-    print(f"is_rot_noisy: {is_rot_noisy}, is_trans_noisy: {is_trans_noisy}")
+    
     # print(f"inlier_rots: {inlier_rots}, inlier_trans: {inlier_trans}")
 
     # Step 3: Handle noisy scenarios
     if is_rot_noisy and is_trans_noisy:
+        print(f"is_rot_noisy, is_trans_noisy")
         # Predict both rotation and translation
         curr_rot = predict_current_rotation(
             [pose[:4] for pose in prev_poses_w], [pose[-1] for pose in prev_poses_w]
@@ -533,6 +536,7 @@ def get_consistent_pose_w(
         flag = 0
     elif is_rot_noisy:
         # Predict rotation, estimate translation via RANSAC
+        print(f"is_rot_noisy")
         curr_rot = predict_current_rotation(
             [pose[:4] for pose in prev_poses_w], [pose[-1] for pose in prev_poses_w]
         )
@@ -540,6 +544,7 @@ def get_consistent_pose_w(
         flag = 0
     elif is_trans_noisy:
         # Predict translation, estimate rotation via RANSAC
+        print(f"is_trans_noisy")
         curr_rot = ransac_consistent_rotation(inlier_rots, rot_thresh)
         curr_trans = predict_current_position(
             [pose[4:7] for pose in prev_poses_w], [pose[-1] for pose in prev_poses_w]
@@ -855,7 +860,7 @@ def run_pose_estimation(
     ################ Tricks #################
     REVERSE = False
     MASKED_DEPTH = True  # whether to use masked depth or not
-    MASKED_IMAGE = False  # whether to use masked image or not
+    MASKED_IMAGE = True  # whether to use masked image or not
     CROP_VIEW = False  # whether to crop the view or not
     MASKED_OBJECT = True
     CROP_VIEW = crop_view
@@ -938,7 +943,7 @@ def run_pose_estimation(
                     prev_pose=prev_pose,
                 )
                 curr_ob_in_world = valid_RTs[serial_idx] @ ob_in_cam_mat
-                print(f"Frame {frame_idx}, Cam {serial}: ob in world: {curr_ob_in_world[:3,3]}")
+                # print(f"Frame {frame_idx}, Cam {serial}: ob in world: {curr_ob_in_world[:3,3]}")
             else:
                 print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: estimating new pose.")
                 init_ob_pos_center = data_loader.get_init_translation(
@@ -967,6 +972,105 @@ def run_pose_estimation(
             
         # --- END SEPARATE TRACKING ---
 
+        
+
+        # --- Mask check ---
+        wrong_idx = []
+        not_wrong_idx = []
+        pt2d_list = []
+        for serial_idx in range(len(valid_serials)):
+            ob_in_cam_mat = ob_in_cam_poses_per_cam[serial_idx][-1]
+            if np.all(ob_in_cam_mat == -1):
+                wrong_idx.append(serial_idx)
+                pt2d_list.append(None)
+                continue
+            # Project 3D position to 2D
+            K = valid_Ks[serial_idx]
+            t = ob_in_cam_mat[:3, 3]
+            pt3d = t.reshape(3, 1)
+            pt2d_h = K @ pt3d
+            pt2d = (pt2d_h[:2] / pt2d_h[2]).flatten()
+            pt2d_list.append(pt2d)
+            # Check if pt2d is inside mask==1
+            mask = data_loader.get_mask(valid_serials[serial_idx], frame_id, object_idx)
+            u, v = int(round(pt2d[0])), int(round(pt2d[1]))
+            H, W = mask.shape
+            if 0 <= v < H and 0 <= u < W and mask[v, u] != 0:
+                not_wrong_idx.append(serial_idx)
+            else:
+                wrong_idx.append(serial_idx)
+        if len(wrong_idx) > 0:
+            print(f"[Mask check] {frame_id} Wrong cams: {[valid_serials[i] for i in wrong_idx]}, Not wrong cams: {[valid_serials[i] for i in not_wrong_idx]}")
+        if len(not_wrong_idx) >= 4 or '07' in not_wrong_idx:
+            # Replace wrong cams with mean of not wrong cams (in world frame)
+            inlier_poses = [valid_RTs[i] @ ob_in_cam_poses_per_cam[i][-1] for i in not_wrong_idx]
+            mean_trans = np.mean([T[:3,3] for T in inlier_poses], axis=0)
+            quats = np.array([R.from_matrix(T[:3,:3]).as_quat() for T in inlier_poses])
+            mean_quat = np.mean(quats, axis=0)
+            mean_quat = mean_quat / np.linalg.norm(mean_quat)
+            mean_rot = R.from_quat(mean_quat).as_matrix()
+            mean_pose_world = np.eye(4)
+            mean_pose_world[:3,:3] = mean_rot
+            mean_pose_world[:3,3] = mean_trans
+            for serial_idx in wrong_idx:
+                new_ob_in_cam = np.linalg.inv(valid_RTs[serial_idx]) @ mean_pose_world
+                ob_in_cam_poses_per_cam[serial_idx][-1] = new_ob_in_cam
+                print(f"[Mask check] Frame {frame_id}, Cam {serial_idx}: replaced with mean inlier world pose.")
+        else:
+            # Re-register camera 07 specifically
+            cam_07_idx = valid_serials.index('07')
+            print(f"[Re-register cam 07] Frame {frame_id}: re-registering camera 07.")
+            color = data_loader.get_color('07', frame_id)
+            depth = data_loader.get_depth('07', frame_id)
+            mask = data_loader.get_mask('07', frame_id, object_idx)
+            K = valid_Ks[cam_07_idx]
+            if CROP_VIEW:
+                coords, cropped_K = crop_mask_and_adjust_intrinsics(mask, K)
+                ymin, ymax, xmin, xmax = coords
+                color = color[ymin:ymax, xmin:xmax]
+                depth = depth[ymin:ymax, xmin:xmax]
+                mask = mask[ymin:ymax, xmin:xmax]
+                K = cropped_K
+            init_ob_pos_center = data_loader.get_init_translation(
+                frame_id, ['07'], object_idx, kernel_size=5
+            )[0][0]
+            if init_ob_pos_center is not None:
+                new_pose_cam_07 = estimator.register(
+                    rgb=color,
+                    depth=depth,
+                    ob_mask=mask,
+                    K=K,
+                    iteration=est_refine_iter,
+                    init_ob_pos_center=init_ob_pos_center,
+                )
+                ob_in_cam_poses_per_cam[cam_07_idx][-1] = new_pose_cam_07
+                print(f"[Re-register cam 07] Frame {frame_id}: replaced tracked pose with re-registered pose.")
+                
+                # Use mean of re-registered cam 07 and not-wrong cameras to replace other results
+                # Collect poses: re-registered cam 07 + not-wrong cameras
+                poses_to_average = []
+                poses_to_average.append(valid_RTs[cam_07_idx] @ new_pose_cam_07)  # cam 07 in world
+                for i in not_wrong_idx:
+                    poses_to_average.append(valid_RTs[i] @ ob_in_cam_poses_per_cam[i][-1])  # not-wrong cameras in world
+                
+                # Compute mean pose
+                mean_trans = np.mean([T[:3,3] for T in poses_to_average], axis=0)
+                quats = np.array([R.from_matrix(T[:3,:3]).as_quat() for T in poses_to_average])
+                mean_quat = np.mean(quats, axis=0)
+                mean_quat = mean_quat / np.linalg.norm(mean_quat)
+                mean_rot = R.from_quat(mean_quat).as_matrix()
+                mean_pose_world = np.eye(4)
+                mean_pose_world[:3,:3] = mean_rot
+                mean_pose_world[:3,3] = mean_trans
+                
+                # Replace all cameras except cam 07 and not-wrong cameras
+                cameras_to_replace = [i for i in range(len(valid_serials)) if i != cam_07_idx and i not in not_wrong_idx]
+                for serial_idx in cameras_to_replace:
+                    new_ob_in_cam = np.linalg.inv(valid_RTs[serial_idx]) @ mean_pose_world
+                    ob_in_cam_poses_per_cam[serial_idx][-1] = new_ob_in_cam
+                    print(f"[Mask check] Frame {frame_id}, Cam {serial_idx}: replaced with mean of re-registered cam 07 and not-wrong cameras.")
+        # --- End Mask Check ---
+
         # --- Direction consistency check for all cams (including cam 7 except in frame 0) ---
         # Gather all tracked ob_in_cam poses for this frame
         tracked_poses = [ob_in_cam_poses_per_cam[serial_idx][-1] for serial_idx in range(len(valid_serials))]
@@ -992,10 +1096,13 @@ def run_pose_estimation(
                 ob_in_cam_poses_per_cam[serial_idx][-1] = np.linalg.inv(valid_RTs[serial_idx]) @ pose_flipped
                 print(f"[INFO] Frame {frame_id}, Cam {serial_idx}: flipped z axis to match cam 7's last frame direction.")
 
+        # --- End Direction Check ---
+
         # --- Position consistency check: iterative outlier removal ---
         POSITION_THRESH = 0.03  # meters
-        ROT_THRESH_DEG = 15
+        ROT_THRESH_DEG = 180
         # Convert world poses to [qx,qy,qz,qw,x,y,z]
+        ob_in_world_poses = [valid_RTs[serial_idx] @ ob_in_cam_poses_per_cam[serial_idx][-1] for serial_idx in range(len(valid_serials))]
         poses_quat = [mat_to_quat(T) for T in ob_in_world_poses]
         inlier_idx, outlier_idx = threshold_iterative_outlier_removal(
             poses_quat, trans_thresh=POSITION_THRESH, rot_thresh_deg=ROT_THRESH_DEG)
@@ -1020,57 +1127,9 @@ def run_pose_estimation(
 
         # --- END Position consistency check ---
 
-        # --- re-register cam if far from mask center ---
-        MASK_CENTER_THRESH = 10  # pixels
-        for serial_idx in range(len(valid_serials)):
-            ob_in_cam_mat = ob_in_cam_poses_per_cam[serial_idx][-1]
-            if np.all(ob_in_cam_mat == -1):
-                continue
-            # Project 3D position to 2D
-            K = valid_Ks[serial_idx]
-            t = ob_in_cam_mat[:3, 3]
-            pt3d = t.reshape(3, 1)
-            pt2d_h = K @ pt3d
-            pt2d = (pt2d_h[:2] / pt2d_h[2]).flatten()
-            # Compute mask center
-            mask = data_loader.get_mask(valid_serials[serial_idx], frame_id, object_idx)
-            ys, xs = np.where(mask == 255)
-            if len(xs) == 0 or len(ys) == 0:
-                continue
-            mask_center = np.array([xs.mean(), ys.mean()])
-            dist = np.linalg.norm(pt2d - mask_center)
-            if dist > MASK_CENTER_THRESH:
-                print(f"[Re-register] Frame {frame_id}, Cam {serial_idx}: 3D->2D proj {pt2d} far from mask center {mask_center}, dist={dist:.1f} > {MASK_CENTER_THRESH}. Re-registering.")
-                color = data_loader.get_color(valid_serials[serial_idx], frame_id)
-                depth = data_loader.get_depth(valid_serials[serial_idx], frame_id)
-                mask = data_loader.get_mask(valid_serials[serial_idx], frame_id, object_idx)
-                K = valid_Ks[serial_idx]
-                # Optionally crop if CROP_VIEW is enabled
-                if CROP_VIEW:
-                    coords, cropped_K = crop_mask_and_adjust_intrinsics(mask, K)
-                    ymin, ymax, xmin, xmax = coords
-                    color = color[ymin:ymax, xmin:xmax]
-                    depth = depth[ymin:ymax, xmin:xmax]
-                    mask = mask[ymin:ymax, xmin:xmax]
-                    K = cropped_K
-                init_ob_pos_center = data_loader.get_init_translation(
-                    frame_id, [valid_serials[serial_idx]], object_idx, kernel_size=5
-                )[0][0]
-                if init_ob_pos_center is not None:
-                    new_pose = estimator.register(
-                        rgb=color,
-                        depth=depth,
-                        ob_mask=mask,
-                        K=K,
-                        iteration=est_refine_iter,
-                        init_ob_pos_center=init_ob_pos_center,
-                    )
-                    ob_in_cam_poses_per_cam[serial_idx][-1] = new_pose
-                    print(f"[Re-register] Frame {frame_id}, Cam {serial_idx}: replaced tracked pose with re-registered pose.")
-
         # --- Save per-camera pose ---
-        for serial_idx in range(len(valid_serials)):
-        # Save per-camera pose
+        for serial_idx, serial in enumerate(valid_serials):
+            ob_in_cam_mat = ob_in_cam_poses_per_cam[serial_idx][-1]
             save_pose_folder = save_folder / object_id / "ob_in_cam" / serial
             save_pose_folder.mkdir(parents=True, exist_ok=True)
             write_pose_to_txt(
@@ -1084,15 +1143,26 @@ def run_pose_estimation(
 
     # # --- INTEGRATE ALL VIEWS AT THE END ---
     # # For each frame, collect all camera poses and integrate
-    # if GENERATE_OB_IN_WORLD_ONLY:
-    #     end_frame = num_frames
-    #     # load ob_in_cam_poses_per_cam from file
-    #     for serial_idx in range(len(valid_serials)):
-    #         for frame_idx in range(end_frame - start_frame):
-    #             ob_in_cam_poses_per_cam[serial_idx].append(np.loadtxt(save_folder / object_id / "ob_in_cam" / valid_serials[serial_idx] / f"{frame_idx:06d}.txt"))
+    if GENERATE_OB_IN_WORLD_ONLY:
+        end_frame = num_frames
+    # Initialize as a list of lists for each camera
+    ob_in_cam_poses_per_cam = [[] for _ in range(len(valid_serials))]
+    for serial_idx, serial in enumerate(valid_serials):
+        for frame_idx in range(end_frame - start_frame):
+            pose_path = save_folder / object_id / "ob_in_cam" / serial / f"{frame_idx:06d}.txt"
+            if pose_path.exists():
+                ob_in_cam_poses_per_cam[serial_idx].append(np.loadtxt(pose_path))
+            else:
+                # If file is missing, append a 4x4 -1 matrix as placeholder
+                ob_in_cam_poses_per_cam[serial_idx].append(np.full((4, 4), -1.0, dtype=np.float32))
 
     for frame_idx in range(end_frame - start_frame):
         ob_in_cam_poses = [ob_in_cam_poses_per_cam[serial_idx][frame_idx] for serial_idx in range(len(valid_serials))]
+        # convert to mat
+        ob_in_cam_poses = [quat_to_mat(pose[:7]) for pose in ob_in_cam_poses]
+        # print(f"[DEBUG] ob_in_cam_poses: {ob_in_cam_poses}")
+        # ref_z = min([pose[2, 3] for pose in ob_in_cam_poses])
+        # print(f"[DEBUG] ref_z: {ref_z}")
         curr_pose_w = get_consistent_pose_w(
             mat_poses_c=ob_in_cam_poses,
             cam_RTs=valid_RTs,
@@ -1105,6 +1175,14 @@ def run_pose_estimation(
             y_threshold=y_threshold,
             z_threshold=z_threshold,
         )
+        # --- SET Z POSITION TO MATCH LOWEST CAMERA --- 
+
+        # print(f"[DEBUG] curr_pose_w: {curr_pose_w}")
+        
+        # curr_pose_w[6] = ref_z
+        # print(f"[DEBUG] curr_pose_w: {curr_pose_w}")
+        # --- END SET Z POSITION TO MATCH LOWEST CAMERA ---
+
         all_poses_w.append(curr_pose_w)
         print(f"[RESULT] ob_in_world (Frame {frame_idx}): {curr_pose_w[4:7]}")
         save_pose_folder = save_folder / object_id / "ob_in_world"

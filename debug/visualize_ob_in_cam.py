@@ -9,6 +9,17 @@ from scipy.spatial.transform import Rotation as R
 import multiprocessing
 import h5py
 
+def read_K_from_yaml(calib_folder, serial, cam_type="color"):
+    file_path = Path(calib_folder) / "intrinsics" / f"{serial}.yaml"
+    with open(file_path, 'r') as f:
+        data = yaml.safe_load(f)[cam_type]
+    K = np.array([
+        [data["fx"], 0.0, data["ppx"]],
+        [0.0, data["fy"], data["ppy"]],
+        [0.0, 0.0, 1.0],
+    ], dtype=np.float32)
+    return K
+
 def load_pose(pose_txt):
     with open(pose_txt, 'r') as f:
         arr = np.array([float(x) for x in f.read().strip().split()])
@@ -165,10 +176,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     serials = [f"{i:02d}" for i in range(8)]
-    K = np.array([[607.4, 0.0, 320.0],
-                  [0.0, 607.4, 240.0],
-                  [0.0, 0.0, 1.0]])
-    Ks = {s: K for s in serials}
+    # Load Ks from calibration files
+    calib_folder = Path("/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration")
+    Ks = {s: read_K_from_yaml(calib_folder, s) for s in serials}
     ################
     data_path = args.data_path
     tool_name = args.tool_name
@@ -224,38 +234,38 @@ if __name__ == "__main__":
     if use_h5:
         h5_file.close()
 
-    if use_h5:
-        depths_h5 = h5_file["depths"]  # (N, 8, H, W)
-    # Save masked depth video
-    video_out_depth = cv2.VideoWriter(
-        str(output_path / f"{output_idx}_masked_depth_2x4.mp4"),
-        cv2.VideoWriter_fourcc(*'mp4v'),
-        20, (W * 4, H * 2)
-    )
-    args_list_depth = [
-        (i, serials)
-        for i in range(num_frames)
-    ]
-    pool = multiprocessing.Pool(processes=min(8, os.cpu_count()))
-    for frame in tqdm(pool.imap(process_frame_masked_depth, args_list_depth), total=num_frames):
-        video_out_depth.write(frame)
-    video_out_depth.release()
-    print(f"[INFO] masked_depth_2x4.mp4 saved to {output_path}")
+    # if use_h5:
+    #     depths_h5 = h5_file["depths"]  # (N, 8, H, W)
+    # # Save masked depth video
+    # video_out_depth = cv2.VideoWriter(
+    #     str(output_path / f"{output_idx}_masked_depth_2x4.mp4"),
+    #     cv2.VideoWriter_fourcc(*'mp4v'),
+    #     20, (W * 4, H * 2)
+    # )
+    # args_list_depth = [
+    #     (i, serials)
+    #     for i in range(num_frames)
+    # ]
+    # pool = multiprocessing.Pool(processes=min(8, os.cpu_count()))
+    # for frame in tqdm(pool.imap(process_frame_masked_depth, args_list_depth), total=num_frames):
+    #     video_out_depth.write(frame)
+    # video_out_depth.release()
+    # print(f"[INFO] masked_depth_2x4.mp4 saved to {output_path}")
 
-    # Save raw depth video
-    video_out_raw_depth = cv2.VideoWriter(
-        str(output_path / f"{output_idx}_raw_depth_2x4.mp4"),
-        cv2.VideoWriter_fourcc(*'mp4v'),
-        20, (W * 4, H * 2)
-    )
-    args_list_raw_depth = [
-        (i, serials)
-        for i in range(num_frames)
-    ]
-    for frame in tqdm(pool.imap(process_frame_raw_depth, args_list_raw_depth), total=num_frames):
-        video_out_raw_depth.write(frame)
-    video_out_raw_depth.release()
-    print(f"[INFO] raw_depth_2x4.mp4 saved to {output_path}")
+    # # Save raw depth video
+    # video_out_raw_depth = cv2.VideoWriter(
+    #     str(output_path / f"{output_idx}_raw_depth_2x4.mp4"),
+    #     cv2.VideoWriter_fourcc(*'mp4v'),
+    #     20, (W * 4, H * 2)
+    # )
+    # args_list_raw_depth = [
+    #     (i, serials)
+    #     for i in range(num_frames)
+    # ]
+    # for frame in tqdm(pool.imap(process_frame_raw_depth, args_list_raw_depth), total=num_frames):
+    #     video_out_raw_depth.write(frame)
+    # video_out_raw_depth.release()
+    # print(f"[INFO] raw_depth_2x4.mp4 saved to {output_path}")
 
-    pool.close()
+    # pool.close()
     

@@ -9,11 +9,12 @@ from scipy.spatial.transform import Rotation as R
 import multiprocessing
 import h5py
 import torch
-from hocap_annotation.layers import MANOGroupLayer, MANOLayer
-# from manopth.manolayer import ManoLayer
+from hocap_annotation.layers import MANOGroupLayer
+from manopth.manolayer import ManoLayer
 from hocap_annotation.utils.color_info import *
 from hocap_annotation.utils.mano_info import *
 import pickle
+from hocap_annotation.utils import  CFG
 
 def load_pkl_and_get_hand_data(pkl_file):
     # 加载 .pkl 文件
@@ -52,11 +53,19 @@ def get_betas(b):
 def init_mano_layers(hand_data):
     mano_betas_left = get_betas(hand_data['left_hand_beta'])
     mano_betas_right = get_betas(hand_data['right_hand_beta'])
-    mano_layer_left = MANOLayer('left', mano_betas_left).to('cuda')
-    mano_layer_right = MANOLayer('right', mano_betas_right).to('cuda')
+    # mano_layer_left = MANOLayer('left', mano_betas_left).to('cuda')
+    # mano_layer_right = MANOLayer('right', mano_betas_right).to('cuda')
+    mano_layer_right = ManoLayer(side="right",
+                                mano_root=CFG.mano.model_path, 
+                                use_pca=False, 
+                                ncomps=45).to('cuda')
+    mano_layer_left = ManoLayer(side="left",
+                                mano_root=CFG.mano.model_path, 
+                                use_pca=False, 
+                                ncomps=45).to('cuda')
     return mano_layer_left, mano_layer_right
 
-def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer, left_pose):
+def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer, left_pose, mano_layer_left):
     # Use pose from npy file, other data from pkl
     try:
         pose = torch.tensor(left_pose).to('cuda').unsqueeze(0)
@@ -67,7 +76,10 @@ def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer, left_pose):
         # Debug prints
         # print(f"Left hand - pose shape: {pose.shape}, translation shape: {translation.shape}")
         
-        verts, joints = mano_layer(pose, translation)
+        # verts, joints = mano_layer(pose, translation)
+        verts, joints = mano_layer(pose, hand_beta.float())
+        verts = verts[0] / 1000
+        joints = joints[0] / 1000
 
         if verts.size(0) == 1:
             verts = verts.squeeze(0)
@@ -80,7 +92,8 @@ def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer, left_pose):
         verts[:, 0] *= -1
         verts = verts @ base_rot.T
         verts += translation
-        faces = mano_layer.f.detach().cpu().numpy()
+        # faces = mano_layer.f.detach().cpu().numpy()
+        faces = mano_layer_left.th_faces.detach().cpu().numpy()
         
         # print(f"Left hand - final verts shape: {verts.shape}, faces shape: {faces.shape}")
         
@@ -95,11 +108,16 @@ def reconstruct_right_hand_mesh(hand_data, frame_idx, mano_layer_right, right_po
     try:
         pose = torch.tensor(right_pose).to('cuda').unsqueeze(0)
         translation = torch.tensor(hand_data['right_hand_translation'][frame_idx]).to('cuda').unsqueeze(0)
+        hand_beta = torch.tensor(hand_data['left_hand_beta']).to('cuda')
         
         # Debug prints
         # print(f"Right hand - pose shape: {pose.shape}, translation shape: {translation.shape}")
         
-        verts, joints = mano_layer_right(pose, translation)
+        # verts, joints = mano_layer_right(pose, translation)
+        verts, joints = mano_layer_right(pose, hand_beta.float())
+        
+        verts = verts[0] / 1000
+        joints = joints[0] / 1000
         if verts.size(0) == 1:
             verts = verts.squeeze(0)
             joints = joints.squeeze(0)
@@ -109,7 +127,8 @@ def reconstruct_right_hand_mesh(hand_data, frame_idx, mano_layer_right, right_po
         root_trans = joints[0].clone().detach()
         verts -= root_trans
         verts += translation
-        faces = mano_layer_right.f.detach().cpu().numpy()
+        # faces = mano_layer_right.f.detach().cpu().numpy()
+        faces = mano_layer_right.th_faces.detach().cpu().numpy()
         
         # print(f"Right hand - final verts shape: {verts.shape}, faces shape: {faces.shape}")
         
@@ -290,7 +309,7 @@ def process_frame_pose_npy_h5(args):
     # Use correct MANO layers for each hand
     try:
         # left_hand_mesh = reconstruct_left_hand_mesh(hand_data, i, mano_layer_left, left_pose)
-        left_hand_mesh = reconstruct_left_hand_mesh(hand_data, i, mano_layer_right, left_pose) # special setting
+        left_hand_mesh = reconstruct_left_hand_mesh(hand_data, i, mano_layer_right, left_pose, mano_layer_left) # special setting
         right_hand_mesh = reconstruct_right_hand_mesh(hand_data, i, mano_layer_right, right_pose)
         
         # Debug: check if meshes are valid
@@ -365,7 +384,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_path", type=str, default="test_1/20250701_012148", help="数据路径，如 test_1/20250701_012148")
     parser.add_argument("--tool_name", type=str, default="blue_scooper", help="工具名，如 blue_scooper")
     parser.add_argument("--output_idx", type=str, default="0", help="输出编号")
-    parser.add_argument("--pose_file", type=str, default="fd", choices=["fd", "adaptive", "optimized"], help="选择foundation pose 或 optimized")
+    parser.add_argument("--pose_file", type=str, default="optimized", choices=["fd", "adaptive", "optimized"], help="选择foundation pose 或 optimized")
     parser.add_argument("--uuid", type=str, default="", help="唯一标识符，用于区分不同运行")
     parser.add_argument("--object_idx", type=int, default=1, help="物体索引，默认为0")
     args = parser.parse_args()

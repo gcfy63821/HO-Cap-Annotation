@@ -224,7 +224,7 @@ def mat_to_quat(T):
 
 if __name__ == "__main__":
     # User settings
-    frame_idx = 156  # Set your frame index here
+    frame_idx = 292  # Set your frame index here
     ob_in_cam_dir = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/videos_0713/coffee_1_1/processed/fd_pose_solver/green_straw/ob_in_cam"
     extrinsics_yaml = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml"
     serials = [f"{i:02d}" for i in range(8)]
@@ -294,20 +294,10 @@ if __name__ == "__main__":
     print(f"[Old method] Rotation outlier cams: {[serials[i] for i in range(len(serials)) if i not in rot_inlier_indices]}")
     print(f"[Old method] Translation outlier cams: {[serials[i] for i in range(len(serials)) if i not in trans_inlier_indices]}")
 
-    # --- New DBSCAN-based outlier detection ---
-    inlier_idx, outlier_idx, trans_labels, rot_labels = robust_outlier_detection_dbscan(
-        poses_quat, trans_eps=0.03, rot_eps_deg=15, min_samples=2
-    )
-    print(f"\n[DBSCAN method] Inlier indices: {inlier_idx}")
-    print(f"[DBSCAN method] Outlier indices: {outlier_idx}")
-    print(f"[DBSCAN method] Inlier cams: {[serials[i] for i in inlier_idx]}")
-    print(f"[DBSCAN method] Outlier cams: {[serials[i] for i in outlier_idx]}")
-    print(f"[DBSCAN method] Translation cluster labels: {trans_labels}")
-    print(f"[DBSCAN method] Rotation cluster labels: {rot_labels}")
 
     # --- New iterative threshold-based outlier removal ---
     inlier_idx_thr, outlier_idx_thr = threshold_iterative_outlier_removal(
-        poses_quat, trans_thresh=0.03, rot_thresh_deg=15)
+        poses_quat, trans_thresh=0.03, rot_thresh_deg=180)
     print(f"\n[Iterative threshold method] Inlier indices: {inlier_idx_thr}")
     print(f"[Iterative threshold method] Outlier indices: {outlier_idx_thr}")
     print(f"[Iterative threshold method] Inlier cams: {[serials[i] for i in inlier_idx_thr]}")

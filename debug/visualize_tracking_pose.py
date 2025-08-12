@@ -182,10 +182,10 @@ def visualize_tracking_pose_matplotlib(
     plt.show()
 
 if __name__ == "__main__":
-    ob_in_cam_dir = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/videos_0713/wooden_brush_1_1/processed/fd_pose_solver/wooden_brush/ob_in_cam"
+    ob_in_cam_dir = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/videos_0713/coffee_1_2/processed/fd_pose_solver/green_straw/ob_in_cam"
     extrinsics_yaml = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml"
     serials = [f"{i:02d}" for i in range(8)]
-    frame_idx = 0
+    frame_idx = 291
     visualize_tracking_pose(ob_in_cam_dir, extrinsics_yaml, serials, frame_idx=frame_idx)
     # Also show matplotlib visualization
     visualize_tracking_pose_matplotlib(ob_in_cam_dir, extrinsics_yaml, serials, frame_idx=frame_idx)

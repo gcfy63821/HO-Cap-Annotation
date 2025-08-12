@@ -14,6 +14,17 @@ from hocap_annotation.utils.color_info import *
 from hocap_annotation.utils.mano_info import *
 import pickle
 
+def read_K_from_yaml(calib_folder, serial, cam_type="color"):
+    file_path = Path(calib_folder) / "intrinsics" / f"{serial}.yaml"
+    with open(file_path, 'r') as f:
+        data = yaml.safe_load(f)[cam_type]
+    K = np.array([
+        [data["fx"], 0.0, data["ppx"]],
+        [0.0, data["fy"], data["ppy"]],
+        [0.0, 0.0, 1.0],
+    ], dtype=np.float32)
+    return K
+
 def load_pkl_and_get_hand_data(pkl_file):
     # 加载 .pkl 文件
     with open(pkl_file, 'rb') as f:
@@ -49,15 +60,15 @@ def init_mano_layers(hand_data):
     mano_layer_right = MANOLayer('right', mano_betas_right).to('cuda')
     return mano_layer_left, mano_layer_right
 
-def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer_left):
+def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer):
     pose = torch.tensor(hand_data['left_hand_pose'][frame_idx]).to('cuda').unsqueeze(0)
     translation = torch.tensor(hand_data['left_hand_translation'][frame_idx]).to('cuda').unsqueeze(0)
     base_rot = torch.tensor(hand_data['left_hand_base_rot'][frame_idx]).to('cuda') if hand_data['left_hand_base_rot'].ndim == 3 else torch.eye(3).to('cuda')
-    # print(f"[DEBUG] left_hand pose shape: {pose.shape}, translation shape: {translation.shape}")
-    # print(f"[DEBUG] left_hand pose: {pose}")
-    # print(f"[DEBUG] left_hand translation: {translation}")
+    print(f"[DEBUG] left_hand pose shape: {pose.shape}, translation shape: {translation.shape}")
+    print(f"[DEBUG] left_hand pose: {pose}")
+    print(f"[DEBUG] left_hand translation: {translation}")
     hand_beta = torch.tensor(hand_data['left_hand_beta']).to('cuda')
-    verts, joints = mano_layer_left(pose, translation)
+    verts, joints = mano_layer(pose, translation)
 
     # verts, joints = mano_layer_left(pose, hand_beta)
     if verts.size(0) == 1:
@@ -71,10 +82,8 @@ def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer_left):
     # joints[:, 0] *= -1
     verts = verts @ base_rot.T
     # joints = joints @ base_rot.T
-    # rotate 180 degree around x axis
-    verts = verts @ R.from_euler('x', 180, degrees=True).as_matrix()
     verts += translation
-    faces = mano_layer_left.f.detach().cpu().numpy()
+    faces = mano_layer.f.detach().cpu().numpy()
     mesh = trimesh.Trimesh(verts.detach().cpu().numpy(), faces)
     return mesh
 
@@ -162,9 +171,10 @@ def process_frame_pkl_hand(args):
     T[:3, 3] = t
     Ks = dataloader.Ks
     colors_m = [(0.0, 1.0, 1.0), (0.9803921568627451, 0.2901960784313726, 0.16862745098039217)]
-    left_hand_mesh = reconstruct_left_hand_mesh(hand_data, i, mano_layer_left)
-    # left_hand_mesh = reconstruct_left_hand_mesh(hand_data, i, mano_layer_right)
+    # left_hand_mesh = reconstruct_left_hand_mesh(hand_data, i, mano_layer_left)
+    left_hand_mesh = reconstruct_left_hand_mesh(hand_data, i, mano_layer_right)
     right_hand_mesh = reconstruct_right_hand_mesh(hand_data, i, mano_layer_right)
+    # print(f"[DEBUG] left_hand_mesh shape: {left_hand_mesh.vertices.shape}, right_hand_mesh shape: {right_hand_mesh.vertices.shape}")
     
     for serial_idx, serial in enumerate(dataloader.serials):
         color = dataloader.get_color_img(i, serial_idx)
@@ -257,10 +267,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     serials = [f"{i:02d}" for i in range(8)]
-    K = np.array([[607.4, 0.0, 320.0],
-                  [0.0, 607.4, 240.0],
-                  [0.0, 0.0, 1.0]])
-    Ks = {s: K for s in serials}
+    # Load Ks from calibration files
+    calib_folder = Path("/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration")
+    Ks = {s: read_K_from_yaml(calib_folder, s) for s in serials}
     ################
     data_path = args.data_path
     tool_name = args.tool_name
@@ -270,6 +279,7 @@ if __name__ == "__main__":
     ################
 
     data_loader = IMGLoader(data_path)
+    data_loader.Ks = Ks
 
     base_path = f"/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/{data_path}"
     sam_base = f"{base_path}/processed/segmentation/sam2"

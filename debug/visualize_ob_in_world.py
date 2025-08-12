@@ -9,6 +9,18 @@ from scipy.spatial.transform import Rotation as R
 import multiprocessing
 import h5py
 
+# --- Add function to load K from yaml, as in my_loader.py ---
+def read_K_from_yaml(calib_folder, serial, cam_type="color"):
+    file_path = Path(calib_folder) / "intrinsics" / f"{serial}.yaml"
+    with open(file_path, 'r') as f:
+        data = yaml.safe_load(f)[cam_type]
+    K = np.array([
+        [data["fx"], 0.0, data["ppx"]],
+        [0.0, data["fy"], data["ppy"]],
+        [0.0, 0.0, 1.0],
+    ], dtype=np.float32)
+    return K
+
 
 def load_pose(pose_txt):
     with open(pose_txt, 'r') as f:
@@ -84,6 +96,59 @@ def compute_iou(mask_pred, mask_gt):
         return 1.0 if intersection == 0 else 0.0
     return intersection / union
 
+def draw_coordinate_axes(img, pose_matrix, K, axis_length=0.05):
+    """
+    Draw coordinate axes on the image to show tool pose.
+    Args:
+        img: Image to draw on
+        pose_matrix: 4x4 transformation matrix (world to camera)
+        K: Camera intrinsic matrix
+        axis_length: Length of the axes in meters
+    """
+    # Define axis endpoints in object coordinate system
+    origin = np.array([0, 0, 0, 1])
+    x_axis = np.array([axis_length, 0, 0, 1])
+    y_axis = np.array([0, axis_length, 0, 1])
+    z_axis = np.array([0, 0, axis_length, 1])
+    
+    # Transform to camera coordinates
+    origin_cam = pose_matrix @ origin
+    x_axis_cam = pose_matrix @ x_axis
+    y_axis_cam = pose_matrix @ y_axis
+    z_axis_cam = pose_matrix @ z_axis
+    
+    # Project to image coordinates
+    def project_point(point_3d):
+        if point_3d[2] <= 0:  # Behind camera
+            return None
+        pt_2d = point_3d[:3] @ K[:3, :3].T
+        pt_2d = pt_2d[:2] / pt_2d[2]
+        return pt_2d.astype(int)
+    
+    origin_2d = project_point(origin_cam)
+    x_2d = project_point(x_axis_cam)
+    y_2d = project_point(y_axis_cam)
+    z_2d = project_point(z_axis_cam)
+    
+    if origin_2d is not None:
+        # Draw origin point
+        cv2.circle(img, tuple(origin_2d), 3, (255, 255, 255), -1)
+        
+        # Draw X axis (red)
+        if x_2d is not None:
+            cv2.line(img, tuple(origin_2d), tuple(x_2d), (0, 0, 255), 2)
+            cv2.circle(img, tuple(x_2d), 2, (0, 0, 255), -1)
+        
+        # Draw Y axis (green)
+        if y_2d is not None:
+            cv2.line(img, tuple(origin_2d), tuple(y_2d), (0, 255, 0), 2)
+            cv2.circle(img, tuple(y_2d), 2, (0, 255, 0), -1)
+        
+        # Draw Z axis (blue)
+        if z_2d is not None:
+            cv2.line(img, tuple(origin_2d), tuple(z_2d), (255, 0, 0), 2)
+            cv2.circle(img, tuple(z_2d), 2, (255, 0, 0), -1)
+
 # 修改process_frame_world_to_cam和process_frame_pose_npy的color/mask读取部分
 def process_frame_world_to_cam_h5(args):
     i, Ks, serials, outlier_idxs, orig_vertices, orig_mesh = args
@@ -124,6 +189,12 @@ def process_frame_world_to_cam_h5(args):
                 pred_mask[y, x] = 255
         iou = compute_iou(pred_mask, sam_mask)
         iou_per_view.append(iou)
+        
+        # --- Draw coordinate axes ---
+        # Transform tool pose from world to camera coordinates
+        tool_in_cam = world2cam @ ob_in_world
+        draw_coordinate_axes(vis, tool_in_cam, Ks[serial], axis_length=0.03)
+        
         frame_tiles.append(vis)
     return concat_frames_grid(frame_tiles, (2, 4)), iou_per_view
 
@@ -171,8 +242,26 @@ def process_frame_pose_npy_h5(args):
                 pred_mask[y, x] = 255
         iou = compute_iou(pred_mask, sam_mask)
         iou_per_view.append(iou)
+        
+        # --- Draw coordinate axes ---
+        # Transform tool pose from world to camera coordinates
+        tool_in_cam = world2cam @ T
+        draw_coordinate_axes(vis, tool_in_cam, Ks[serial], axis_length=0.03)
+        
         frame_tiles.append(vis)
     return concat_frames_grid(frame_tiles, (2, 4)), iou_per_view
+
+def save_per_view_iou(iou_list, num_views, num_frames, output_dir, prefix):
+            iou_array = np.array(iou_list).reshape((num_frames, num_views))
+            per_view_means = []
+            for v in range(num_views):
+                view_ious = iou_array[:, v]
+                per_view_means.append(np.nanmean(view_ious))
+                with open(output_dir / f'{prefix}_view_{v:02d}_iou.txt', 'w') as f:
+                    for idx, iou in enumerate(view_ious):
+                        f.write(f'{idx}: {iou}\n')
+                    f.write(f'Average IoU: {np.nanmean(view_ious):.4f}\n')
+            return per_view_means
 
 if __name__ == "__main__":
     import argparse
@@ -181,16 +270,15 @@ if __name__ == "__main__":
     parser.add_argument("--data_path", type=str, default="test_1/20250701_012148", help="数据路径，如 test_1/20250701_012148")
     parser.add_argument("--tool_name", type=str, default="blue_scooper", help="工具名，如 blue_scooper")
     parser.add_argument("--output_idx", type=str, default="0", help="输出编号")
-    parser.add_argument("--pose_file", type=str, default="fd", choices=["fd", "adaptive", "optimized"], help="选择foundation pose 或 optimized")
+    parser.add_argument("--pose_file", type=str, default="fd", choices=["fd", "adaptive", "optimized", "offset", "fd_raw", "fd_interp"], help="选择foundation pose 或 optimized")
     parser.add_argument("--uuid", type=str, default="", help="唯一标识符，用于区分不同运行")
     parser.add_argument("--object_idx", type=int, default=0, help="物体索引，默认为0")
     args = parser.parse_args()
 
     serials = [f"{i:02d}" for i in range(8)]
-    K = np.array([[607.4, 0.0, 320.0],
-                  [0.0, 607.4, 240.0],
-                  [0.0, 0.0, 1.0]])
-    Ks = {s: K for s in serials}
+    # Load Ks from calibration files
+    calib_folder = Path("/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration")
+    Ks = {s: read_K_from_yaml(calib_folder, s) for s in serials}
     ################
     data_path = args.data_path
     tool_name = args.tool_name
@@ -257,21 +345,10 @@ if __name__ == "__main__":
         print(f"[INFO] world_to_cam_tracking_2x4.mp4 saved to {output_path1}{uuid}")
 
         # After collecting world_to_cam_ious and pose_npy_ious, organize by view:
-        import numpy as np
-        num_views = len(serials)
-        num_frames = num_frames  # already defined in your code
+        
+        
 
-        def save_per_view_iou(iou_list, num_views, num_frames, output_dir, prefix):
-            iou_array = np.array(iou_list).reshape((num_frames, num_views))
-            per_view_means = []
-            for v in range(num_views):
-                view_ious = iou_array[:, v]
-                per_view_means.append(np.nanmean(view_ious))
-                with open(output_dir / f'{prefix}_view_{v:02d}_iou.txt', 'w') as f:
-                    for idx, iou in enumerate(view_ious):
-                        f.write(f'{idx}: {iou}\n')
-                    f.write(f'Average IoU: {np.nanmean(view_ious):.4f}\n')
-            return per_view_means
+        num_views = len(serials)
 
         per_view_means = save_per_view_iou(world_to_cam_ious, num_views, num_frames, output_path1, 'world_to_cam')
         with open(output_path1 / 'world_to_cam_iou_summary.txt', 'a') as f:
@@ -280,12 +357,20 @@ if __name__ == "__main__":
         print('Per-view Average IoU (world_to_cam):', per_view_means)
 
     ########################
+    num_views = len(serials)
+    num_frames = num_frames
 
     # pose_npy_in_cams
     if pose_file == "fd":
         pose_npy_path = f"{base_path}/processed/fd_pose_solver/fd_poses_merged_fixed.npy"
+    elif pose_file == "fd_raw":
+        pose_npy_path = f"{base_path}/processed/fd_pose_solver/fd_poses_merged_raw.npy"
+    elif pose_file == "fd_interp":
+        pose_npy_path = f"{base_path}/processed/fd_pose_solver/fd_poses_merged_interp.npy"
     elif pose_file == "adaptive":
         pose_npy_path = f"{base_path}/processed/fd_pose_solver/adaptive_fd_poses_merged_fixed.npy"
+    elif pose_file == "offset":
+        pose_npy_path = f"{base_path}/processed/fd_pose_solver/{tool_name}/ob_in_world/ob_in_world_offset.npy"
     elif pose_file == "optimized":
         pose_npy_path = f"{base_path}/processed/object_pose_solver/poses_o.npy"
     output_path2 = Path(f"debug_output/{data_path}/pose_npy_in_cams_video")

@@ -82,10 +82,80 @@
 # ./run_separate.sh --sequence_name videos_0713/coffee_1_1 --tool_name green_straw --object_idx 1  --uuid 0723new_rot_1_trans_0.03 --rot_thresh 1 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 20 >> log.txt 2>&1
 # ./run_separate.sh --sequence_name videos_0713/coffee_1_1 --tool_name green_straw --object_idx 1  --uuid 0723new_rot_0.5_trans_0.02 --rot_thresh 0.5 --trans_thresh 0.02 --crop_view 0 --track_refine_iter 20 >> log.txt 2>&1
 # ./run_separate.sh --sequence_name videos_0713/coffee_1_1 --tool_name green_straw --object_idx 1  --uuid 0723new_rot_0.25_trans_0.02 --rot_thresh 0.25 --trans_thresh 0.02 --crop_view 0 --track_refine_iter 20 >> log.txt 2>&1
-./run_separate.sh --sequence_name videos_0713/coffee_1_1 --tool_name green_straw --object_idx 1  --uuid test0724_rot_0.25_trans_0.03 --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
-./run_separate.sh --sequence_name videos_0713/peeler_0_1 --tool_name peeler --object_idx 1  --uuid test0724_rot_0.25_trans_0.03 --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
-./run_separate.sh --sequence_name videos_0713/wooden_brush_1_1 --tool_name wooden_brush --object_idx 1  --uuid test0724_rot_0.25_trans_0.03 --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
-./run_separate.sh --sequence_name videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --object_idx 1  --uuid test0724_rot_0.25_trans_0.03 --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
+
+# ./run_separate.sh --sequence_name videos_0713/coffee_1_1 --tool_name green_straw --object_idx 1  --uuid test0724_rot_0.25_trans_0.03 --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
+# ./run_separate.sh --sequence_name videos_0713/peeler_0_1 --tool_name peeler --object_idx 1  --uuid test0724_rot_0.25_trans_0.03 --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
+# ./run_separate.sh --sequence_name videos_0713/wooden_brush_1_1 --tool_name wooden_brush --object_idx 1  --uuid test0724_rot_0.25_trans_0.03 --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
+# ./run_separate.sh --sequence_name videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --object_idx 1  --uuid test0724_rot_0.25_trans_0.03 --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
+
+# ./run_separate.sh --sequence_name videos_0713/coffee_1_2 --tool_name green_straw --object_idx 1  --uuid 0725_set_threshold --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
+# ./run_separate.sh --sequence_name videos_0713/coffee_0_1 --tool_name green_straw --object_idx 1  --uuid 0725_set_threshold --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
+# ./run_separate.sh --sequence_name videos_0713/peeler_0_1 --tool_name peeler --object_idx 1  --uuid 0725_set_threshold --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
+# ./run_separate.sh --sequence_name videos_0713/wooden_brush_1_1 --tool_name wooden_brush --object_idx 1  --uuid 0725_set_threshold --rot_thresh 0.25 --trans_thresh 0.03 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
+# ./run_separate.sh --sequence_name videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --object_idx 1  --uuid 0725_set_threshold --rot_thresh 0.25 --trans_thresh 0.02 --crop_view 0 --track_refine_iter 10 >> log.txt 2>&1
+
+
+# python tools/04-3_fd_pose_optimizer.py --data_path videos_0713/coffee_1_2 --tool_name green_straw --M 10
+# python tools/04-3_fd_pose_optimizer.py --data_path videos_0713/coffee_0_1 --tool_name green_straw --M 10
+# python tools/04-3_fd_pose_optimizer.py --data_path videos_0713/peeler_0_1 --tool_name peeler --M 10
+# python tools/04-3_fd_pose_optimizer.py --data_path videos_0713/wooden_brush_1_1 --tool_name wooden_brush --M 10
+# python tools/04-3_fd_pose_optimizer.py --data_path videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --M 10
+
+# python debug/visualize_ob_in_world.py --data_path videos_0713/coffee_1_2 --tool_name green_straw --pose_file offset --uuid 0725_offset_optimized
+# python debug/visualize_ob_in_world.py --data_path videos_0713/coffee_0_1 --tool_name green_straw --pose_file offset --uuid 0725_offset_optimized
+# python debug/visualize_ob_in_world.py --data_path videos_0713/peeler_0_1 --tool_name peeler --pose_file offset --uuid 0725_offset_optimized 
+# python debug/visualize_ob_in_world.py --data_path videos_0713/wooden_brush_1_1 --tool_name wooden_brush --pose_file offset --uuid 0725_offset_optimized
+# python debug/visualize_ob_in_world.py --data_path videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --pose_file offset --uuid 0725_offset_optimized
+
+# ./run_optimize.sh --sequence_name videos_0713/coffee_1_2 --tool_name green_straw --object_idx 1  --uuid 0725_offset --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/coffee_0_1 --tool_name green_straw --object_idx 1  --uuid 0725_offset --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/peeler_0_1 --tool_name peeler --object_idx 1  --uuid 0725_offset --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/wooden_brush_1_1 --tool_name wooden_brush --object_idx 1  --uuid 0725_offset --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --object_idx 1  --uuid 0725_offset --optimize 1 >> log.txt 2>&1
+
+
+# ./run_optimize.sh --sequence_name videos_0713/coffee_1_2 --tool_name green_straw --object_idx 1  --uuid 0728 --hand 1 --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/coffee_0_1 --tool_name green_straw --object_idx 1  --uuid 0728 --hand 1 --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/peeler_0_1 --tool_name peeler --object_idx 1  --uuid 0728 --hand 1 --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/wooden_brush_1_1 --tool_name wooden_brush --object_idx 1  --uuid 0728 --hand 1 --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --object_idx 1  --uuid 0728 --hand 1 --optimize 1 >> log.txt 2>&1
+
+
+
+# python debug/visualize_trimesh.py --data_path videos_0713/coffee_1_2 --tool_name green_straw --pose_file optimized
+# # python debug/visualize_trimesh.py --data_path videos_0713/coffee_0_1 --tool_name green_straw --pose_file optimized
+# python debug/visualize_trimesh.py --data_path videos_0713/peeler_0_1 --tool_name peeler --pose_file optimized
+# python debug/visualize_trimesh.py --data_path videos_0713/wooden_brush_1_1 --tool_name wooden_brush --pose_file optimized
+# python debug/visualize_trimesh.py --data_path videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --pose_file optimized
+
+
+
+# ./run_optimize.sh --sequence_name videos_0713/coffee_1_1 --tool_name green_straw --object_idx 1 --hand 1  --uuid 0804 --hand 1 --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/coffee_0_1 --tool_name green_straw --object_idx 1  --uuid 0804 --hand 1 --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/peeler_0_1 --tool_name peeler --object_idx 1  --uuid 0804 --hand 1 --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/wooden_brush_1_1 --tool_name wooden_brush --object_idx 1  --uuid 0804 --hand 1 --optimize 1 >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --object_idx 1  --uuid 0804 --hand 1 --optimize 1 >> log.txt 2>&1
+
+
+# ./run_optimize.sh --sequence_name videos_0713/coffee_1_1 --tool_name green_straw --object_idx 1 --uuid 0806_test >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/coffee_0_1 --tool_name green_straw --object_idx 1  --uuid 0806_test >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/peeler_0_1 --tool_name peeler --object_idx 1  --uuid 0806_test >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/wooden_brush_1_1 --tool_name wooden_brush --object_idx 1  --uuid 0806_test >> log.txt 2>&1
+# ./run_optimize.sh --sequence_name videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --object_idx 1  --uuid 0806_test >> log.txt 2>&1
+
+# ./run_optimize.sh --sequence_name videos_0713/coffee_0_1 --tool_name green_straw --object_idx 1  --uuid 0811 >> log.txt 2>&1
+./run_optimize.sh --sequence_name videos_0713/peeler_0_1 --tool_name peeler --object_idx 1 --optimize 1 --uuid 0812 >> log.txt 2>&1
+./run_optimize.sh --sequence_name videos_0713/wooden_brush_1_1 --tool_name wooden_brush --object_idx 1 --optimize 1 --uuid 0812 >> log.txt 2>&1
+./run_optimize.sh --sequence_name videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --object_idx 1 --optimize 1  --uuid 0812 >> log.txt 2>&1
+./run_optimize.sh --sequence_name videos_0713/coffee_1_1 --tool_name green_straw --object_idx 1 --hand 1 --optimize 1 --uuid 0812 >> log.txt 2>&1
+
+
+
+# ./run_integrate.sh --sequence_name videos_0713/coffee_1_2 --tool_name green_straw --object_idx 1 --hand 1  --uuid 0802_integrate --optimize 1 >> log.txt 2>&1
+# ./run_integrate.sh --sequence_name videos_0713/coffee_0_1 --tool_name green_straw --object_idx 1  --uuid 0802_integrate --optimize 1 >> log.txt 2>&1
+# ./run_integrate.sh --sequence_name videos_0713/peeler_0_1 --tool_name peeler --object_idx 1  --uuid 0802_integrate --optimize 1 >> log.txt 2>&1
+# ./run_integrate.sh --sequence_name videos_0713/wooden_brush_1_1 --tool_name wooden_brush --object_idx 1  --uuid 0802_integrate --optimize 1 >> log.txt 2>&1
+# ./run_integrate.sh --sequence_name videos_0713/wooden_spoon_0_1 --tool_name wooden_spoon --object_idx 1  --uuid 0802 --optimize 1 >> log.txt 2>&1
 
 
 # 运行目标姿态求解
