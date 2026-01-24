@@ -19,13 +19,24 @@ class MySequenceLoader:
         device: str = "cuda",
     ):
         self._data_folder = Path(sequence_folder)
-        self._folder_name = self._data_folder.parent.name
-        self._sequence_name = self._data_folder.name
-        print(f"[INFO] folder_name: {self._folder_name}, sequence_name: {self._sequence_name}")
-        self._seg_folder = self._data_folder.parent.parent / f"{self._folder_name}_annotated" / self._sequence_name / "tool_masks"
-        self._object_masks_folder = self._data_folder.parent.parent / f"{self._folder_name}_annotated" / self._sequence_name / "object_masks"
+        # Updated path parsing for new structure: videos_0901/taskname/xxxvideoname
+        self._sequence_name = self._data_folder.name  # xxxvideoname
+        task_folder = self._data_folder.parent  # .../videos_0901/taskname
+        self._task_name = task_folder.name  # taskname
+        video_root_folder = task_folder.parent  # .../videos_0901
+        self._folder_name = video_root_folder.name  # videos_0901
+        
+        print(f"[INFO] folder_name: {self._folder_name}, task_name: {self._task_name}, sequence_name: {self._sequence_name}")
+        
+        # Create annotated paths with taskname included: videos_0901_annotated/taskname/xxxvideoname
+        annotated_base_folder = f"{self._folder_name}_annotated"  # videos_0901_annotated
+        annotated_root = video_root_folder.parent / annotated_base_folder  # .../videos_0901_annotated
+        annotated_sequence_path = annotated_root / self._task_name / self._sequence_name  # .../videos_0901_annotated/taskname/xxxvideoname
+        
+        self._seg_folder = annotated_sequence_path / "tool_masks"
+        self._object_masks_folder = annotated_sequence_path / "object_masks"
         if not self._seg_folder.exists():
-            self._seg_folder = self._data_folder.parent.parent / f"{self._folder_name}_annotated" / self._sequence_name / "masks"
+            self._seg_folder = annotated_sequence_path / "masks"
         self._load_mano = load_mano
         self._load_object = load_object
         self._in_world = in_world
@@ -429,3 +440,8 @@ class MySequenceLoader:
     @property
     def masks_map(self) -> torch.Tensor:
         return self._masks.view(self._num_cams, self._rs_height, self._rs_width)
+
+    @property
+    def task_name(self) -> str:
+        """Task name for the sequence."""
+        return self._task_name

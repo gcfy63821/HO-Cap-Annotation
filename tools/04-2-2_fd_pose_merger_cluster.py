@@ -154,10 +154,11 @@ def pose_jitter_smooth(
 class FoundationPoseMerger:
     def __init__(self, sequence_folder):
         self._data_folder = Path(sequence_folder)
-        self._folder_name = self._data_folder.parent.name
+        self._folder_name = self._data_folder.parent.parent.name
+        self._task_name = self._data_folder.parent.name
         self._sequence_name = self._data_folder.name
-        self._fd_pose_folder = Path(f"{self._data_folder.parent.parent}/{self._folder_name}_annotated/{self._sequence_name}/processed/fd_pose_solver")
-        
+        self._fd_pose_folder = Path(f"{self._data_folder.parent.parent.parent}/{self._folder_name}_annotated/{self._task_name}/{self._sequence_name}/processed/fd_pose_solver")
+        print(f"fd_pose_folder: {self._fd_pose_folder}")
         # self._fd_pose_folder = self._data_folder.parent.parent / "processed" / "fd_pose_solver"
         self._log_file = self._fd_pose_folder / "fd_pose_merger.log"
 
@@ -293,9 +294,9 @@ class FoundationPoseMerger:
 
             poses_fixed = evaluate_and_fix_poses(
                 poses_fixed,
-                window_size=5,
-                rot_thresh=5.0,
-                trans_thresh=0.01,
+                window_size=25,
+                rot_thresh=3.0,
+                trans_thresh=0.003,
                 seperate_rot_trans=True,
                 use_mean_pose=True,
             )
@@ -304,14 +305,14 @@ class FoundationPoseMerger:
             poses_fixed = pose_jitter_smooth(
                 poses_fixed,
                 window_size=1,
-                rot_thresh=1.5,
-                trans_thresh=0.004,
+                rot_thresh=2.5,
+                trans_thresh=0.002,
             )
 
             poses_fixed = evaluate_and_fix_poses(
                 poses_fixed,
                 window_size=15,
-                rot_thresh=1.0,
+                rot_thresh=2.5,
                 trans_thresh=0.004,
                 seperate_rot_trans=True,
                 use_mean_pose=True,
@@ -338,7 +339,7 @@ class FoundationPoseMerger:
             poses_fixed = pose_jitter_smooth(
                 poses_fixed,
                 window_size=1,
-                rot_thresh=1.0,
+                rot_thresh=2.5,
                 trans_thresh=0.003,
             )
 

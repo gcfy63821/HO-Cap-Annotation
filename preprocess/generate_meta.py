@@ -129,24 +129,28 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate meta.yaml for HO-Cap dataset.")
-    parser.add_argument('--h5_path', type=str, required=True, help='Path to the .h5 file (e.g. /data/folder_name/sequence_name/data00000000.h5)')
+    parser.add_argument('--h5_path', type=str, required=True, help='Path to the .h5 file (e.g. /data/folder_name/task_name/sequence_name/data00000000.h5)')
     parser.add_argument('--calibration_yaml_path', type=str, default='/path/to/calibration.yaml', help='Path to calibration YAML (fixed)')
     parser.add_argument('--models_folder', type=str, default='/path/to/models', help='Path to models folder (fixed)')
     parser.add_argument('--subject_id', type=str, default=None, help='Subject ID (default: sequence_name)')
     parser.add_argument('--tool_name', type=str, default=None, help='Tool/object name (default: sequence_name)')
     args = parser.parse_args()
 
-    # Infer folder_name and sequence_name from h5_path
+    # Infer folder_name, task_name, and sequence_name from h5_path
     h5_path = Path(args.h5_path)
-    # /.../{folder_name}/{sequence_name}/data00000000.h5
-    folder_name = h5_path.parts[-3]
-    sequence_name = h5_path.parts[-2]
+    # Updated path parsing for new structure: /.../{folder_name}/{task_name}/{sequence_name}/data00000000.h5
+    sequence_name = h5_path.parts[-2]  # xxxvideoname
+    task_name = h5_path.parts[-3]      # taskname
+    folder_name = h5_path.parts[-4]    # videos_0901
+    
+    print(f"[INFO] Parsed paths - folder_name: {folder_name}, task_name: {task_name}, sequence_name: {sequence_name}")
 
-    # Infer mask_root_dir and object_mask_dir
-    mask_root_dir = h5_path.parent.parent.parent / f"{folder_name}_annotated" / sequence_name / "tool_masks"
-    object_mask_dir = h5_path.parent.parent.parent / f"{folder_name}_annotated" / sequence_name / "object_masks"
+    # Infer mask_root_dir and object_mask_dir with taskname included
+    # Structure: .../videos_0901_annotated/taskname/xxxvideoname/
+    mask_root_dir = h5_path.parent.parent.parent.parent / f"{folder_name}_annotated" / task_name / sequence_name / "tool_masks"
+    object_mask_dir = h5_path.parent.parent.parent.parent / f"{folder_name}_annotated" / task_name / sequence_name / "object_masks"
     if not mask_root_dir.exists():
-        mask_root_dir = h5_path.parent.parent.parent / f"{folder_name}_annotated" / sequence_name / "masks"
+        mask_root_dir = h5_path.parent.parent.parent.parent / f"{folder_name}_annotated" / task_name / sequence_name / "masks"
     if not object_mask_dir.exists():
         object_mask_dir = None
 
