@@ -729,6 +729,7 @@ def run_pose_estimation(
     end_frame = num_frames if end_frame < start_frame else end_frame
 
     logging.info(f"start_frame: {start_frame}, end_frame: {end_frame}")
+    print(f"[DEBUG] start_frame: {start_frame}, end_frame: {end_frame}")
 
     save_folder = Path(f"{data_loader._data_folder.parent.parent.parent}/{data_loader._folder_name}_annotated/{data_loader._task_name}/{data_loader._sequence_name}/processed/fd_pose_solver")
 
@@ -784,7 +785,7 @@ def run_pose_estimation(
     ob_in_world_refined = empty_mat_pose.copy()
     ob_in_cam_poses = [empty_mat_pose.copy()] * len(valid_serials)
     all_poses_w = []
-
+    print(f"[DEBUG] valid_serials: {valid_serials}")
     # # debug
     # end_frame = 32
 
@@ -800,7 +801,7 @@ def run_pose_estimation(
     ################ Tricks #################
     REVERSE = False
     MASKED_DEPTH = True  # whether to use masked depth or not
-    MASKED_IMAGE = False  # whether to use masked image or not
+    MASKED_IMAGE = True  # whether to use masked image or not
     CROP_VIEW = False  # whether to crop the view or not
     MASKED_OBJECT = True
 
@@ -812,6 +813,7 @@ def run_pose_estimation(
                 depth = data_loader.get_depth(serial, frame_id)
                 mask = data_loader.get_mask(serial, frame_id, object_idx)
                 frame_idx = frame_id
+                # print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: color shape: {color.shape}, depth shape: {depth.shape}, mask shape: {mask.sum()}")
             else:
                 color = data_loader.get_color(serial, num_frames - frame_id - 1)
                 depth = data_loader.get_depth(serial, num_frames - frame_id - 1)
@@ -828,17 +830,17 @@ def run_pose_estimation(
                     if object_mask.ndim ==3:
                         object_mask = object_mask.squeeze(0)
                     depth[object_mask != 0] = 0
-                    if frame_idx == 0:
-                        # print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: object_mask.sum() = {object_mask.sum()}")
-                        # 保存depth图片debug
-                        debug_depth_path = save_folder / "debug" / f"processed_depth_{object_id}" / serial
-                        debug_depth_path.mkdir(parents=True, exist_ok=True)
-                        view_depth = depth.copy()
-                        # 让深度图可视化
-                        view_depth = (view_depth - np.min(view_depth)) / (np.max(view_depth) - np.min(view_depth)) * 255
-                        view_depth = view_depth.astype(np.uint8)
-                        cv2.imwrite(str(debug_depth_path / f"depth_{frame_idx:06d}_object_mask.png"), view_depth)
-                        cv2.imwrite(str(debug_depth_path / f"depth_{frame_idx:06d}.png"), depth)
+                if frame_idx % 20 == 0:
+                    # print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: object_mask.sum() = {object_mask.sum()}")
+                    # 保存depth图片debug
+                    debug_depth_path = save_folder / "debug" / f"processed_depth_{object_id}" / serial
+                    debug_depth_path.mkdir(parents=True, exist_ok=True)
+                    view_depth = depth.copy()
+                    # 让深度图可视化
+                    view_depth = (view_depth - np.min(view_depth)) / (np.max(view_depth) - np.min(view_depth)) * 255
+                    view_depth = view_depth.astype(np.uint8)
+                    cv2.imwrite(str(debug_depth_path / f"depth_{frame_idx:06d}_mask.png"), view_depth)
+                    # cv2.imwrite(str(debug_depth_path / f"depth_{frame_idx:06d}.png"), depth)
 
             if MASKED_IMAGE:
                 color = color.copy()
@@ -864,7 +866,8 @@ def run_pose_estimation(
 
             if mask.sum() < 10:
                 ob_in_cam_mat = empty_mat_pose.copy()
-                print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: mask.sum() = {mask.sum()} is less than 100, skipping.")
+                print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: mask.sum() = {mask.sum()} is less than 10, skipping.")
+                # breakpoint()
             # elif serial_idx == 0 and is_valid_ob_pose(ob_in_cam_poses[serial_idx], valid_RTs[serial_idx]):
             #     print("using cam pose")
             #     ob_in_cam_mat = estimator.track_one(
@@ -874,6 +877,18 @@ def run_pose_estimation(
             #         iteration=track_refine_iter,
             #         prev_pose=ob_in_cam_poses[serial_idx],
             #     )
+            
+            elif is_valid_ob_pose(ob_in_cam_poses[serial_idx], x_threshold, y_threshold, z_threshold, valid_RTs[serial_idx]):
+                # print(f"DEBUG {ob_in_world_refined} is not valid, but ob_in_cam_poses is valid.")
+                # print("ob in world refined:", ob_in_world_refined[:3, 3])
+                # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: using previous ob_in_cam pose.")
+                ob_in_cam_mat = estimator.track_one(
+                    rgb=color,
+                    depth=depth,
+                    K=K,
+                    iteration=track_refine_iter,
+                    prev_pose=ob_in_cam_poses[serial_idx],
+                )
             elif is_valid_ob_pose(ob_in_world_refined, x_threshold, y_threshold, z_threshold):
                 # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: using refined ob_in_world pose.")
                 ob_in_cam_mat = estimator.track_one(
@@ -883,17 +898,6 @@ def run_pose_estimation(
                     iteration=track_refine_iter,
                     prev_pose=valid_RTs_inv[serial_idx] @ ob_in_world_refined,
                 )
-            elif is_valid_ob_pose(ob_in_cam_poses[serial_idx], x_threshold, y_threshold, z_threshold, valid_RTs[serial_idx]):
-                print(f"DEBUG {ob_in_world_refined} is not valid, but ob_in_cam_poses is valid.")
-                print("ob in world refined:", ob_in_world_refined[:3, 3])
-                # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: using previous ob_in_cam pose.")
-                ob_in_cam_mat = estimator.track_one(
-                    rgb=color,
-                    depth=depth,
-                    K=K,
-                    iteration=track_refine_iter,
-                    prev_pose=ob_in_cam_poses[serial_idx],
-                )
             else:
                 print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: estimating new pose.")
                 init_ob_pos_center = data_loader.get_init_translation(
@@ -902,11 +906,11 @@ def run_pose_estimation(
                 # print(f"[DEBUG] Frame {frame_id}, Cam {serial}: init_ob_pos_center = {init_ob_pos_center}")
 
                 if init_ob_pos_center is not None:
-                    # print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: init_ob_pos_center = {init_ob_pos_center}")
-                    # print(f"[debug] color shape: {color.shape}, depth shape: {depth.shape}, mask shape: {mask.shape}, K shape: {K.shape}")
-                    # print(f"[debug] color min: {np.min(color)}, color max: {np.max(color)}")
-                    # print(f"[debug] depth min: {np.min(depth)}, depth max: {np.max(depth)}")
-                    # print(f"[debug] mask min: {np.min(mask)}, mask max: {np.max(mask)}")
+                    print(f"[DEBUG] Frame {frame_idx}, Cam {serial}: init_ob_pos_center = {init_ob_pos_center}")
+                    print(f"[debug] color shape: {color.shape}, depth shape: {depth.shape}, mask shape: {mask.shape}, K shape: {K.shape}")
+                    print(f"[debug] color min: {np.min(color)}, color max: {np.max(color)}")
+                    print(f"[debug] depth min: {np.min(depth)}, depth max: {np.max(depth)}")
+                    print(f"[debug] mask min: {np.min(mask)}, mask max: {np.max(mask)}")
                     # print(f"[debug] K: {K}")
                     ob_in_cam_mat = estimator.register(
                         rgb=color,
@@ -938,16 +942,15 @@ def run_pose_estimation(
                 save_pose_folder / f"{frame_idx:06d}.txt", mat_to_quat(ob_in_cam_mat)
             )
             
-            if debug > 1:
-                # save the initial ob_in_cam_mat for debugging
-                debug_image_path = save_folder / "debug" / object_id / serial
-                debug_image_path.mkdir(parents=True, exist_ok=True)
+            # if debug > 1:
+            #     # save the initial ob_in_cam_mat for debugging
+            #     # debug_image_path = save_folder / "debug" / object_id / serial
+            #     # debug_image_path.mkdir(parents=True, exist_ok=True)
 
-                pass
-            # debug_image_path = save_folder / "debug_vis" / serial
-            # debug_image_path.mkdir(parents=True, exist_ok=True)
-            # cv2.imwrite(str(debug_image_path / f"color_{frame_id:06d}.png"), color)
-            # cv2.imwrite(str(debug_image_path / f"mask_{frame_id:06d}.png"), mask * 255)
+            #     debug_image_path = save_folder / "debug_vis" / serial
+            #     debug_image_path.mkdir(parents=True, exist_ok=True)
+            #     cv2.imwrite(str(debug_image_path / f"color_{frame_id:06d}.png"), color)
+            #     cv2.imwrite(str(debug_image_path / f"mask_{frame_id:06d}.png"), mask * 255)
 
 
 
@@ -958,8 +961,8 @@ def run_pose_estimation(
             prev_poses_w=all_poses_w,
             rot_thresh=rot_thresh,
             trans_thresh=trans_thresh,
-            thresh_factor=2.0,
-            outlier_ratio=0.2,
+            thresh_factor=1.0,
+            outlier_ratio=0.4,
             x_threshold=x_threshold,
             y_threshold=y_threshold,
             z_threshold=z_threshold,

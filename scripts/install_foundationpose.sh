@@ -5,43 +5,43 @@ source "$(dirname "$0")/config.sh"
 FD_POSE_DIR="${PROJ_ROOT}/third_party/FoundationPose"
 
 # Initialize the FoundationPose submodule
-log_message "Initializing FoundationPose submodule..."
-if git submodule update --init --recursive -- "${FD_POSE_DIR}"; then
-    log_message "FoundationPose submodule initialized successfully."
-else
-    handle_error "Failed to initialize FoundationPose submodule."
-fi
+# log_message "Initializing FoundationPose submodule..."
+# if git submodule update --init --recursive -- "${FD_POSE_DIR}"; then
+#     log_message "FoundationPose submodule initialized successfully."
+# else
+#     handle_error "Failed to initialize FoundationPose submodule."
+# fi
 
-# Install Python dependencies from requirements_fdpose.txt
-log_message "Installing Python dependencies from requirements_fdpose.txt..."
-if "${PYTHON_PATH}" -m pip install --no-cache-dir -r "${PROJ_ROOT}/requirements_fdpose.txt"; then
-    log_message "Python dependencies installed successfully."
-else
-    handle_error "Failed to install Python dependencies."
-fi
+# # Install Python dependencies from requirements_fdpose.txt
+# log_message "Installing Python dependencies from requirements_fdpose.txt..."
+# if "${PYTHON_PATH}" -m pip install --no-cache-dir -r "${PROJ_ROOT}/requirements_fdpose.txt"; then
+#     log_message "Python dependencies installed successfully."
+# else
+#     handle_error "Failed to install Python dependencies."
+# fi
 
-# Install NVDiffRast
-log_message "Installing NVDiffRast..."
-if "${PYTHON_PATH}" -m pip install --no-cache-dir "git+https://github.com/NVlabs/nvdiffrast.git@v0.3.3"; then
-    log_message "NVDiffRast installed successfully."
-else
-    handle_error "Failed to install NVDiffRast."
-fi
+# # Install NVDiffRast
+# log_message "Installing NVDiffRast..."
+# if "${PYTHON_PATH}" -m pip install --no-cache-dir "git+https://github.com/NVlabs/nvdiffrast.git@v0.3.3"; then
+#     log_message "NVDiffRast installed successfully."
+# else
+#     handle_error "Failed to install NVDiffRast."
+# fi
 
-# Install PyTorch3D
-log_message "Installing PyTorch3D..."
-if FORCE_CUDA=1 "${PYTHON_PATH}" -m pip install --no-cache-dir "git+https://github.com/facebookresearch/pytorch3d.git@stable"; then
-    log_message "PyTorch3D installed successfully."
-else
-    handle_error "Failed to install PyTorch3D."
-fi
+# # Install PyTorch3D
+# log_message "Installing PyTorch3D..."
+# if FORCE_CUDA=1 "${PYTHON_PATH}" -m pip install --no-cache-dir "git+https://github.com/facebookresearch/pytorch3d.git@stable"; then
+#     log_message "PyTorch3D installed successfully."
+# else
+#     handle_error "Failed to install PyTorch3D."
+# fi
 
 # Set paths for mycpp build
 log_message "Preparing to build mycpp..."
 MYCPP_DIR="${FD_POSE_DIR}/mycpp"
 BUILD_DIR="${MYCPP_DIR}/build"
 # CMAKE_PREFIX_PATH="/home/wys/.local/lib/python3.10/site-packages/pybind11/share/cmake/pybind11"
-CMAKE_PREFIX_PATH= "${CONDA_PREFIX}/lib/python3.10/site-packages/pybind11/share/cmake/pybind11"
+CMAKE_PREFIX_PATH="${CONDA_PREFIX}/lib/python3.10/site-packages/pybind11/share/cmake/pybind11"
 
 # Check if CMAKE_PREFIX_PATH exists
 if [ ! -d "$CMAKE_PREFIX_PATH" ]; then

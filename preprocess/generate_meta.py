@@ -5,39 +5,124 @@ import numpy as np
 from pathlib import Path
 import argparse
 
-def load_masks_from_folder(mask_root_dir, num_frames, num_cams):
+def load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=None, expected_W=None):
     """
-    根据mask根目录读取所有摄像头的mask，返回形状 (N, 8, H, W)
-    mask_root_dir路径格式:
+    根据mask根目录读取所有摄像头的mask，返回形状 (N, num_cams, H, W)
+    mask_root_dir路径格式支持:
     tool_masks/
-      cam00.mp4/
-        0.npy
-        1.npy
+      cam00.mp4/ 或 cam0_rgb/
+        0.npy 或 0000.npy
+        1.npy 或 0001.npy
         ...
-      cam01.mp4/
+      cam01.mp4/ 或 cam1_rgb/
       ...
-      cam07.mp4/
+      cam07.mp4/ 或 cam7_rgb/
+    
+    Args:
+        mask_root_dir: mask根目录路径
+        num_frames: 帧数
+        num_cams: 相机数量
+        expected_H: 期望的高度（如果提供，会resize mask）
+        expected_W: 期望的宽度（如果提供，会resize mask）
     """
-    H, W = 480, 640
     mask_root_dir = Path(mask_root_dir)
+    all_masks = []
+    
+    # 从第一帧推断mask的尺寸
+    first_mask_shape = None
+    for cam_idx in range(num_cams):
+        # 尝试多种路径格式
+        possible_cam_folders = [
+            mask_root_dir / f"cam{cam_idx:02d}.mp4",
+            mask_root_dir / f"cam{cam_idx}_rgb",
+            mask_root_dir / f"cam{cam_idx}.mp4",
+        ]
+        
+        for cam_folder in possible_cam_folders:
+            if cam_folder.exists():
+                # 尝试多种文件名格式
+                for fmt in [f"{0:04d}.npy", f"{0}.npy"]:
+                    npy_path = cam_folder / fmt
+                    if npy_path.exists():
+                        mask = np.load(npy_path)
+                        # 处理mask形状
+                        if mask.ndim == 3:
+                            mask = mask.squeeze(0)  # (1, H, W) -> (H, W)
+                        if first_mask_shape is None:
+                            first_mask_shape = mask.shape
+                        break
+                if first_mask_shape is not None:
+                    break
+        if first_mask_shape is not None:
+            break
+    
+    # 如果无法推断，使用默认值
+    if first_mask_shape is None:
+        H, W = expected_H or 480, expected_W or 640
+        print(f"[WARNING] Could not infer mask shape, using default: ({H}, {W})")
+    else:
+        H, W = first_mask_shape
+        print(f"[INFO] Inferred mask shape: ({H}, {W})")
+    
+    # 如果提供了期望尺寸，使用期望尺寸
+    if expected_H is not None and expected_W is not None:
+        H, W = expected_H, expected_W
+        print(f"[INFO] Using expected mask shape: ({H}, {W})")
+    
     all_masks = []
     for frame_idx in range(num_frames):
         frame_masks = []
         for cam_idx in range(num_cams):
-            cam_folder = mask_root_dir / f"cam{cam_idx:02d}.mp4"
-            npy_path = cam_folder / f"{frame_idx}.npy"
-            if not npy_path.exists():
-                frame_masks.append(np.zeros((1, H, W), dtype=np.uint8))
-                # print("is none:", cam_folder, frame_idx)
+            # 尝试多种路径格式
+            possible_cam_folders = [
+                mask_root_dir / f"cam{cam_idx:02d}.mp4",
+                mask_root_dir / f"cam{cam_idx}_rgb",
+                mask_root_dir / f"cam{cam_idx}.mp4",
+            ]
+            
+            npy_path = None
+            for cam_folder in possible_cam_folders:
+                if cam_folder.exists():
+                    # 尝试多种文件名格式
+                    for fmt in [f"{frame_idx:04d}.npy", f"{frame_idx}.npy"]:
+                        test_path = cam_folder / fmt
+                        if test_path.exists():
+                            npy_path = test_path
+                            break
+                    if npy_path is not None:
+                        break
+            
+            if npy_path is None or not npy_path.exists():
+                frame_masks.append(np.zeros((H, W), dtype=np.uint8))
                 continue
+            
             mask = np.load(npy_path)
-            # print("mask_shape", mask.shape)
+            
+            # 处理mask形状
+            if mask.ndim == 3:
+                mask = mask.squeeze(0)  # (1, H, W) -> (H, W)
+            elif mask.ndim != 2:
+                print(f"[WARNING] Unexpected mask shape {mask.shape} from {npy_path}, using zeros")
+                frame_masks.append(np.zeros((H, W), dtype=np.uint8))
+                continue
+            
+            # Resize mask if dimensions don't match
+            if mask.shape[0] != H or mask.shape[1] != W:
+                try:
+                    import cv2
+                    mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_NEAREST)
+                except ImportError:
+                    from scipy.ndimage import zoom
+                    scale_h = H / mask.shape[0]
+                    scale_w = W / mask.shape[1]
+                    mask = zoom(mask, (scale_h, scale_w), order=0).astype(mask.dtype)
+            
             frame_masks.append(mask)
         all_masks.append(frame_masks)
-    # print("all_masks", len(all_masks))
-    all_masks = np.array(all_masks)  # (N, 8, H, W)
+    
+    all_masks = np.array(all_masks)  # (N, num_cams, H, W)
+    print(f"[INFO] Loaded masks with shape: {all_masks.shape}, dtype: {all_masks.dtype}")
     return all_masks
-
 def save_masks_to_h5(masks, h5_path, dataset_name="masks"):
     """
     Save masks numpy array to an h5 file with the given dataset name.
@@ -63,15 +148,17 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
     with h5py.File(h5_path, 'r') as f:
         imgs = f["imgs"][:]  # (N, num_cams, H, W, 3)
     num_frames, num_cams = imgs.shape[0], imgs.shape[1]
+    img_H, img_W = imgs.shape[2], imgs.shape[3]
 
     # Save masks as h5 file in mask_root_dir
-    masks = load_masks_from_folder(mask_root_dir, num_frames, num_cams)  # (N, 8, H, W)
+    # 使用图像尺寸作为期望的mask尺寸
+    masks = load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=img_H, expected_W=img_W)  # (N, num_cams, H, W)
     masks_h5_path = Path(mask_root_dir) / "masks.h5"
     save_masks_to_h5(masks, masks_h5_path, dataset_name="masks")
 
     # Save object masks if provided
     if object_mask_dir is not None:
-        object_masks = load_masks_from_folder(object_mask_dir, num_frames, num_cams)
+        object_masks = load_masks_from_folder(object_mask_dir, num_frames, num_cams, expected_H=img_H, expected_W=img_W)
         object_masks_h5_path = Path(object_mask_dir) / "object_masks.h5"
         save_masks_to_h5(object_masks, object_masks_h5_path, dataset_name="object_masks")
 
@@ -106,7 +193,8 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
         "have_hololens": False,
         "have_mano": True,
         "task_id": 1,
-        "thresholds": [-0.4, 0.3, -0.4, 0.3, -0.3, 0.4],
+        "thresholds": [-0.5, 0.35, -0.5, 0.3, -0.3, 0.4],
+        # "thresholds": [-1, 1, -1, 2, -2, 2],
         "calibration_yaml_path": calibration_yaml_path,
         "models_folder": models_folder,
         "betas": [

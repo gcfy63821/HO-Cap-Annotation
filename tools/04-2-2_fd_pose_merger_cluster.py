@@ -291,32 +291,39 @@ class FoundationPoseMerger:
         # Smooth the poses
         for idx in range(self._num_objects):
             poses_fixed = fd_poses_interp[idx]
-
-            poses_fixed = evaluate_and_fix_poses(
-                poses_fixed,
-                window_size=25,
-                rot_thresh=3.0,
-                trans_thresh=0.003,
-                seperate_rot_trans=True,
-                use_mean_pose=True,
-            )
+            #########################
+            # poses_fixed = evaluate_and_fix_poses(
+            #     poses_fixed,
+            #     window_size=25,
+            #     rot_thresh=3.0,
+            #     trans_thresh=0.003,
+            #     seperate_rot_trans=True,
+            #     use_mean_pose=True,
+            # )
             # 1, 0.5, 0.003
             # 0.03会太小
+            # poses_fixed = pose_jitter_smooth(
+            #     poses_fixed,
+            #     window_size=1,
+            #     rot_thresh=2.5,
+            #     trans_thresh=0.002,
+            # )
             poses_fixed = pose_jitter_smooth(
                 poses_fixed,
                 window_size=1,
                 rot_thresh=2.5,
-                trans_thresh=0.002,
+                trans_thresh=0.02,
             )
 
-            poses_fixed = evaluate_and_fix_poses(
-                poses_fixed,
-                window_size=15,
-                rot_thresh=2.5,
-                trans_thresh=0.004,
-                seperate_rot_trans=True,
-                use_mean_pose=True,
-            )
+            # poses_fixed = evaluate_and_fix_poses(
+            #     poses_fixed,
+            #     window_size=15,
+            #     rot_thresh=2.5,
+            #     trans_thresh=0.004,
+            #     seperate_rot_trans=True,
+            #     use_mean_pose=True,
+            # )
+            ####################################
             # 15, 2.0, 0.01, 
             # poses_fixed = evaluate_and_fix_poses(
             #     poses_fixed,
@@ -335,22 +342,23 @@ class FoundationPoseMerger:
             #     seperate_rot_trans=False,
             #     use_mean_pose=True,
             # )
-            # 1， 0.5， 0.001
-            poses_fixed = pose_jitter_smooth(
-                poses_fixed,
-                window_size=1,
-                rot_thresh=2.5,
-                trans_thresh=0.003,
-            )
 
-            poses_fixed = evaluate_and_fix_poses(
-                poses_fixed,
-                window_size=10, # 20
-                rot_thresh=2.0,
-                trans_thresh=0.003,
-                seperate_rot_trans=True,
-                use_mean_pose=False,
-            )
+            # 1， 0.5， 0.001
+            # poses_fixed = pose_jitter_smooth(
+            #     poses_fixed,
+            #     window_size=1,
+            #     rot_thresh=2.5,
+            #     trans_thresh=0.003,
+            # )
+
+            # poses_fixed = evaluate_and_fix_poses(
+            #     poses_fixed,
+            #     window_size=10, # 20
+            #     rot_thresh=2.0,
+            #     trans_thresh=0.003,
+            #     seperate_rot_trans=True,
+            #     use_mean_pose=False,
+            # )
 
             fd_poses_fixed.append(poses_fixed)
 

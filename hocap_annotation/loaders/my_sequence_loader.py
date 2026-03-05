@@ -73,6 +73,7 @@ class MySequenceLoader:
             with h5py.File(mask_root_dir / h5_name, 'r') as f:
                 masks = f[h5_dataset][:]
             print(f"[INFO] Loaded masks from {mask_root_dir / h5_name}")
+            print(f"[INFO] Masks shape: {masks.shape}")
             return masks
         all_masks = []
         for frame_idx in range(num_frames):
@@ -81,12 +82,17 @@ class MySequenceLoader:
                 cam_folder = mask_root_dir / f"cam{cam_idx:02d}.mp4"
                 npy_path = cam_folder / f"{frame_idx}.npy"
                 if not npy_path.exists():
-                    frame_masks.append(np.zeros((self._rs_height, self._rs_width), dtype=np.uint8))
-                    continue
+                    new_cam_folder = mask_root_dir / f"cam{cam_idx}_rgb"
+                    npy_path = new_cam_folder / f"{frame_idx}.npy"
+                    if not npy_path.exists():
+                        print(f"[WARNING] No mask file found for cam{cam_idx:02d} frame{frame_idx}, using zeros")
+                        frame_masks.append(np.zeros((self._rs_height, self._rs_width), dtype=np.uint8))
+                        continue
                 mask = np.load(npy_path)
                 frame_masks.append(mask)
             all_masks.append(frame_masks)
         all_masks = np.array(all_masks)  # (N, num_cams, H, W)
+        print(f"[INFO] Loaded masks from {mask_root_dir}, shape: {all_masks.shape}")
         return all_masks
 
     def _load_metadata(self):

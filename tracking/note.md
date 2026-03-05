@@ -1,0 +1,1 @@
+python tracking/visualize_depth_side_by_side.py   --input_folder /home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/videos_0121/squeegee_collect_sand/20260122_squeegee_collect_sand_from_table_20 --colormap grayscale

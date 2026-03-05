@@ -298,7 +298,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Use MyClusterLoader instead of IMGLoader
-    sequence_folder = f"/viscam/projects/robotool/data/{args.data_path}"
+    # sequence_folder = f"/viscam/projects/robotool/data/{args.data_path}"
+    sequence_folder = args.data_path
     loader = MyClusterLoader(sequence_folder)
 
     serials = loader.rs_serials
@@ -370,9 +371,8 @@ if __name__ == "__main__":
             poses_m = None
 
     print("Hand rendering enabled:", args.render_hands)
-
     multiprocessing.set_start_method('spawn', force=True)
-    pool = multiprocessing.Pool(processes=min(8, os.cpu_count() or 8))
+    pool = multiprocessing.Pool(processes=min(12, os.cpu_count() or 12))
     args_list2 = [
         (i, pose_data, None, None, [], orig_vertices, orig_mesh, loader, args.object_idx, args.render_hands, hand_data, mano_layer_left, mano_layer_right, poses_m)
         for i in range(num_frames)

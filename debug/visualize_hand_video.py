@@ -32,14 +32,13 @@ def load_mano_sequence(mano_file):
     print(f"[INFO] Loaded MANO sequence from {mano_file}, shape: {mano_data.shape}")
     return mano_data  # 返回形状为(2, N, 51)的数组
 
-def load_mano_beta():
-    file_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/mano/squeegee_1.yaml"
+def load_mano_beta(file_path):
     with open(file_path, 'r') as f:
         data = yaml.safe_load(f)
     return np.array(data['betas'], dtype=np.float32)
 
-def init_mano_group_layer():
-    betas = load_mano_beta()
+def init_mano_group_layer(betas):
+    # betas = load_mano_beta()
     mano_group_layer = MANOGroupLayer(['left','right'], [betas] * 2).to('cuda')
     return mano_group_layer
 
@@ -308,7 +307,12 @@ if __name__ == "__main__":
     # 加载MANO手部序列数据
     mano_file = f"{base_path}/processed/joint_pose_solver/poses_m.npy"
     # mano_data = load_mano_sequence(mano_file)
-    mano_layer = init_mano_group_layer()
+    # 从 meta.yaml 读取 betas
+    meta_file_path = f"{base_path}/meta.yaml"
+    with open(meta_file_path, 'r') as f:
+        meta = yaml.safe_load(f)
+    mano_beta = np.array(meta['betas'], dtype=np.float32)
+    mano_layer = init_mano_group_layer(mano_beta)
     verts_m, joints_m = load_mano_data(mano_file, mano_layer)
     subset_m = list(range(2))
     faces_m, _ = mano_layer.get_f_from_inds(subset_m)

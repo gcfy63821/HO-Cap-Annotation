@@ -1185,55 +1185,55 @@ def run_pose_estimation(
         ob_in_world_refined = quat_to_mat(curr_pose_w[:7])
         # --- END INTEGRATION ---
 
-        # # --- Outlier rejection and replacement ---
-        # ob_in_cam_poses = [ob_in_cam_poses_per_cam[serial_idx][-1] for serial_idx in range(len(valid_serials))]
-        # # Transform to world
-        # ob_in_world_poses = [valid_RTs[serial_idx] @ ob_in_cam_poses[serial_idx] for serial_idx in range(len(valid_serials))]
-        # translations = np.array([pose[:3, 3] for pose in ob_in_world_poses])
-        # rotations = np.array([pose[:3, :3] for pose in ob_in_world_poses])
+        # --- Outlier rejection and replacement ---
+        ob_in_cam_poses = [ob_in_cam_poses_per_cam[serial_idx][-1] for serial_idx in range(len(valid_serials))]
+        # Transform to world
+        ob_in_world_poses = [valid_RTs[serial_idx] @ ob_in_cam_poses[serial_idx] for serial_idx in range(len(valid_serials))]
+        translations = np.array([pose[:3, 3] for pose in ob_in_world_poses])
+        rotations = np.array([pose[:3, :3] for pose in ob_in_world_poses])
 
-        # # Use the integrated world result as reference
-        # ob_in_world_combined = get_consistent_pose_w(
-        #     mat_poses_c=ob_in_cam_poses,
-        #     cam_RTs=valid_RTs,
-        #     prev_poses_w=all_poses_w,
-        #     rot_thresh=rot_thresh,
-        #     trans_thresh=trans_thresh,
-        #     thresh_factor=1.0,
-        #     outlier_ratio=0.4,
-        #     x_threshold=x_threshold,
-        #     y_threshold=y_threshold,
-        #     z_threshold=z_threshold,
-        # )
-        # print(f"ob_in_world_combined: {ob_in_world_combined}")
-        # # Convert to 4x4
-        # q = ob_in_world_combined[:4]
-        # t = ob_in_world_combined[4:7]
-        # R_combined = R.from_quat(q).as_matrix()
-        # T_combined = np.eye(4)
-        # T_combined[:3, :3] = R_combined
-        # T_combined[:3, 3] = t
+        # Use the integrated world result as reference
+        ob_in_world_combined = get_consistent_pose_w(
+            mat_poses_c=ob_in_cam_poses,
+            cam_RTs=valid_RTs,
+            prev_poses_w=all_poses_w,
+            rot_thresh=rot_thresh,
+            trans_thresh=trans_thresh,
+            thresh_factor=1.0,
+            outlier_ratio=0.4,
+            x_threshold=x_threshold,
+            y_threshold=y_threshold,
+            z_threshold=z_threshold,
+        )
+        print(f"ob_in_world_combined: {ob_in_world_combined}")
+        # Convert to 4x4
+        q = ob_in_world_combined[:4]
+        t = ob_in_world_combined[4:7]
+        R_combined = R.from_quat(q).as_matrix()
+        T_combined = np.eye(4)
+        T_combined[:3, :3] = R_combined
+        T_combined[:3, 3] = t
 
 
-        # # Compute reference
-        # trans_ref = T_combined[:3, 3]
-        # rot_ref = T_combined[:3, :3]
+        # Compute reference
+        trans_ref = T_combined[:3, 3]
+        rot_ref = T_combined[:3, :3]
 
-        # trans_thresh_val = trans_thresh  # from args
-        # # rot_thresh_rad = np.deg2rad(rot_thresh)  # from args
-        # rot_thresh_rad = rot_thresh
+        trans_thresh_val = trans_thresh  # from args
+        # rot_thresh_rad = np.deg2rad(rot_thresh)  # from args
+        rot_thresh_rad = rot_thresh
 
-        # for serial_idx in range(len(valid_serials)):
-        #     trans = translations[serial_idx]
-        #     rot = rotations[serial_idx]
-        #     trans_dist = np.linalg.norm(trans - trans_ref)
-        #     rot_dist = geodesic_distance(rot, rot_ref)
-        #     if (trans_dist > trans_thresh_val or rot_dist > rot_thresh_rad) and frame_idx > 0:
-        #         print(f"Outlier detected! Frame {frame_idx}, Cam {serial_idx}: trans_dist: {trans_dist}, rot_dist: {rot_dist} , rot_thresh: {rot_thresh}, trans_thresh: {trans_thresh}")
+        for serial_idx in range(len(valid_serials)):
+            trans = translations[serial_idx]
+            rot = rotations[serial_idx]
+            trans_dist = np.linalg.norm(trans - trans_ref)
+            rot_dist = geodesic_distance(rot, rot_ref)
+            if (trans_dist > trans_thresh_val or rot_dist > rot_thresh_rad) and frame_idx > 0:
+                print(f"Outlier detected! Frame {frame_idx}, Cam {serial_idx}: trans_dist: {trans_dist}, rot_dist: {rot_dist} , rot_thresh: {rot_thresh}, trans_thresh: {trans_thresh}")
             
-        #         # print(f"Frame {frame_idx}, Cam {serial}: trans_dist: {trans_dist}, rot_dist: {rot_dist}")
-        #         # Outlier: replace with combined world result projected to this camera
-        #         ob_in_cam_poses_per_cam[serial_idx][-1] = np.linalg.inv(valid_RTs[serial_idx]) @ T_combined
+                # print(f"Frame {frame_idx}, Cam {serial}: trans_dist: {trans_dist}, rot_dist: {rot_dist}")
+                # Outlier: replace with combined world result projected to this camera
+                ob_in_cam_poses_per_cam[serial_idx][-1] = np.linalg.inv(valid_RTs[serial_idx]) @ T_combined
 
         
 

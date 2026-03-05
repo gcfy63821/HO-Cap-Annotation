@@ -94,12 +94,38 @@ class MyClusterLoader:
         for frame_idx in range(num_frames):
             frame_masks = []
             for cam_idx in range(num_cams):
-                cam_folder = mask_root_dir / f"cam{cam_idx:02d}.mp4"
-                npy_path = cam_folder / f"{frame_idx}.npy"
-                if not npy_path.exists():
+                cam_folder = mask_root_dir / f"cam{cam_idx}_rgb"
+                # Try different filename formats: 0000.npy, 0.npy
+                npy_path = None
+                for fmt in [f"{frame_idx:04d}.npy", f"{frame_idx}.npy"]:
+                    test_path = cam_folder / fmt
+                    if test_path.exists():
+                        npy_path = test_path
+                        break
+                
+                if npy_path is None or not npy_path.exists():
                     frame_masks.append(np.zeros((self._rs_height, self._rs_width), dtype=np.uint8))
                     continue
+                
                 mask = np.load(npy_path)
+                # Handle different mask shapes: (1, H, W) -> (H, W), or (H, W) -> (H, W)
+                if mask.ndim == 3:
+                    mask = mask.squeeze(0)  # Remove first dimension if present
+                elif mask.ndim != 2:
+                    print(f"[WARNING] Unexpected mask shape {mask.shape} from {npy_path}, using zeros")
+                    mask = np.zeros((self._rs_height, self._rs_width), dtype=np.uint8)
+                
+                # Resize mask if dimensions don't match
+                if mask.shape[0] != self._rs_height or mask.shape[1] != self._rs_width:
+                    try:
+                        import cv2
+                        mask = cv2.resize(mask, (self._rs_width, self._rs_height), interpolation=cv2.INTER_NEAREST)
+                    except ImportError:
+                        from scipy.ndimage import zoom
+                        scale_h = self._rs_height / mask.shape[0]
+                        scale_w = self._rs_width / mask.shape[1]
+                        mask = zoom(mask, (scale_h, scale_w), order=0).astype(mask.dtype)
+                
                 frame_masks.append(mask)
             all_masks.append(frame_masks)
         all_masks = np.array(all_masks)  # (N, num_cams, H, W)
@@ -353,8 +379,8 @@ class MyClusterLoader:
         """
         valid_serials = []
         for cam_idx, serial in enumerate(self._rs_serials):
-            cam_folder = self._seg_folder / f"cam{cam_idx:02d}.mp4"
-            npy_path = cam_folder / "0.npy"
+            cam_folder = self._seg_folder / f"cam{cam_idx}_rgb"
+            npy_path = cam_folder / "0000.npy"
             if npy_path.exists():
                 valid_serials.append(serial)
         return valid_serials

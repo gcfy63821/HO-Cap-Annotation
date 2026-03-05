@@ -186,7 +186,7 @@ class ObjectPoseSolver:
 
                 if self._use_object_masks:
                     seg_masks = [
-                        erode_mask(self._data_loader.get_mask_image(f_idx, s)[0], 3)
+                        erode_mask(self._data_loader.get_mask_image(f_idx, s), 3)
                         for s in self._rs_serials
                     ]
                     seg_masks = np.stack(seg_masks, axis=0).reshape(
