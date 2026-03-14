@@ -493,9 +493,8 @@ def get_consistent_pose_w(
     # Step 1: transform all poses to world space
     poses_w = transform_poses_to_world(mat_poses_c, cam_RTs, x_threshold, y_threshold, z_threshold)
 
-    
-    # if len(poses_w) == 0:
-    if len(poses_w) < 3:
+    # No valid poses from any camera: fall back to prediction from history
+    if len(poses_w) == 0:
         curr_rot = predict_current_rotation(
             [pose[:4] for pose in prev_poses_w], [pose[-1] for pose in prev_poses_w]
         )
@@ -504,10 +503,20 @@ def get_consistent_pose_w(
         )
         flag = 0
         return np.concatenate([curr_rot, curr_trans, [flag]], axis=0)
-    # elif len(poses_w) == 1:
-    #     curr_rot = poses_w[0][:4]
-    #     curr_trans = poses_w[0][4:]
-    #     return np.concatenate([curr_rot, curr_trans, [flag]], axis=0)
+
+    # Single camera (or only 1-2 valid poses): use directly without RANSAC
+    if len(poses_w) == 1:
+        curr_rot = poses_w[0][:4]
+        curr_trans = poses_w[0][4:]
+        return np.concatenate([curr_rot, curr_trans, [flag]], axis=0)
+
+    if len(poses_w) == 2:
+        # Average the two poses
+        q1, q2 = poses_w[0][:4], poses_w[1][:4]
+        avg_quat = np.mean([q1, q2], axis=0)
+        avg_quat /= np.linalg.norm(avg_quat)
+        avg_trans = np.mean([poses_w[0][4:], poses_w[1][4:]], axis=0)
+        return np.concatenate([avg_quat, avg_trans, [flag]], axis=0)
 
     # Stack poses for processing
     poses_w = np.stack(poses_w, axis=0)

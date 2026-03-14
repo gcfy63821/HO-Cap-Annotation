@@ -26,5 +26,6 @@ def inspect_obj_model(obj_path):
 if __name__ == "__main__":
     # 替换为你的 .obj 文件路径
     # obj_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/datasets/models/G01_1/cleaned_mesh_10000.obj"
-    obj_path = "/viscam/u/chenrq/0718_mesh_files/decim_mesh_files/peeler-decimated_to_80000_vertices-decimated_to_40000_vertices.obj"
+    # obj_path = "/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/models/yellow_hammer/cleaned_mesh_10000.obj"
+    obj_path = "/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/models/small_brush/cleaned_mesh_10000.obj"
     inspect_obj_model(obj_path)

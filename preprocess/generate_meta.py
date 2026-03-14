@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 import argparse
 
-def load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=None, expected_W=None):
+def load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=None, expected_W=None, start_frame=0):
     """
     根据mask根目录读取所有摄像头的mask，返回形状 (N, num_cams, H, W)
     mask_root_dir路径格式支持:
@@ -71,6 +71,8 @@ def load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=None,
     
     all_masks = []
     for frame_idx in range(num_frames):
+        # mask npy 文件使用原始视频帧号索引
+        original_frame_idx = frame_idx + start_frame
         frame_masks = []
         for cam_idx in range(num_cams):
             # 尝试多种路径格式
@@ -79,12 +81,12 @@ def load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=None,
                 mask_root_dir / f"cam{cam_idx}_rgb",
                 mask_root_dir / f"cam{cam_idx}.mp4",
             ]
-            
+
             npy_path = None
             for cam_folder in possible_cam_folders:
                 if cam_folder.exists():
-                    # 尝试多种文件名格式
-                    for fmt in [f"{frame_idx:04d}.npy", f"{frame_idx}.npy"]:
+                    # 尝试多种文件名格式（使用原始帧号）
+                    for fmt in [f"{original_frame_idx:04d}.npy", f"{original_frame_idx}.npy"]:
                         test_path = cam_folder / fmt
                         if test_path.exists():
                             npy_path = test_path
@@ -131,7 +133,7 @@ def save_masks_to_h5(masks, h5_path, dataset_name="masks"):
         f.create_dataset(dataset_name, data=masks, compression="gzip")
     print(f"[INFO] Saved {dataset_name} to {h5_path}")
 
-def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_root, subject_id="subject_5", tool_name="blue_scooper", models_folder="models", object_mask_dir=None):
+def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_root, subject_id="subject_5", tool_name="blue_scooper", models_folder="models", object_mask_dir=None, start_frame=0, thresholds=None):
     """
     Generate meta.yaml for a HO-Cap dataset sequence. Also saves masks as h5 files in their respective directories.
     Args:
@@ -151,14 +153,14 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
     img_H, img_W = imgs.shape[2], imgs.shape[3]
 
     # Save masks as h5 file in mask_root_dir
-    # 使用图像尺寸作为期望的mask尺寸
-    masks = load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=img_H, expected_W=img_W)  # (N, num_cams, H, W)
+    # 使用图像尺寸作为期望的mask尺寸，start_frame用于mask npy文件的偏移
+    masks = load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=img_H, expected_W=img_W, start_frame=start_frame)  # (N, num_cams, H, W)
     masks_h5_path = Path(mask_root_dir) / "masks.h5"
     save_masks_to_h5(masks, masks_h5_path, dataset_name="masks")
 
     # Save object masks if provided
     if object_mask_dir is not None:
-        object_masks = load_masks_from_folder(object_mask_dir, num_frames, num_cams, expected_H=img_H, expected_W=img_W)
+        object_masks = load_masks_from_folder(object_mask_dir, num_frames, num_cams, expected_H=img_H, expected_W=img_W, start_frame=start_frame)
         object_masks_h5_path = Path(object_mask_dir) / "object_masks.h5"
         save_masks_to_h5(object_masks, object_masks_h5_path, dataset_name="object_masks")
 
@@ -177,6 +179,7 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
     # Compose meta.yaml
     meta = {
         "num_frames": int(num_frames),
+        "start_frame": int(start_frame),
         "object_ids": [tool_name],
         "mano_sides": ['left', 'right'],
         "subject_id": subject_id,
@@ -193,8 +196,7 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
         "have_hololens": False,
         "have_mano": True,
         "task_id": 1,
-        "thresholds": [-0.5, 0.35, -0.5, 0.3, -0.3, 0.4],
-        # "thresholds": [-1, 1, -1, 2, -2, 2],
+        "thresholds": thresholds if thresholds is not None else [-0.5, 0.35, -0.5, 0.4, -0.3, 0.4],
         "calibration_yaml_path": calibration_yaml_path,
         "models_folder": models_folder,
         "betas": [
@@ -222,6 +224,13 @@ if __name__ == "__main__":
     parser.add_argument('--models_folder', type=str, default='/path/to/models', help='Path to models folder (fixed)')
     parser.add_argument('--subject_id', type=str, default=None, help='Subject ID (default: sequence_name)')
     parser.add_argument('--tool_name', type=str, default=None, help='Tool/object name (default: sequence_name)')
+    parser.add_argument('--start_frame', type=int, default=0, help='Start frame index in original video (saved to meta.yaml for mask offset)')
+    parser.add_argument('--x_min', type=float, default=-0.5, help='Threshold x min (default: -0.5)')
+    parser.add_argument('--x_max', type=float, default=0.35, help='Threshold x max (default: 0.35)')
+    parser.add_argument('--y_min', type=float, default=-0.5, help='Threshold y min (default: -0.5)')
+    parser.add_argument('--y_max', type=float, default=0.4, help='Threshold y max (default: 0.4)')
+    parser.add_argument('--z_min', type=float, default=-0.3, help='Threshold z min (default: -0.3)')
+    parser.add_argument('--z_max', type=float, default=0.4, help='Threshold z max (default: 0.4)')
     args = parser.parse_args()
 
     # Infer folder_name, task_name, and sequence_name from h5_path
@@ -257,5 +266,7 @@ if __name__ == "__main__":
         subject_id=subject_id,
         tool_name=tool_name,
         models_folder=args.models_folder,
-        object_mask_dir=str(object_mask_dir) if object_mask_dir is not None else None
+        object_mask_dir=str(object_mask_dir) if object_mask_dir is not None else None,
+        start_frame=args.start_frame,
+        thresholds=[args.x_min, args.x_max, args.y_min, args.y_max, args.z_min, args.z_max],
     )

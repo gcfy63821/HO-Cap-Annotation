@@ -77,7 +77,6 @@ def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer_right, device, m
     verts -= root_trans
     verts[:, 0] *= -1
     verts = verts @ base_rot.T
-    verts = verts @ torch.tensor(R.from_euler('x', 180, degrees=True).as_matrix(), dtype=verts.dtype, device=verts.device)
     verts += translation
     
     # Get faces from the RIGHT layer (since we used it for reconstruction)
@@ -319,7 +318,7 @@ class JointPoseSolver:
             if "right" in self._mano_sides:
                 # Right hand only
                 right_pose = pose_m[0]  # (1, 51)
-                right_translation = torch.tensor(self._hand_data['right_hand_translation'][frame_idx]).to(device).unsqueeze(0)
+                right_translation = torch.tensor(self._hand_data['right_hand_translation'][frame_idx]).to(device).float().unsqueeze(0)
                 right_beta = torch.tensor(self._hand_data['left_hand_beta']).to(device).float()
                 
                 verts_right, joints_right = self._mano_layer_right(right_pose, right_beta)
@@ -336,31 +335,32 @@ class JointPoseSolver:
             else:
                 # Left hand only
                 left_pose = pose_m[0]  # (1, 51)
-                left_translation = torch.tensor(self._hand_data['left_hand_translation'][frame_idx]).to(device).unsqueeze(0)
+                left_translation = torch.tensor(self._hand_data['left_hand_translation'][frame_idx]).to(device).float().unsqueeze(0)
                 left_beta = torch.tensor(self._hand_data['left_hand_beta']).to(device).float()
-                
+
                 verts_left, joints_left = self._mano_layer_right(left_pose, left_beta)
                 verts_left = verts_left[0] / 1000
                 joints_left = joints_left[0] / 1000
-                
+
                 root_trans_left = joints_left[0].clone().detach()
                 verts_left -= root_trans_left
                 verts_left[:, 0] *= -1
-                
+
                 if self._hand_data['left_hand_base_rot'].ndim == 3:
-                    base_rot = torch.tensor(self._hand_data['left_hand_base_rot'][frame_idx]).to(device)
+                    rot_idx = min(frame_idx, self._hand_data['left_hand_base_rot'].shape[0] - 1)
+                    base_rot = torch.tensor(self._hand_data['left_hand_base_rot'][rot_idx]).to(device).float()
                     verts_left = verts_left @ base_rot.T
-                
+
                 verts_left += left_translation
                 verts = verts_left
                 faces = self._mano_layer_left.th_faces.detach().cpu().numpy()
                 return verts, faces
-        
+
         # Both hands available
         left_pose = pose_m[0]  # (1, 51)
         right_pose = pose_m[1]  # (1, 51)
-        left_translation = torch.tensor(self._hand_data['left_hand_translation'][frame_idx]).to(device).unsqueeze(0)
-        right_translation = torch.tensor(self._hand_data['right_hand_translation'][frame_idx]).to(device).unsqueeze(0)
+        left_translation = torch.tensor(self._hand_data['left_hand_translation'][frame_idx]).to(device).float().unsqueeze(0)
+        right_translation = torch.tensor(self._hand_data['right_hand_translation'][frame_idx]).to(device).float().unsqueeze(0)
         
         # Both hands use left_hand_beta (following visualize_wilor_hand_video.py pattern)
         left_beta = torch.tensor(self._hand_data['left_hand_beta']).to(device).float()
@@ -385,7 +385,8 @@ class JointPoseSolver:
         # Apply left hand specific transformations (mirroring and rotation)
         verts_left[:, 0] *= -1
         if self._hand_data['left_hand_base_rot'].ndim == 3:
-            base_rot = torch.tensor(self._hand_data['left_hand_base_rot'][frame_idx]).to(device)
+            rot_idx = min(frame_idx, self._hand_data['left_hand_base_rot'].shape[0] - 1)
+            base_rot = torch.tensor(self._hand_data['left_hand_base_rot'][rot_idx]).to(device).float()
             verts_left = verts_left @ base_rot.T
         
         # Apply translations

@@ -16,52 +16,50 @@ from manopth.manolayer import ManoLayer
 import math
 
 
-def extract_images_from_h5(h5_path, output_dir, num_frames, num_cams):
+def extract_images_from_h5(h5_path, output_dir, num_frames, num_cams, cam_h5_indices=None):
     """
-    从 h5 文件中提取所有图像并保存为图片文件，避免后续的 GPU/CPU 复制。
-    
-    Args:
-        h5_path: h5 文件路径
-        output_dir: 输出目录，将创建 color_XX 子目录
-        num_frames: 帧数
-        num_cams: 相机数量
+    从 h5 文件中提取所有图像并保存为图片文件。
+    逐相机提取避免内存溢出，支持 h5 相机索引映射。
     """
+    if cam_h5_indices is None:
+        cam_h5_indices = list(range(num_cams))
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 检查是否已经提取过
+
+    cache_key = f"{num_frames},{num_cams},{h5_path},{cam_h5_indices}"
     check_file = output_dir / ".extracted"
     if check_file.exists():
-        print(f"[INFO] Images already extracted to {output_dir}, skipping extraction.")
-        return
-    
-    print(f"[INFO] Extracting images from {h5_path} to {output_dir}...")
-    
+        try:
+            if check_file.read_text().strip() == cache_key:
+                print(f"[INFO] Images already extracted to {output_dir}, skipping extraction.")
+                return
+            else:
+                print(f"[INFO] Cache mismatch, re-extracting...")
+                import shutil
+                shutil.rmtree(output_dir)
+                output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            import shutil
+            shutil.rmtree(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[INFO] Extracting images from {h5_path} (h5 indices: {cam_h5_indices})...")
+
     with h5py.File(h5_path, 'r') as f:
-        colors = f["imgs"]  # (N, num_cams, H, W, 3)
-        
-        # 为每个相机创建目录
-        for cam_idx in range(num_cams):
-            cam_dir = output_dir / f"color_{cam_idx:02d}"
-            cam_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 批量提取图像
+        colors = f["imgs"]
         batch_size = 100
-        for batch_start in tqdm(range(0, num_frames, batch_size), desc="Extracting images"):
-            batch_end = min(batch_start + batch_size, num_frames)
-            batch_colors = colors[batch_start:batch_end]  # (batch_size, num_cams, H, W, 3)
-            
-            for frame_idx in range(batch_start, batch_end):
-                local_idx = frame_idx - batch_start
-                for cam_idx in range(num_cams):
-                    img = batch_colors[local_idx, cam_idx]  # (H, W, 3)
-                    # 转换为 BGR (OpenCV 格式)
-                    img_bgr = img[..., ::-1].copy()
-                    cam_dir = output_dir / f"color_{cam_idx:02d}"
+        for active_idx, h5_idx in enumerate(cam_h5_indices):
+            cam_dir = output_dir / f"color_{active_idx:02d}"
+            cam_dir.mkdir(parents=True, exist_ok=True)
+            for batch_start in tqdm(range(0, num_frames, batch_size),
+                                     desc=f"Extracting cam {active_idx:02d} (h5 idx {h5_idx})"):
+                batch_end = min(batch_start + batch_size, num_frames)
+                batch_colors = colors[batch_start:batch_end, h5_idx]
+                for i, frame_idx in enumerate(range(batch_start, batch_end)):
+                    img_bgr = batch_colors[i][..., ::-1].copy()
                     cv2.imwrite(str(cam_dir / f"color_{frame_idx:06d}.jpg"), img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
-    
-    # 创建标记文件
-    check_file.touch()
+
+    check_file.write_text(cache_key)
     print(f"[INFO] Images extracted successfully to {output_dir}")
 
 
@@ -170,47 +168,70 @@ def init_mano_layers(hand_data):
     return mano_layer_left, mano_layer_right
 
 
-def reconstruct_hand_mesh_fast(hand_data, frame_idx, mano_layer, pose, side='left'):
+def reconstruct_left_hand_mesh_fast(hand_data, frame_idx, mano_layer_right):
     """
-    快速重建手部网格（优化版本，减少内存拷贝）
+    重建左手网格，遵循 wilor 规则：使用 RIGHT MANO layer，翻转 x，旋转 180° 绕 x 轴。
     """
     try:
-        pose_tensor = torch.tensor(pose, dtype=torch.float32).to('cuda').unsqueeze(0)
-        
-        if side == 'left':
-            translation = torch.tensor(hand_data['left_hand_translation'][frame_idx], dtype=torch.float32).to('cuda').unsqueeze(0)
-            hand_beta = torch.tensor(hand_data['left_hand_beta'], dtype=torch.float32).to('cuda')
-            if hand_data['left_hand_base_rot'].ndim == 3:
-                base_rot = torch.tensor(hand_data['left_hand_base_rot'][frame_idx], dtype=torch.float32).to('cuda')
-            else:
-                base_rot = torch.eye(3, dtype=torch.float32).to('cuda')
+        if len(hand_data['left_hand_pose']) == 0 or frame_idx >= len(hand_data['left_hand_pose']):
+            return None
+        pose = torch.tensor(hand_data['left_hand_pose'][frame_idx], dtype=torch.float32).to('cuda').unsqueeze(0)
+        translation = torch.tensor(hand_data['left_hand_translation'][frame_idx], dtype=torch.float32).to('cuda').unsqueeze(0)
+        hand_beta = torch.tensor(hand_data['left_hand_beta'], dtype=torch.float32).to('cuda')
+        if hand_data['left_hand_base_rot'].ndim == 3:
+            base_rot = torch.tensor(hand_data['left_hand_base_rot'][frame_idx], dtype=torch.float32).to('cuda')
         else:
-            translation = torch.tensor(hand_data['right_hand_translation'][frame_idx], dtype=torch.float32).to('cuda').unsqueeze(0)
-            hand_beta = torch.tensor(hand_data['right_hand_beta'], dtype=torch.float32).to('cuda')
             base_rot = torch.eye(3, dtype=torch.float32).to('cuda')
-        
-        verts, joints = mano_layer(pose_tensor, hand_beta.float())
+
+        # Use RIGHT MANO layer for left hand (intentional, matches wilor pattern)
+        verts, joints = mano_layer_right(pose, hand_beta.float())
         verts = verts[0] / 1000.0
         joints = joints[0] / 1000.0
-        
+
         if verts.size(0) == 1:
             verts = verts.squeeze(0)
             joints = joints.squeeze(0)
-        
+
         root_trans = joints[0].clone()
         verts = verts - root_trans
-        
-        if side == 'left':
-            verts[:, 0] *= -1
-            verts = verts @ base_rot.T
-        
+        verts[:, 0] *= -1
+        verts = verts @ base_rot.T
         verts = verts + translation
-        
-        # 直接返回顶点，不创建完整的 mesh 对象
+
         return verts.detach().cpu().numpy()
     except Exception as e:
         if frame_idx < 5:
-            print(f"Error in reconstruct_hand_mesh_fast for frame {frame_idx}, side {side}: {e}")
+            print(f"Error in reconstruct_left_hand_mesh_fast for frame {frame_idx}: {e}")
+        return None
+
+
+def reconstruct_right_hand_mesh_fast(hand_data, frame_idx, mano_layer_right):
+    """
+    重建右手网格，使用 RIGHT MANO layer。
+    """
+    try:
+        if len(hand_data['right_hand_pose']) == 0 or frame_idx >= len(hand_data['right_hand_pose']):
+            return None
+        pose = torch.tensor(hand_data['right_hand_pose'][frame_idx], dtype=torch.float32).to('cuda').unsqueeze(0)
+        translation = torch.tensor(hand_data['right_hand_translation'][frame_idx], dtype=torch.float32).to('cuda').unsqueeze(0)
+        hand_beta = torch.tensor(hand_data['right_hand_beta'], dtype=torch.float32).to('cuda')
+
+        verts, joints = mano_layer_right(pose, hand_beta.float())
+        verts = verts[0] / 1000.0
+        joints = joints[0] / 1000.0
+
+        if verts.size(0) == 1:
+            verts = verts.squeeze(0)
+            joints = joints.squeeze(0)
+
+        root_trans = joints[0].clone()
+        verts = verts - root_trans
+        verts = verts + translation
+
+        return verts.detach().cpu().numpy()
+    except Exception as e:
+        if frame_idx < 5:
+            print(f"Error in reconstruct_right_hand_mesh_fast for frame {frame_idx}: {e}")
         return None
 
 
@@ -218,9 +239,9 @@ def process_frame_fast(args):
     """
     快速处理单帧（优化版本）
     """
-    (i, pose_data, orig_vertices, orig_mesh_faces, 
+    (i, pose_data, orig_vertices, orig_mesh_faces,
      image_dir, mask_data, serials, Ks_list, extrinsics_list,
-     object_idx, render_hands, hand_data, mano_layer_left, mano_layer_right, poses_m,
+     object_idx, render_hands, hand_data, mano_layer_left, mano_layer_right,
      outlier_idxs, colors_m, W, H, grid_shape) = args
     
     frame_tiles = []
@@ -248,14 +269,12 @@ def process_frame_fast(args):
     right_hand_faces = None
     
     if render_hands and hand_data is not None and mano_layer_left is not None and mano_layer_right is not None:
-        left_pose = poses_m[0][i]
-        right_pose = poses_m[1][i]
-        
         try:
-            left_hand_vertices_world = reconstruct_hand_mesh_fast(hand_data, i, mano_layer_left, left_pose, 'left')
-            right_hand_vertices_world = reconstruct_hand_mesh_fast(hand_data, i, mano_layer_right, right_pose, 'right')
-            
-            # 获取手部 faces（只需要获取一次，可以预计算）
+            # Left hand: use RIGHT MANO layer (wilor pattern)
+            left_hand_vertices_world = reconstruct_left_hand_mesh_fast(hand_data, i, mano_layer_right)
+            # Right hand: use RIGHT MANO layer
+            right_hand_vertices_world = reconstruct_right_hand_mesh_fast(hand_data, i, mano_layer_right)
+
             if left_hand_vertices_world is not None:
                 left_hand_faces = mano_layer_left.th_faces.detach().cpu().numpy()
             if right_hand_vertices_world is not None:
@@ -300,7 +319,9 @@ def process_frame_fast(args):
         K = Ks_list[serial_idx]
         pts = project_points(obj_vertices_cam, K)
         pts = pts[(pts[:, 0] >= 0) & (pts[:, 0] < W) & (pts[:, 1] >= 0) & (pts[:, 1] < H)]
-        pts = pts.astype(np.int32)[::200]  # 降采样以减少绘制点数
+        pts = pts.astype(np.int32)
+        if len(pts) > 1000:
+            pts = pts[::200]  # 降采样以减少绘制点数
         
         vis = sam_overlay.copy()
         color_dot = (0, 0, 255) if i in outlier_idxs else colors_m[1]
@@ -372,7 +393,8 @@ if __name__ == "__main__":
     image_cache_dir = loader._data_folder / "image_cache"
     
     if args.extract_images or not (image_cache_dir / ".extracted").exists():
-        extract_images_from_h5(h5_path, image_cache_dir, num_frames, num_cams)
+        extract_images_from_h5(h5_path, image_cache_dir, num_frames, num_cams,
+                               cam_h5_indices=loader.cam_h5_indices)
     
     # 加载 mask 数据到内存（一次性加载，避免重复读取）
     print("[INFO] Loading mask data into memory...")
@@ -461,21 +483,12 @@ if __name__ == "__main__":
     hand_data = None
     mano_layer_left = None
     mano_layer_right = None
-    poses_m = None
     if args.render_hands:
-        mano_file = str(annotated_base / "processed/joint_pose_solver/poses_m.npy")
         pkl_file_path = str(annotated_base / "result_hand_optimized.pkl")
         try:
             hand_data = load_pkl_and_get_hand_data(pkl_file_path)
             mano_layer_left, mano_layer_right = init_mano_layers(hand_data)
-            poses_m = np.load(mano_file)
-            # 重新排列为 [left, right] 顺序
-            mano_sides = ['left', 'right']
-            poses_m = np.stack(
-                [poses_m[0 if side == "right" else 1] for side in mano_sides], axis=0
-            )
             print(f"[INFO] Loaded hand data from {pkl_file_path}")
-            print(f"[INFO] Loaded poses_m from {mano_file}, shape: {poses_m.shape}")
         except Exception as e:
             print(f"Warning: Failed to load hand data: {e}")
             print("Hand rendering will be disabled")
@@ -483,7 +496,6 @@ if __name__ == "__main__":
             hand_data = None
             mano_layer_left = None
             mano_layer_right = None
-            poses_m = None
 
     colors_m = [(0.0, 1.0, 1.0), (0.9803921568627451, 0.2901960784313726, 0.16862745098039217)]
     outlier_idxs = []
@@ -519,7 +531,7 @@ if __name__ == "__main__":
             args_tuple = (
                 i, pose_data, orig_vertices, orig_mesh_faces,
                 image_cache_dir, mask_data, serials, Ks_list, extrinsics_list,
-                args.object_idx, args.render_hands, hand_data, mano_layer_left, mano_layer_right, poses_m,
+                args.object_idx, args.render_hands, hand_data, mano_layer_left, mano_layer_right,
                 outlier_idxs, colors_m, W, H, grid_shape
             )
             frame = process_frame_fast(args_tuple)
@@ -538,7 +550,7 @@ if __name__ == "__main__":
         args_list = [
             (i, pose_data, orig_vertices, orig_mesh_faces,
              image_cache_dir, mask_data, serials, Ks_list, extrinsics_list,
-             args.object_idx, args.render_hands, hand_data, mano_layer_left, mano_layer_right, poses_m,
+             args.object_idx, args.render_hands, hand_data, mano_layer_left, mano_layer_right,
              outlier_idxs, colors_m, W, H, grid_shape)
             for i in range(num_frames)
         ]

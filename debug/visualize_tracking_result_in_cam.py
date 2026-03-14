@@ -33,46 +33,65 @@ def project_points(vertices, K):
     return pts
 
 
-def extract_images_from_h5(h5_path, output_dir, num_frames, num_cams):
+def extract_images_from_h5(h5_path, output_dir, num_frames, num_cams, cam_h5_indices=None):
     """
     从 h5 文件中提取所有图像并保存为图片文件，避免后续的 GPU/CPU 复制。
+    Args:
+        cam_h5_indices: h5 中的相机索引列表 (e.g. [2,3,4,5,6,7])。
+                        如果为 None，使用 range(num_cams)。
+    缓存目录结构: color_{active_idx:02d}/color_{frame:06d}.jpg
+    其中 active_idx 是活动相机的顺序索引 (0, 1, 2...)。
     """
+    if cam_h5_indices is None:
+        cam_h5_indices = list(range(num_cams))
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 检查是否已经提取过
+
+    # 检查是否已经提取过，并验证参数是否匹配
+    cache_key = f"{num_frames},{num_cams},{h5_path},{cam_h5_indices}"
     check_file = output_dir / ".extracted"
     if check_file.exists():
-        print(f"[INFO] Images already extracted to {output_dir}, skipping extraction.")
-        return
-    
-    print(f"[INFO] Extracting images from {h5_path} to {output_dir}...")
-    
+        try:
+            cached = check_file.read_text().strip()
+            if cached == cache_key:
+                print(f"[INFO] Images already extracted to {output_dir}, skipping extraction.")
+                return
+            else:
+                print(f"[INFO] Cache mismatch, re-extracting...")
+                import shutil
+                shutil.rmtree(output_dir)
+                output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            print(f"[INFO] Invalid cache marker, re-extracting...")
+            import shutil
+            shutil.rmtree(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[INFO] Extracting images from {h5_path} to {output_dir} (h5 indices: {cam_h5_indices})...")
+
     with h5py.File(h5_path, 'r') as f:
-        colors = f["imgs"]  # (N, num_cams, H, W, 3)
-        
-        # 为每个相机创建目录
-        for cam_idx in range(num_cams):
-            cam_dir = output_dir / f"color_{cam_idx:02d}"
+        colors = f["imgs"]  # (N, all_cams, H, W, 3)
+
+        # 为每个活动相机创建目录，用顺序索引命名
+        for active_idx in range(num_cams):
+            cam_dir = output_dir / f"color_{active_idx:02d}"
             cam_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 批量提取图像
+
+        # 逐相机提取图像，从 h5 中读取正确的相机列
         batch_size = 100
-        for batch_start in tqdm(range(0, num_frames, batch_size), desc="Extracting images"):
-            batch_end = min(batch_start + batch_size, num_frames)
-            batch_colors = colors[batch_start:batch_end]  # (batch_size, num_cams, H, W, 3)
-            
-            for frame_idx in range(batch_start, batch_end):
-                local_idx = frame_idx - batch_start
-                for cam_idx in range(num_cams):
-                    img = batch_colors[local_idx, cam_idx]  # (H, W, 3)
-                    # 转换为 BGR (OpenCV 格式)
-                    img_bgr = img[..., ::-1].copy()
-                    cam_dir = output_dir / f"color_{cam_idx:02d}"
+        for active_idx, h5_idx in enumerate(cam_h5_indices):
+            cam_dir = output_dir / f"color_{active_idx:02d}"
+            for batch_start in tqdm(range(0, num_frames, batch_size),
+                                     desc=f"Extracting cam {active_idx:02d} (h5 idx {h5_idx})"):
+                batch_end = min(batch_start + batch_size, num_frames)
+                # 从 h5 中读取正确的相机列
+                batch_colors = colors[batch_start:batch_end, h5_idx]
+                for i, frame_idx in enumerate(range(batch_start, batch_end)):
+                    img_bgr = batch_colors[i][..., ::-1].copy()
                     cv2.imwrite(str(cam_dir / f"color_{frame_idx:06d}.jpg"), img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
-    
-    # 创建标记文件
-    check_file.touch()
+
+    # 创建标记文件，记录提取参数用于缓存校验
+    check_file.write_text(cache_key)
     print(f"[INFO] Images extracted successfully to {output_dir}")
 
 
@@ -108,7 +127,7 @@ def process_frame_single_cam(args):
     """
     处理单帧单相机：从txt文件加载位姿（在相机坐标系中），并可视化
     """
-    (frame_idx, cam_idx, image_dir, mask_data, depth_data, K, 
+    (frame_idx, cam_idx, cam_h5_idx, image_dir, mask_data, depth_data, K,
      ob_in_cam_root, object_idx, orig_vertices, orig_mesh_faces,
      W, H, background_type, depth_min, depth_max) = args
     
@@ -151,8 +170,8 @@ def process_frame_single_cam(args):
     sam_overlay[sam_mask > 0] = [0, 0, 255]
     vis = cv2.addWeighted(vis, 0.7, sam_overlay, 0.3, 0)
     
-    # 加载位姿（在相机坐标系中）
-    pose_path = ob_in_cam_root / f"{cam_idx:02d}" / f"{frame_idx:06d}.txt"
+    # 加载位姿（在相机坐标系中），目录名使用校准索引
+    pose_path = ob_in_cam_root / f"{cam_h5_idx:02d}" / f"{frame_idx:06d}.txt"
     if pose_path.exists():
         ob_in_cam = load_pose_txt(pose_path)
         
@@ -190,7 +209,7 @@ def process_frame_single_cam(args):
                         cv2.polylines(vis, [pts_2d], isClosed=True, color=(0, 255, 0), thickness=1)
     
     # 添加帧号和相机信息
-    cv2.putText(vis, f"Frame: {frame_idx:06d} | Cam: {cam_idx:02d}", 
+    cv2.putText(vis, f"Frame: {frame_idx:06d} | Cam: {cam_h5_idx:02d}",
                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     
     return vis
@@ -239,7 +258,8 @@ if __name__ == "__main__":
     
     if args.background == 'rgb':
         if args.extract_images or not (image_cache_dir / ".extracted").exists():
-            extract_images_from_h5(h5_path, image_cache_dir, num_frames, num_cams)
+            extract_images_from_h5(h5_path, image_cache_dir, num_frames, num_cams,
+                                   cam_h5_indices=loader.cam_h5_indices)
     else:
         print(f"[INFO] Using depth background, skipping RGB image extraction")
     
@@ -324,8 +344,10 @@ if __name__ == "__main__":
     cam_indices = [args.cam_idx] if args.cam_idx is not None else list(range(num_cams))
     
     # 为每个相机生成视频
+    cam_h5_indices = loader.cam_h5_indices
     for cam_idx in cam_indices:
-        print(f"\n[INFO] Processing camera {cam_idx:02d}...")
+        cam_h5_idx = cam_h5_indices[cam_idx]
+        print(f"\n[INFO] Processing camera {cam_idx:02d} (h5 idx {cam_h5_idx})...")
         
         output_path = Path(f"debug_output/tracking_result_in_cam_new")
         output_path.mkdir(parents=True, exist_ok=True)
@@ -365,7 +387,7 @@ if __name__ == "__main__":
             print(f"[INFO] Using single-process mode for camera {cam_idx:02d}")
             for frame_idx in tqdm(range(num_frames), desc=f"Processing cam {cam_idx:02d}"):
                 args_tuple = (
-                    frame_idx, cam_idx, image_cache_dir, mask_data, depth_data, K,
+                    frame_idx, cam_idx, cam_h5_idx, image_cache_dir, mask_data, depth_data, K,
                     ob_in_cam_root, args.object_idx, orig_vertices, orig_mesh_faces,
                     W, H, args.background, depth_min, depth_max
                 )

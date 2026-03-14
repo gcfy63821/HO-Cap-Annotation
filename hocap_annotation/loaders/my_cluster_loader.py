@@ -59,11 +59,13 @@ class MyClusterLoader:
         assert len(h5_files) > 0, f"No .h5 file found in {self._data_folder}"
         h5_path = h5_files[0]
         with h5py.File(h5_path, 'r') as f:
-            self._all_colors = f["imgs"][:]  # (N, num_cams, H, W, 3)
-            self._all_depths = f["depths"][:]  # (N, num_cams, H, W)
+            # Select only active cameras from h5 using calibration indices
+            self._all_colors = f["imgs"][:, self._cam_h5_indices]  # (N, active_cams, H, W, 3)
+            self._all_depths = f["depths"][:, self._cam_h5_indices]  # (N, active_cams, H, W)
             self._all_depths = self._all_depths * 0.001
         self._num_frames, self._num_cams = self._all_colors.shape[:2]
         self._rs_height, self._rs_width = self._all_colors.shape[2:4]
+        print(f"[INFO] Loaded h5: {self._num_frames} frames, {self._num_cams} active cameras (from h5 indices {self._cam_h5_indices})")
         self._all_masks = self._load_masks_from_folder(self._seg_folder, self._num_frames, self._num_cams, h5_name="masks.h5", h5_dataset="masks")
         object_mask_dir = self._object_masks_folder
         if object_mask_dir.exists():
@@ -86,18 +88,22 @@ class MyClusterLoader:
         mask_root_dir = Path(mask_root_dir)
         if h5_name is not None and (mask_root_dir / h5_name).exists():
             with h5py.File(mask_root_dir / h5_name, 'r') as f:
-                masks = f[h5_dataset][:]
-            print(f"[INFO] Loaded masks from {mask_root_dir / h5_name}")
+                masks = f[h5_dataset][:, self._cam_h5_indices]  # select active cameras
+            print(f"[INFO] Loaded masks from {mask_root_dir / h5_name}, selected h5 indices {self._cam_h5_indices}, shape: {masks.shape}")
             return masks
         # fallback to npy loading
+        # mask npy files are indexed by original video frame number
+        # npy folder names use original calibration index (e.g. cam2_rgb), not active camera index
         all_masks = []
         for frame_idx in range(num_frames):
+            original_frame_idx = frame_idx + self._start_frame
             frame_masks = []
             for cam_idx in range(num_cams):
-                cam_folder = mask_root_dir / f"cam{cam_idx}_rgb"
-                # Try different filename formats: 0000.npy, 0.npy
+                h5_idx = self._cam_h5_indices[cam_idx]
+                cam_folder = mask_root_dir / f"cam{h5_idx}_rgb"
+                # Try different filename formats using original frame index
                 npy_path = None
-                for fmt in [f"{frame_idx:04d}.npy", f"{frame_idx}.npy"]:
+                for fmt in [f"{original_frame_idx:04d}.npy", f"{original_frame_idx}.npy"]:
                     test_path = cam_folder / fmt
                     if test_path.exists():
                         npy_path = test_path
@@ -213,13 +219,28 @@ class MyClusterLoader:
         self._models_folder = Path(data["models_folder"])
         self._calibration_yaml_path = Path(data["calibration_yaml_path"])
         self._load_camera_params_from_yaml()
+        # _rs_serials now has ALL cameras from calibration YAML (e.g. ['00'..'07'])
+        # _rs_Ks, _extr2world, _extr2world_inv indexed by calibration order
+        all_calib_serials = list(self._rs_serials)  # save full list
+
         self._num_frames = data["num_frames"]
         self._object_ids = data["object_ids"]
         self._mano_sides = data["mano_sides"]
         self._subject_id = data["subject_id"]
-        self._rs_serials = data["realsense"]["serials"]
+        meta_serials = data["realsense"]["serials"]
         self._rs_width = data["realsense"]["width"]
         self._rs_height = data["realsense"]["height"]
+
+        # Compute mapping: meta serial -> h5/calibration index
+        # e.g. meta_serials=['02','03',...'07'] -> _cam_h5_indices=[2,3,...,7]
+        self._cam_h5_indices = [all_calib_serials.index(s) for s in meta_serials]
+        print(f"[INFO] Active cameras: {meta_serials}, h5 indices: {self._cam_h5_indices}")
+
+        # Filter Ks and extrinsics to only active cameras
+        self._rs_Ks = self._rs_Ks[self._cam_h5_indices]
+        self._extr2world = self._extr2world[self._cam_h5_indices]
+        self._extr2world_inv = self._extr2world_inv[self._cam_h5_indices]
+        self._rs_serials = meta_serials
         self.have_hl = data["have_hololens"]
         self.have_mano = data["have_mano"]
         if self.have_hl:
@@ -235,7 +256,8 @@ class MyClusterLoader:
             for obj_id in self._object_ids
         ]
         self._thresholds = data.get("thresholds", [-0.3, 0.3, -0.3, 0.3, -0.2, 0.4])
-        print(f"[DEBUG] thresholds: {self._thresholds}")
+        self._start_frame = data.get("start_frame", 0)
+        print(f"[DEBUG] thresholds: {self._thresholds}, start_frame: {self._start_frame}")
         if self.have_mano:
             self._mano_beta = np.array(data["betas"], dtype=np.float32)
 
@@ -373,15 +395,22 @@ class MyClusterLoader:
 
     def get_valid_seg_serials(self):
         """
-        Get list of camera serials for which segmentation masks exist (checks for 0.npy).
+        Get list of camera serials for which segmentation masks exist.
+        Checks for the first frame's mask file using start_frame offset.
         Returns:
             list[str]: List of valid camera serials.
         """
         valid_serials = []
         for cam_idx, serial in enumerate(self._rs_serials):
-            cam_folder = self._seg_folder / f"cam{cam_idx}_rgb"
-            npy_path = cam_folder / "0000.npy"
-            if npy_path.exists():
+            h5_idx = self._cam_h5_indices[cam_idx]
+            cam_folder = self._seg_folder / f"cam{h5_idx}_rgb"
+            # Check using original frame index (with start_frame offset)
+            found = False
+            for fmt in [f"{self._start_frame:04d}.npy", f"{self._start_frame}.npy"]:
+                if (cam_folder / fmt).exists():
+                    found = True
+                    break
+            if found:
                 valid_serials.append(serial)
         return valid_serials
 
@@ -419,6 +448,11 @@ class MyClusterLoader:
         return color
 
     # Properties for dataset attributes
+    @property
+    def cam_h5_indices(self):
+        """Mapping from active camera index to h5 camera dimension index."""
+        return self._cam_h5_indices
+
     @property
     def num_frames(self):
         """Number of frames in the sequence."""

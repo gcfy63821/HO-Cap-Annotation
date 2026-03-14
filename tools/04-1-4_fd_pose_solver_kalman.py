@@ -198,7 +198,7 @@ def run_tracking_with_kalman_and_integration(
     )
     save_folder.mkdir(parents=True, exist_ok=True)
     print(f"[INFO] Output folder: {save_folder}")
-    SKIP_TRACKING = True
+    SKIP_TRACKING = False
     
     # Initialize pose estimator
     set_seed(0)
@@ -402,6 +402,9 @@ def run_tracking_with_kalman_and_integration(
                 else:
                     # Re-register if previous pose is invalid
                     print(f"  Frame {frame_id}: Re-registering due to invalid previous pose...")
+                    ob_in_world = cam_RT @ prev_pose
+                    x, y, z = ob_in_world[:3, 3]
+                    print(f"debug:{x}, {y}, {z}")
                     init_ob_pos_center = data_loader.get_init_translation(
                         frame_id, [serial], object_idx_0, kernel_size=5
                     )[0][0]

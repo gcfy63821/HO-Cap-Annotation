@@ -6,7 +6,7 @@ SEQUENCE_NAME=""
 OBJECT_IDX=""
 OUTPUT_IDX=""
 TOOL_NAME=""
-BASE_PATH="/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/"
+BASE_PATH="/home/ruoqu/crq_ws/robotool/DataCollection/"
 OPTIMIZE=""
 UUID=""
 TRACK_REFINE_ITER="10"
@@ -111,13 +111,13 @@ if [ -n "$END_FRAME" ]; then
 fi
 # python tools/00_convert_videos_to_h5.py $H5_ARGS
 
-# # 构建 generate_meta 参数，传入 start_frame 写入 meta.yaml
-# META_ARGS="--h5_path $H5_PATH \
-#     --calibration_yaml_path /home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/videos_0121/realsense_calibration_0121.yaml \
-#     --models_folder /home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/models \
-#     --tool_name $TOOL_NAME \
-#     --start_frame $START_FRAME"
-# python preprocess/generate_meta.py $META_ARGS
+# # # 构建 generate_meta 参数，传入 start_frame 写入 meta.yaml
+META_ARGS="--h5_path $H5_PATH \
+    --calibration_yaml_path /home/ruoqu/crq_ws/robotool/DataCollection/calibration_0314.yaml \
+    --models_folder /home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/models \
+    --tool_name $TOOL_NAME \
+    --start_frame $START_FRAME"
+python preprocess/generate_meta.py $META_ARGS --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4
 
 # # # # # 运行 04-1-1_fd_pose_solver_prep.py
 if [ -n "$OBJECT_IDX" ]; then
@@ -125,21 +125,22 @@ if [ -n "$OBJECT_IDX" ]; then
     # python tools/04-1-2_fd_pose_solver_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH"
     # python tools/04-1-4_fd_pose_solver_separate_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH"
     # python tools/04-1-5_fd_pose_solver_icp_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" 
-    # python tools/04-1-4_fd_pose_solver_kalman.py --no_masked_depth --sequence_folder "$SEQUENCE_FOLDER" --activate_2d_tracker --activate_kalman_filter --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" 
+    python tools/04-1-4_fd_pose_solver_kalman.py --no_masked_depth --sequence_folder "$SEQUENCE_FOLDER" --activate_2d_tracker --activate_kalman_filter --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" 
     
 fi
 
-# python debug/visualize_tracking_result_in_cam.py     --data_path "$SEQUENCE_FOLDER"     --tool_name "$TOOL_NAME"     --object_idx "$OBJECT_IDX"     --extract_images --num_workers 1
+python debug/visualize_tracking_result_in_cam.py     --data_path "$SEQUENCE_FOLDER"     --tool_name "$TOOL_NAME"     --object_idx "$OBJECT_IDX"     --extract_images --num_workers 1
 
 # # # # 运行 04-2_fd_pose_merger.py
-# echo "Running fd_pose_merger..."
-# python tools/04-2-2_fd_pose_merger_cluster.py --sequence_folder "$SEQUENCE_FOLDER"
+echo "Running fd_pose_merger..."
+python tools/04-2-2_fd_pose_merger_cluster.py --sequence_folder "$SEQUENCE_FOLDER"
 
 # # # 运行 04-2-1_adaptive_fd_merger.py
 # # echo "Running adaptive fd_pose_merger..."
 # # python tools/04-2-1_adaptive_fd_merger.py --sequence_folder "$SEQUENCE_FOLDER"
 # python debug/visualize_cluster_video_fast.py --data_path "$SEQUENCE_FOLDER" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID" --pose_file "fd" --render_hands --num_workers 1
     
+
 
 # 运行 visualize_ob_in_world.py
 # if [ -n "$TOOL_NAME" ]; then
@@ -208,6 +209,7 @@ if [ -n "$OPTIMIZE" ]; then
     echo "Running joint_pose_optimization (wilor) with optimize=$OPTIMIZE..."
     # python tools/07-3_joint_pose_solver_wilor.py --sequence_folder "$SEQUENCE_FOLDER" --debug
     python tools/07-2_joint_pose_solver_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --debug
+    
     
     echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
     # python debug/visualize_hand_video.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID "
