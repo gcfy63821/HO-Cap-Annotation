@@ -13,15 +13,13 @@ from hocap_annotation.loss import (
 from hocap_annotation.loaders import MySequenceLoader as SequenceLoader
 from hocap_annotation.rendering import HOCapRenderer
 import pickle
+# from hocap_annotation.layers import MANOLayer
 from manopth.manolayer import ManoLayer
-from hocap_annotation.utils import CFG
+from hocap_annotation.utils import  CFG
 from tqdm import tqdm
 from torch.nn import Parameter
 from torch.optim import Adam
 import torch
-from scipy.spatial.transform import Rotation as R
-import concurrent.futures
-
 
 def load_pkl_and_get_hand_data(pkl_file):
     with open(pkl_file, 'rb') as f:
@@ -59,6 +57,8 @@ def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer_right, device, m
     Reconstruct left hand mesh using the RIGHT MANO layer (intentional, not a mistake).
     This matches the pattern used in visualize_wilor_hand_video.py.
     """
+    if len(hand_data['left_hand_pose']) == 0 or frame_idx >= len(hand_data['left_hand_pose']):
+        return None, None
     pose = torch.tensor(hand_data['left_hand_pose'][frame_idx]).to(device).unsqueeze(0)
     translation = torch.tensor(hand_data['left_hand_translation'][frame_idx]).to(device).unsqueeze(0)
     base_rot = torch.tensor(hand_data['left_hand_base_rot'][frame_idx]).to(device) if hand_data['left_hand_base_rot'].ndim == 3 else torch.eye(3).to(device)
@@ -77,6 +77,8 @@ def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer_right, device, m
     verts -= root_trans
     verts[:, 0] *= -1
     verts = verts @ base_rot.T
+    from scipy.spatial.transform import Rotation as R
+    verts = verts @ torch.tensor(R.from_euler('x', 180, degrees=True).as_matrix(), dtype=verts.dtype, device=verts.device)
     verts += translation
     
     # Get faces from the RIGHT layer (since we used it for reconstruction)
@@ -88,6 +90,8 @@ def reconstruct_right_hand_mesh(hand_data, frame_idx, mano_layer_right, device):
     Reconstruct right hand mesh using the RIGHT MANO layer.
     This matches the pattern used in visualize_wilor_hand_video.py.
     """
+    if len(hand_data['right_hand_pose']) == 0 or frame_idx >= len(hand_data['right_hand_pose']):
+        return None, None
     pose = torch.tensor(hand_data['right_hand_pose'][frame_idx]).to(device).unsqueeze(0)
     translation = torch.tensor(hand_data['right_hand_translation'][frame_idx]).to(device).unsqueeze(0)
     hand_beta = torch.tensor(hand_data['right_hand_beta']).to(device)  # Use left hand beta for both hands
@@ -115,12 +119,15 @@ class JointPoseSolver:
         self._data_folder = Path(sequence_folder)
         self._debug = debug
         self._device = CFG.device
+
+        # Use ANNOTATED_PATH for all processed data (consistent with 06-2 and HandReconstruction)
         self._folder_name = self._data_folder.parent.parent.name
         self._task_name = self._data_folder.parent.name
         self._sequence_name = self._data_folder.name
-        self._save_folder = Path(f"{self._data_folder.parent.parent.parent}/{self._folder_name}_annotated/{self._task_name}/{self._sequence_name}/processed/joint_pose_solver")
+        self._annotated_path = self._data_folder.parent.parent.parent / f"{self._folder_name}_annotated" / self._task_name / self._sequence_name
+
+        self._save_folder = self._annotated_path / "processed" / "joint_pose_solver"
         self._save_folder.mkdir(parents=True, exist_ok=True)
-        self._annotated_folder = Path(f"{self._data_folder.parent.parent.parent}/{self._folder_name}_annotated/{self._task_name}/{self._sequence_name}")
 
         self._log_file = self._save_folder / "joint_pose_solver.log"
         # Remove the existing log file
@@ -172,18 +179,10 @@ class JointPoseSolver:
     def _check_required_files(self):
         self._logger.info("Checking existence of required files...")
         self._pose_o_file = (
-            # self._data_folder / "processed" / "object_pose_solver" / "poses_o.npy"
-            self._annotated_folder / "processed" / "object_pose_solver" / "poses_o.npy"
-            
+            self._annotated_path / "processed" / "object_pose_solver" / "poses_o.npy"
         )
         self._pose_m_file = (
-            # self._data_folder / "processed" / "hand_pose_solver" / "poses_m.npy"
-            # self._data_folder / "processed" /  "poses_m.npy"
-            self._annotated_folder  /  "poses_m.npy"
-        )
-        self._hand_pkl_file = (
-            # self._data_folder / "processed" / "result_hand_optimized.pkl"
-            self._annotated_folder / "result_hand_optimized.pkl"
+            self._annotated_path / "poses_m.npy"
         )
         msg = "File not found: {}"
         if not self._pose_o_file.exists():
@@ -192,11 +191,11 @@ class JointPoseSolver:
         else:
             self._logger.info(f"Object poses file: {self._pose_o_file}")
 
-        if not self._hand_pkl_file.exists():
-            self._logger.error(msg.format(self._hand_pkl_file))
-            raise FileNotFoundError(msg.format(self._hand_pkl_file))
+        if not self._pose_m_file.exists():
+            self._logger.error(msg.format(self._pose_m_file))
+            raise FileNotFoundError(msg.format(self._pose_m_file))
         else:
-            self._logger.info(f"Hand poses pickle file: {self._hand_pkl_file}")
+            self._logger.info(f"Hand poses file: {self._pose_m_file}")
         return
 
     def _load_dataloader_params(self):
@@ -210,7 +209,10 @@ class JointPoseSolver:
         self._object_group_layer = self._data_loader.object_group_layer
 
         # --- Load hand pkl and set up MANOLayers for left/right hand ---
-        self._hand_data = load_pkl_and_get_hand_data(self._hand_pkl_file)
+        pkl_file = self._annotated_path / "result_hand_optimized.pkl"
+        self._hand_data = load_pkl_and_get_hand_data(pkl_file)
+        # self._mano_layer_left = MANOLayer('left', get_betas(self._hand_data['left_hand_beta'])).to(self._device)
+        # self._mano_layer_right = MANOLayer('right', get_betas(self._hand_data['right_hand_beta'])).to(self._device)
         self._mano_layer_left = ManoLayer(side="left",
                                 mano_root=CFG.mano.model_path, 
                                 use_pca=False, 
@@ -218,7 +220,7 @@ class JointPoseSolver:
         self._mano_layer_right = ManoLayer(side="right",
                                 mano_root=CFG.mano.model_path, 
                                 use_pca=False, 
-                                ncomps=45).to('cuda').to(self._device)
+                                ncomps=45).to('cuda').to(self._device)                   
 
     def _load_poses_o(self, pose_file):
         poses = np.load(pose_file).astype(np.float32)
@@ -228,22 +230,11 @@ class JointPoseSolver:
         return poses
 
     def _load_poses_m(self, pose_file):
-        # Load hand poses from pickle file instead of numpy file
-        hand_data = load_pkl_and_get_hand_data(self._hand_pkl_file)
-        
-        # Extract poses for left and right hands
-        left_poses = hand_data['left_hand_pose']  # Shape: (num_frames, 51)
-        right_poses = hand_data['right_hand_pose']  # Shape: (num_frames, 51)
-        
-        # Stack poses for both hands: (2, num_frames, 51)
-        poses = np.stack([left_poses, right_poses], axis=0)
-        
-        # Filter poses based on available mano sides
+        poses = np.load(pose_file).astype(np.float32)
         poses = np.stack(
             [poses[0 if side == "right" else 1] for side in self._mano_sides], axis=0
-        )  # (num_hands, num_frames, 51)
-        
-        self._logger.info(f"Hand poses loaded from pickle: {poses.shape}")
+        )  # (num_hands, num_frames 51)
+        self._logger.info(f"MANO poses loaded: {poses.shape}")
         return poses
 
     def _object_group_layer_forward(self, pose_o, subset=None):
@@ -296,115 +287,6 @@ class JointPoseSolver:
         total_loss = total_loss.sum() / len(verts_list)
         return total_loss
 
-    def _mano_layer_forward_separate(self, pose_m, frame_idx=None):
-        """
-        Forward left and right hand separately using their respective MANO layers.
-        This follows the pattern from visualize_wilor_hand_video.py:
-        - Left hand uses RIGHT MANO layer (intentional, not a mistake)
-        - Right hand uses RIGHT MANO layer
-        - Both hands use left_hand_beta
-        pose_m: list of [left_pose, right_pose], each shape (1, 51)
-        frame_idx: int, current frame index (to get translation from self._hand_data)
-        Returns: verts (N_verts, 3), faces (N_faces, 3)
-        """
-        import torch
-        device = self._device
-        if frame_idx is None:
-            raise ValueError("frame_idx must be provided to get translation for each hand.")
-        
-        # Handle case where we might have only one hand
-        if len(pose_m) == 1:
-            # Only one hand available
-            if "right" in self._mano_sides:
-                # Right hand only
-                right_pose = pose_m[0]  # (1, 51)
-                right_translation = torch.tensor(self._hand_data['right_hand_translation'][frame_idx]).to(device).float().unsqueeze(0)
-                right_beta = torch.tensor(self._hand_data['left_hand_beta']).to(device).float()
-                
-                verts_right, joints_right = self._mano_layer_right(right_pose, right_beta)
-                verts_right = verts_right[0] / 1000
-                joints_right = joints_right[0] / 1000
-                
-                root_trans_right = joints_right[0].clone().detach()
-                verts_right -= root_trans_right
-                verts_right += right_translation
-                
-                verts = verts_right
-                faces = self._mano_layer_right.th_faces.detach().clone()
-                return verts, faces
-            else:
-                # Left hand only
-                left_pose = pose_m[0]  # (1, 51)
-                left_translation = torch.tensor(self._hand_data['left_hand_translation'][frame_idx]).to(device).float().unsqueeze(0)
-                left_beta = torch.tensor(self._hand_data['left_hand_beta']).to(device).float()
-
-                verts_left, joints_left = self._mano_layer_right(left_pose, left_beta)
-                verts_left = verts_left[0] / 1000
-                joints_left = joints_left[0] / 1000
-
-                root_trans_left = joints_left[0].clone().detach()
-                verts_left -= root_trans_left
-                verts_left[:, 0] *= -1
-
-                if self._hand_data['left_hand_base_rot'].ndim == 3:
-                    rot_idx = min(frame_idx, self._hand_data['left_hand_base_rot'].shape[0] - 1)
-                    base_rot = torch.tensor(self._hand_data['left_hand_base_rot'][rot_idx]).to(device).float()
-                    verts_left = verts_left @ base_rot.T
-
-                verts_left += left_translation
-                verts = verts_left
-                faces = self._mano_layer_left.th_faces.detach().cpu().numpy()
-                return verts, faces
-
-        # Both hands available
-        left_pose = pose_m[0]  # (1, 51)
-        right_pose = pose_m[1]  # (1, 51)
-        left_translation = torch.tensor(self._hand_data['left_hand_translation'][frame_idx]).to(device).float().unsqueeze(0)
-        right_translation = torch.tensor(self._hand_data['right_hand_translation'][frame_idx]).to(device).float().unsqueeze(0)
-        
-        # Both hands use left_hand_beta (following visualize_wilor_hand_video.py pattern)
-        left_beta = torch.tensor(self._hand_data['left_hand_beta']).to(device).float()
-        right_beta = torch.tensor(self._hand_data['left_hand_beta']).to(device).float()
-        
-        # Left hand uses RIGHT MANO layer (intentional, not a mistake)
-        verts_left, joints_left = self._mano_layer_right(left_pose, left_beta)
-        verts_right, joints_right = self._mano_layer_right(right_pose, right_beta)
-        
-        # Convert to meters (mm to m)
-        verts_left = verts_left[0] / 1000
-        verts_right = verts_right[0] / 1000
-        joints_left = joints_left[0] / 1000
-        joints_right = joints_right[0] / 1000
-        
-        # Apply root translation offset
-        root_trans_left = joints_left[0].clone().detach()
-        root_trans_right = joints_right[0].clone().detach()
-        verts_left -= root_trans_left
-        verts_right -= root_trans_right
-        
-        # Apply left hand specific transformations (mirroring and rotation)
-        verts_left[:, 0] *= -1
-        if self._hand_data['left_hand_base_rot'].ndim == 3:
-            rot_idx = min(frame_idx, self._hand_data['left_hand_base_rot'].shape[0] - 1)
-            base_rot = torch.tensor(self._hand_data['left_hand_base_rot'][rot_idx]).to(device).float()
-            verts_left = verts_left @ base_rot.T
-        
-        # Apply translations
-        verts_left += left_translation
-        verts_right += right_translation
-
-        if verts_left.size(0) == 1:
-            verts_left = verts_left.squeeze(0)
-        if verts_right.size(0) == 1:
-            verts_right = verts_right.squeeze(0)
-        verts = torch.cat([verts_left, verts_right], dim=0)
-        
-        # Get faces from RIGHT MANO layer (since both hands use it)
-        faces_left = self._mano_layer_right.th_faces.detach().clone()
-        faces_right = self._mano_layer_right.th_faces.detach().clone() + verts_left.shape[0]
-        faces = torch.cat([faces_left, faces_right], dim=0)
-        return verts, faces
-
     def _save_log_loss(self, save_name="loss"):
         self._logger.info("Saving loss log...")
         np.savez(
@@ -426,16 +308,12 @@ class JointPoseSolver:
         optim_pose_m = torch.stack([p.data for p in self._pose_m], dim=1).squeeze(0)
         optim_pose_m = optim_pose_m.cpu().numpy().astype(np.float32)
         optim_pose_m = optim_pose_m.swapaxes(0, 1)  # (num_hands, num_frames, 51)
-        
-        # Ensure we have both left and right hand poses
-        if optim_pose_m.shape[0] == 1:
-            # If only one hand, create filler for the other
+        if len(self._mano_sides) == 1:
             filler_pose_m = np.full_like(optim_pose_m, -1)
             if "right" in self._mano_sides:
                 optim_pose_m = np.concatenate([optim_pose_m, filler_pose_m], axis=0)
             elif "left" in self._mano_sides:
                 optim_pose_m = np.concatenate([filler_pose_m, optim_pose_m], axis=0)
-        
         self._logger.debug(f"optim_pose_m: {optim_pose_m.shape}")
         np.save(self._save_folder / f"{save_name}.npy", optim_pose_m)
 
@@ -448,12 +326,11 @@ class JointPoseSolver:
         np.save(self._save_folder / f"{save_name}.npy", optim_pose_o)
 
     def _initialize_pose_m_from_poses(self, poses_m):
-        # poses_m shape: (num_hands, num_frames, 51)
         pose_m = [
             Parameter(
                 torch.from_numpy(poses_m[i]).to(self._device), requires_grad=True
             )
-            for i in range(poses_m.shape[0])  # Use actual number of hands from poses_m
+            for i in range(self._mano_group_layer.num_obj)
         ]
         return pose_m
 
@@ -537,10 +414,8 @@ class JointPoseSolver:
             for f_idx in tqdm(range(self._num_frames), ncols=100):
                 self._data_loader.step_by_frame_id(f_idx)
                 points = self._data_loader.points[self._data_loader.masks]
-                # Use the verts for this specific frame
-                verts_frame = verts[f_idx]
                 points = self._get_dpts_for_loss_sdf(
-                    verts_frame, faces, points, self._dist_thresh
+                    verts[f_idx], faces, points, self._dist_thresh
                 )
                 points = process_points(
                     points=points, voxel_size=0.003, remove_outliers=True
@@ -579,9 +454,83 @@ class JointPoseSolver:
         self._logger.info("Done preparing dpts for SDF loss.")
         return dpts_list
 
+    def _mano_layer_forward_separate(self, pose_m, frame_idx=None):
+        """
+        Forward left and right hand separately using their respective MANO layers.
+        This follows the pattern from visualize_wilor_hand_video.py:
+        - Left hand uses RIGHT MANO layer (intentional, not a mistake)
+        - Right hand uses RIGHT MANO layer
+        - Both hands use left_hand_beta
+        pose_m: list of [left_pose, right_pose], each shape (1, 51)
+        frame_idx: int, current frame index (to get translation from self._hand_data)
+        Returns: verts (N_verts, 3), faces (N_faces, 3)
+        """
+        import torch
+        device = self._device
+        if frame_idx is None:
+            raise ValueError("frame_idx must be provided to get translation for each hand.")
+        left_pose = pose_m[0]  # (1, 51)
+        right_pose = pose_m[1]  # (1, 51)
+
+        has_left = (len(self._hand_data['left_hand_translation']) > 0 and
+                    frame_idx < len(self._hand_data['left_hand_translation']))
+        has_right = (len(self._hand_data['right_hand_translation']) > 0 and
+                     frame_idx < len(self._hand_data['right_hand_translation']))
+
+        # Use a shared beta (fallback to right if left is empty)
+        if len(self._hand_data['left_hand_beta']) > 0:
+            beta = torch.tensor(self._hand_data['left_hand_beta']).to(device).float()
+        else:
+            beta = torch.tensor(self._hand_data['right_hand_beta']).to(device).float()
+
+        verts_parts = []
+        faces_parts = []
+        vert_offset = 0
+
+        # Left hand
+        if has_left:
+            left_translation = torch.tensor(self._hand_data['left_hand_translation'][frame_idx], dtype=torch.float32).to(device).unsqueeze(0)
+            verts_left, joints_left = self._mano_layer_right(left_pose, beta)
+            verts_left = verts_left[0] / 1000
+            joints_left = joints_left[0] / 1000
+            verts_left -= joints_left[0].clone().detach()
+            verts_left[:, 0] *= -1
+            if self._hand_data['left_hand_base_rot'].ndim == 3 and frame_idx < len(self._hand_data['left_hand_base_rot']):
+                base_rot = torch.tensor(self._hand_data['left_hand_base_rot'][frame_idx], dtype=torch.float32).to(device)
+                verts_left = verts_left @ base_rot.T
+            verts_left += left_translation
+            if verts_left.size(0) == 1:
+                verts_left = verts_left.squeeze(0)
+            faces_left = self._mano_layer_right.th_faces.detach().clone() + vert_offset
+            verts_parts.append(verts_left)
+            faces_parts.append(faces_left)
+            vert_offset += verts_left.shape[0]
+
+        # Right hand
+        if has_right:
+            right_translation = torch.tensor(self._hand_data['right_hand_translation'][frame_idx], dtype=torch.float32).to(device).unsqueeze(0)
+            verts_right, joints_right = self._mano_layer_right(right_pose, beta)
+            verts_right = verts_right[0] / 1000
+            joints_right = joints_right[0] / 1000
+            verts_right -= joints_right[0].clone().detach()
+            verts_right += right_translation
+            if verts_right.size(0) == 1:
+                verts_right = verts_right.squeeze(0)
+            faces_right = self._mano_layer_right.th_faces.detach().clone() + vert_offset
+            verts_parts.append(verts_right)
+            faces_parts.append(faces_right)
+
+        if verts_parts:
+            verts = torch.cat(verts_parts, dim=0)
+            faces = torch.cat(faces_parts, dim=0)
+        else:
+            verts = torch.zeros((0, 3), dtype=torch.float32, device=device)
+            faces = torch.zeros((0, 3), dtype=torch.long, device=device)
+        return verts, faces
+
     def solve(self):
         subset_o = list(range(self._object_group_layer.num_obj))
-        subset_m = list(range(len(self._pose_m)))  # Use actual number of hand poses
+        subset_m = [0, 1]  # left and right hand
 
         self._logger.info(">>>>>>>>>> Start optimization <<<<<<<<<<")
         t_s = time.time()
@@ -591,21 +540,6 @@ class JointPoseSolver:
         )  # total, sdf, reg_m, smooth_m, reg_o, smooth_o
 
         faces_o, _ = self._object_group_layer.get_f_from_inds(subset_o)
-        faces_m, _ = self._mano_group_layer.get_f_from_inds(subset_m)
-        faces = torch.cat(
-            [
-                faces_o,
-                faces_m + self._object_group_layer.get_num_verts_from_inds(subset_o),
-            ],
-            dim=0,
-        )
-
-        # verts_o, _ = self._object_group_layer_forward(self._pose_o, subset_o)
-        # verts_m, _ = self._mano_group_layer_forward(self._pose_m, subset_m)
-        # verts = torch.cat([verts_o, verts_m], dim=1)
-
-        # # Prepare dpts for SDF loss
-        # dpts_list = self._prepare_dpts_list_for_loss_sdf(verts, faces)
 
         tt_s = time.time()
         for step in range(self._total_steps):
@@ -616,16 +550,9 @@ class JointPoseSolver:
             verts_o, _ = self._object_group_layer_forward(self._pose_o, subset_o)
             # Forward left/right hand separately for current frame
             frame_idx = step % self._num_frames
-            if len(self._pose_m) == 2:
-                # Both hands available
-                left_pose = self._pose_m[0][frame_idx].unsqueeze(0)
-                right_pose = self._pose_m[1][frame_idx].unsqueeze(0)
-                verts_m, faces_m = self._mano_layer_forward_separate([left_pose, right_pose], frame_idx=frame_idx)
-            else:
-                # Only one hand available
-                single_pose = self._pose_m[0][frame_idx].unsqueeze(0)
-                verts_m, faces_m = self._mano_layer_forward_separate([single_pose], frame_idx=frame_idx)
-            
+            left_pose = self._pose_m[0][frame_idx].unsqueeze(0)
+            right_pose = self._pose_m[1][frame_idx].unsqueeze(0)
+            verts_m, faces_m = self._mano_layer_forward_separate([left_pose, right_pose], frame_idx=frame_idx)
             verts = torch.cat([verts_o[frame_idx], verts_m], dim=0)
             faces = torch.cat([
                 faces_o,
@@ -633,24 +560,7 @@ class JointPoseSolver:
             ], dim=0)
 
             if self._w_sdf > 0 and step == self._total_steps - self._sdf_steps:
-                # Create a list of verts for each frame
-                verts_list = []
-                for f_idx in range(self._num_frames):
-                    # Get hand poses for this frame
-                    if len(self._pose_m) == 2:
-                        left_pose = self._pose_m[0][f_idx].unsqueeze(0)
-                        right_pose = self._pose_m[1][f_idx].unsqueeze(0)
-                        verts_m_frame, faces_m_frame = self._mano_layer_forward_separate([left_pose, right_pose], frame_idx=f_idx)
-                    else:
-                        single_pose = self._pose_m[0][f_idx].unsqueeze(0)
-                        verts_m_frame, faces_m_frame = self._mano_layer_forward_separate([single_pose], frame_idx=f_idx)
-                    
-                    # Get object verts for this frame
-                    verts_o_frame, _ = self._object_group_layer_forward(self._pose_o, subset_o)
-                    verts_frame = torch.cat([verts_o_frame[f_idx], verts_m_frame], dim=0)
-                    verts_list.append(verts_frame)
-                
-                dpts_list = self._prepare_dpts_list_for_loss_sdf(verts_list, faces)
+                dpts_list = self._prepare_dpts_list_for_loss_sdf(verts, faces)
                 tt_s = time.time()
                 self._log_info_steps = 10
                 self._log_debug_steps = 1
@@ -659,21 +569,7 @@ class JointPoseSolver:
             if self._w_sdf == 0:
                 loss_sdf = self._zero
             elif step >= self._total_steps - self._sdf_steps:
-                # Use the current frame's dpts and verts
-                current_dpts = dpts_list[frame_idx] if frame_idx < len(dpts_list) else torch.zeros((0, 3), dtype=torch.float32, device=self._device)
-                # Get verts for current frame
-                if len(self._pose_m) == 2:
-                    left_pose = self._pose_m[0][frame_idx].unsqueeze(0)
-                    right_pose = self._pose_m[1][frame_idx].unsqueeze(0)
-                    verts_m_frame, faces_m_frame = self._mano_layer_forward_separate([left_pose, right_pose], frame_idx=frame_idx)
-                else:
-                    single_pose = self._pose_m[0][frame_idx].unsqueeze(0)
-                    verts_m_frame, faces_m_frame = self._mano_layer_forward_separate([single_pose], frame_idx=frame_idx)
-                
-                verts_o_frame, _ = self._object_group_layer_forward(self._pose_o, subset_o)
-                verts_frame = torch.cat([verts_o_frame[frame_idx], verts_m_frame], dim=0)
-                
-                loss_sdf = self._loss_sdf([verts_frame], faces, [current_dpts])
+                loss_sdf = self._loss_sdf([verts], faces, [dpts_list[frame_idx]])
                 loss_sdf *= self._w_sdf
             else:
                 loss_sdf = self._zero
@@ -708,11 +604,6 @@ class JointPoseSolver:
 
             loss = loss_sdf + loss_reg_m + loss_reg_o + loss_smooth_m + loss_smooth_o
 
-            # Set grad to None to prevent Adam from updating the parameters even when
-            # the grad are all zeros. An alternative is to place this before the
-            # forward pass, but the currently implementation of group layers does not
-            # allow this since the non-active poses will still always be used due to
-            # concatenation and hence their grad will be 0.0 rather than None.
             for i, p in enumerate(self._pose_m):
                 if i not in subset_m and p.grad is not None:
                     assert p.grad.sum() == 0.0
@@ -785,18 +676,10 @@ class JointPoseSolver:
             # Following visualize_wilor_hand_video.py pattern:
             # Left hand uses RIGHT MANO layer (intentional, not a mistake)
             # Right hand uses RIGHT MANO layer
-            if "left" in self._mano_sides:
-                verts_left, faces_left = reconstruct_left_hand_mesh(self._hand_data, i, self._mano_layer_right, self._device, self._mano_layer_left)
-                left_hand_meshes.append((verts_left, faces_left))
-            else:
-                left_hand_meshes.append((np.zeros((0, 3)), np.zeros((0, 3))))
-                
-            if "right" in self._mano_sides:
-                verts_right, faces_right = reconstruct_right_hand_mesh(self._hand_data, i, self._mano_layer_right, self._device)
-                right_hand_meshes.append((verts_right, faces_right))
-            else:
-                right_hand_meshes.append((np.zeros((0, 3)), np.zeros((0, 3))))
-                
+            verts_left, faces_left = reconstruct_left_hand_mesh(self._hand_data, i, self._mano_layer_right, self._device, self._mano_layer_left)
+            verts_right, faces_right = reconstruct_right_hand_mesh(self._hand_data, i, self._mano_layer_right, self._device)
+            left_hand_meshes.append((verts_left, faces_left))
+            right_hand_meshes.append((verts_right, faces_right))
         self._logger.info(f"Generated {len(left_hand_meshes)} left and {len(right_hand_meshes)} right hand meshes from pkl.")
 
         # --- Combine left and right hand meshes for verts_m, faces_m, joints_m ---
@@ -806,30 +689,27 @@ class JointPoseSolver:
         for i in range(num_frames):
             verts_left, faces_left = left_hand_meshes[i]
             verts_right, faces_right = right_hand_meshes[i]
-            
-            # Check if meshes are empty
-            if verts_left.shape[0] == 0 and verts_right.shape[0] == 0:
-                # No hands available
-                verts_combined = np.zeros((0, 3))
-                faces_combined = np.zeros((0, 3))
-            elif verts_left.shape[0] == 0:
-                # Only right hand
-                verts_combined = verts_right
-                faces_combined = faces_right
-            elif verts_right.shape[0] == 0:
-                # Only left hand
+
+            has_left = verts_left is not None and faces_left is not None
+            has_right = verts_right is not None and faces_right is not None
+
+            if has_left and has_right:
+                faces_right_offset = faces_right + verts_left.shape[0]
+                verts_combined = np.concatenate([verts_left, verts_right], axis=0)
+                faces_combined = np.concatenate([faces_left, faces_right_offset], axis=0)
+            elif has_left:
                 verts_combined = verts_left
                 faces_combined = faces_left
+            elif has_right:
+                verts_combined = verts_right
+                faces_combined = faces_right
             else:
-                # Both hands available
-                verts_combined = np.concatenate([verts_left, verts_right], axis=0)
-                faces_right_offset = faces_right + verts_left.shape[0]
-                faces_combined = np.concatenate([faces_left, faces_right_offset], axis=0)
-            
+                # No hand data at all, use empty arrays
+                verts_combined = np.zeros((0, 3), dtype=np.float32)
+                faces_combined = np.zeros((0, 3), dtype=np.int64)
+
             verts_m.append(verts_combined)
             faces_m.append(faces_combined)
-            # If you want to combine joints, you can extract them similarly (if available)
-            # For now, just append None as placeholder
             joints_m.append(None)
         # Now verts_m, faces_m, joints_m are per-frame lists
         # You can use verts_m[frame_idx], faces_m[frame_idx], joints_m[frame_idx] in your renderer or optimizer
@@ -847,25 +727,17 @@ class JointPoseSolver:
         # Create colors for hands (left hand: blue, right hand: red)
         colors_m = []
         for i in range(num_frames):
-            verts_left, faces_left = left_hand_meshes[i]
-            verts_right, faces_right = right_hand_meshes[i]
-            
-            if verts_left.shape[0] == 0 and verts_right.shape[0] == 0:
-                # No hands available
-                colors_m.append(np.zeros((0, 3), dtype=np.float32))
-            elif verts_left.shape[0] == 0:
-                # Only right hand
-                right_colors = np.full((verts_right.shape[0], 3), [1, 0, 0], dtype=np.float32)
-                colors_m.append(right_colors)
-            elif verts_right.shape[0] == 0:
-                # Only left hand
-                left_colors = np.full((verts_left.shape[0], 3), [0, 0, 1], dtype=np.float32)
-                colors_m.append(left_colors)
+            color_parts = []
+            vl, _ = left_hand_meshes[i]
+            vr, _ = right_hand_meshes[i]
+            if vl is not None:
+                color_parts.append(np.full((vl.shape[0], 3), [0, 0, 1], dtype=np.float32))
+            if vr is not None:
+                color_parts.append(np.full((vr.shape[0], 3), [1, 0, 0], dtype=np.float32))
+            if color_parts:
+                colors_m.append(np.concatenate(color_parts, axis=0))
             else:
-                # Both hands available
-                left_colors = np.full((verts_left.shape[0], 3), [0, 0, 1], dtype=np.float32)
-                right_colors = np.full((verts_right.shape[0], 3), [1, 0, 0], dtype=np.float32)
-                colors_m.append(np.concatenate([left_colors, right_colors], axis=0))
+                colors_m.append(np.zeros((0, 3), dtype=np.float32))
         
         # Render images
         renderer = HOCapRenderer(self._data_folder, log_file=self._log_file)

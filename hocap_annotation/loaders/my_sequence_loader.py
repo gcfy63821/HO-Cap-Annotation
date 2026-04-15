@@ -19,13 +19,24 @@ class MySequenceLoader:
         device: str = "cuda",
     ):
         self._data_folder = Path(sequence_folder)
-        self._folder_name = self._data_folder.parent.name
-        self._sequence_name = self._data_folder.name
-        print(f"[INFO] folder_name: {self._folder_name}, sequence_name: {self._sequence_name}")
-        self._seg_folder = self._data_folder.parent.parent / f"{self._folder_name}_annotated" / self._sequence_name / "tool_masks"
-        self._object_masks_folder = self._data_folder.parent.parent / f"{self._folder_name}_annotated" / self._sequence_name / "object_masks"
+        # Updated path parsing for new structure: videos_0901/taskname/xxxvideoname
+        self._sequence_name = self._data_folder.name  # xxxvideoname
+        task_folder = self._data_folder.parent  # .../videos_0901/taskname
+        self._task_name = task_folder.name  # taskname
+        video_root_folder = task_folder.parent  # .../videos_0901
+        self._folder_name = video_root_folder.name  # videos_0901
+        
+        print(f"[INFO] folder_name: {self._folder_name}, task_name: {self._task_name}, sequence_name: {self._sequence_name}")
+        
+        # Create annotated paths with taskname included: videos_0901_annotated/taskname/xxxvideoname
+        annotated_base_folder = f"{self._folder_name}_annotated"  # videos_0901_annotated
+        annotated_root = video_root_folder.parent / annotated_base_folder  # .../videos_0901_annotated
+        annotated_sequence_path = annotated_root / self._task_name / self._sequence_name  # .../videos_0901_annotated/taskname/xxxvideoname
+        
+        self._seg_folder = annotated_sequence_path / "tool_masks"
+        self._object_masks_folder = annotated_sequence_path / "object_masks"
         if not self._seg_folder.exists():
-            self._seg_folder = self._data_folder.parent.parent / f"{self._folder_name}_annotated" / self._sequence_name / "masks"
+            self._seg_folder = annotated_sequence_path / "masks"
         self._load_mano = load_mano
         self._load_object = load_object
         self._in_world = in_world
@@ -46,10 +57,11 @@ class MySequenceLoader:
         assert len(h5_files) > 0, f"No .h5 file found in {self._data_folder}"
         h5_path = h5_files[0]
         with h5py.File(h5_path, 'r') as f:
-            self._all_colors = f["imgs"][:]  # (N, num_cams, H, W, 3)
-            self._all_depths = f["depths"][:] * 0.001  # (N, num_cams, H, W), convert to meters
+            self._all_colors = f["imgs"][:, self._cam_h5_indices]  # (N, active_cams, H, W, 3)
+            self._all_depths = f["depths"][:, self._cam_h5_indices] * 0.001  # (N, active_cams, H, W)
         self._num_frames, self._num_cams = self._all_colors.shape[:2]
         self._rs_height, self._rs_width = self._all_colors.shape[2:4]
+        print(f"[INFO] Loaded h5: {self._num_frames} frames, {self._num_cams} active cameras (h5 indices {self._cam_h5_indices})")
         self._all_masks = self._load_masks_from_folder(self._seg_folder, self._num_frames, self._num_cams, h5_name="masks.h5", h5_dataset="masks")
         if self._object_masks_folder.exists():
             self._all_object_masks = self._load_masks_from_folder(self._object_masks_folder, self._num_frames, self._num_cams, h5_name="object_masks.h5", h5_dataset="object_masks")
@@ -60,22 +72,36 @@ class MySequenceLoader:
         mask_root_dir = Path(mask_root_dir)
         if h5_name is not None and (mask_root_dir / h5_name).exists():
             with h5py.File(mask_root_dir / h5_name, 'r') as f:
-                masks = f[h5_dataset][:]
-            print(f"[INFO] Loaded masks from {mask_root_dir / h5_name}")
+                masks = f[h5_dataset][:, self._cam_h5_indices]  # select active cameras
+            print(f"[INFO] Loaded masks from {mask_root_dir / h5_name}, selected h5 indices {self._cam_h5_indices}, shape: {masks.shape}")
             return masks
+        # mask npy files are indexed by original video frame number
+        # npy folder names use original calibration index (e.g. cam2_rgb)
+        start_frame = getattr(self, '_start_frame', 0)
         all_masks = []
         for frame_idx in range(num_frames):
+            original_frame_idx = frame_idx + start_frame
             frame_masks = []
             for cam_idx in range(num_cams):
-                cam_folder = mask_root_dir / f"cam{cam_idx:02d}.mp4"
-                npy_path = cam_folder / f"{frame_idx}.npy"
+                h5_idx = self._cam_h5_indices[cam_idx]
+                cam_folder = mask_root_dir / f"cam{h5_idx:02d}.mp4"
+                npy_path = cam_folder / f"{original_frame_idx}.npy"
                 if not npy_path.exists():
-                    frame_masks.append(np.zeros((self._rs_height, self._rs_width), dtype=np.uint8))
-                    continue
+                    npy_path = cam_folder / f"{original_frame_idx:04d}.npy"
+                if not npy_path.exists():
+                    new_cam_folder = mask_root_dir / f"cam{h5_idx}_rgb"
+                    npy_path = new_cam_folder / f"{original_frame_idx}.npy"
+                    if not npy_path.exists():
+                        npy_path = new_cam_folder / f"{original_frame_idx:04d}.npy"
+                    if not npy_path.exists():
+                        print(f"[WARNING] No mask file found for cam{h5_idx:02d} frame{original_frame_idx}, using zeros")
+                        frame_masks.append(np.zeros((self._rs_height, self._rs_width), dtype=np.uint8))
+                        continue
                 mask = np.load(npy_path)
                 frame_masks.append(mask)
             all_masks.append(frame_masks)
         all_masks = np.array(all_masks)  # (N, num_cams, H, W)
+        print(f"[INFO] Loaded masks from {mask_root_dir}, shape: {all_masks.shape}")
         return all_masks
 
     def _load_metadata(self):
@@ -88,10 +114,9 @@ class MySequenceLoader:
         self._mano_sides = data["mano_sides"]
         self._task_id = data["task_id"]
         self._subject_id = data["subject_id"]
-        self._rs_serials = data["realsense"]["serials"]
+        meta_serials = data["realsense"]["serials"]
         self._rs_width = data["realsense"]["width"]
         self._rs_height = data["realsense"]["height"]
-        self._num_cams = len(self._rs_serials)
         self.have_hl = data["have_hololens"]
         self.have_mano = data["have_mano"]
         if self.have_hl:
@@ -101,9 +126,22 @@ class MySequenceLoader:
         self._object_textured_files = [self._models_folder / obj_id / "textured_mesh.obj" for obj_id in self._object_ids]
         self._object_cleaned_files = [self._models_folder / obj_id / "cleaned_mesh_10000.obj" for obj_id in self._object_ids]
         self._thresholds = data.get("thresholds", [-0.3, 0.3, -0.3, 0.3, 0.5, 0.95])
+        self._start_frame = data.get("start_frame", 0)
         if self.have_mano:
             self._mano_beta = torch.tensor(data["betas"], dtype=torch.float32, device=self._device)
         self._load_camera_params_from_yaml()
+        # _rs_serials now has ALL cameras from calibration YAML
+        all_calib_serials = list(self._rs_serials)
+        # Compute mapping: meta serial -> h5/calibration index
+        self._cam_h5_indices = [all_calib_serials.index(s) for s in meta_serials]
+        print(f"[INFO] Active cameras: {meta_serials}, h5 indices: {self._cam_h5_indices}")
+        # Filter Ks and extrinsics to only active cameras
+        self._rs_Ks = self._rs_Ks[self._cam_h5_indices]
+        self._rs_Ks_inv = self._rs_Ks_inv[self._cam_h5_indices]
+        self._extr2world = self._extr2world[self._cam_h5_indices]
+        self._extr2world_inv = self._extr2world_inv[self._cam_h5_indices]
+        self._rs_serials = meta_serials
+        self._num_cams = len(meta_serials)
         self._crop_lim = data.get("thresholds", [-0.3, 0.3, -0.3, 0.3, -0.2, 0.4])
 
 
@@ -429,3 +467,8 @@ class MySequenceLoader:
     @property
     def masks_map(self) -> torch.Tensor:
         return self._masks.view(self._num_cams, self._rs_height, self._rs_width)
+
+    @property
+    def task_name(self) -> str:
+        """Task name for the sequence."""
+        return self._task_name

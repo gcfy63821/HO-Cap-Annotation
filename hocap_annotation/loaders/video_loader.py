@@ -1,19 +1,19 @@
 from ..utils import *
 import numpy as np
-import h5py
+import cv2
 from pathlib import Path
 import yaml
 import open3d as o3d
 
-class MyClusterLoader:
+class VideoLoader:
     """
-    Data loader for HO-Cap dataset. Loads images, depths, masks, and camera parameters directly from the original data and calibration YAML.
+    Data loader for HO-Cap dataset. Loads images and depths from video files instead of H5 files.
     """
     def __init__(self, sequence_folder) -> None:
         """
         Initialize the loader.
         Args:
-            sequence_folder (str): Path to the folder containing the .h5 file and mask folders.
+            sequence_folder (str): Path to the folder containing video files and mask folders.
         """
         self._data_folder = Path(sequence_folder)
         # Updated path parsing for new structure: videos_0901/taskname/xxxvideoname
@@ -44,34 +44,161 @@ class MyClusterLoader:
             raise FileNotFoundError(f"No tool_masks or object_masks folder found in {self._folder_name}_annotated/{self._task_name}/{self._sequence_name}")
         
         self._load_metadata()
-        self._load_h5_and_masks()
+        self._load_videos_and_masks()
 
-    def _load_h5_and_masks(self):
+    def _load_videos_and_masks(self):
         """
-        Load all color images, depth images, and masks into memory from .h5 and h5 mask files (or .npy files if h5 not present).
+        Load all color images, depth images, and masks into memory from video files and mask files.
         Sets:
             self._all_colors: np.ndarray, shape (N, num_cams, H, W, 3)
             self._all_depths: np.ndarray, shape (N, num_cams, H, W)
             self._all_masks: np.ndarray, shape (N, num_cams, H, W)
             self._all_object_masks: np.ndarray or None, shape (N, num_cams, H, W)
         """
-        h5_files = list(self._data_folder.glob('*.h5'))
-        assert len(h5_files) > 0, f"No .h5 file found in {self._data_folder}"
-        h5_path = h5_files[0]
-        with h5py.File(h5_path, 'r') as f:
-            # Select only active cameras from h5 using calibration indices
-            self._all_colors = f["imgs"][:, self._cam_h5_indices]  # (N, active_cams, H, W, 3)
-            self._all_depths = f["depths"][:, self._cam_h5_indices]  # (N, active_cams, H, W)
-            self._all_depths = self._all_depths * 0.001
+        # Look for videos folder
+        videos_folder = self._data_folder / "videos"
+        if not videos_folder.exists():
+            raise FileNotFoundError(f"No videos folder found in {self._data_folder}")
+        
+        # Load RGB and depth videos
+        self._all_colors, self._all_depths = self._load_videos_from_folder(videos_folder)
         self._num_frames, self._num_cams = self._all_colors.shape[:2]
         self._rs_height, self._rs_width = self._all_colors.shape[2:4]
-        print(f"[INFO] Loaded h5: {self._num_frames} frames, {self._num_cams} active cameras (from h5 indices {self._cam_h5_indices})")
+        
+        # Load masks
         self._all_masks = self._load_masks_from_folder(self._seg_folder, self._num_frames, self._num_cams, h5_name="masks.h5", h5_dataset="masks")
         object_mask_dir = self._object_masks_folder
         if object_mask_dir.exists():
             self._all_object_masks = self._load_masks_from_folder(object_mask_dir, self._num_frames, self._num_cams, h5_name="object_masks.h5", h5_dataset="object_masks")
         else:
             self._all_object_masks = None
+
+    def _load_videos_from_folder(self, videos_folder):
+        """
+        Load RGB and depth videos from the videos folder.
+        Args:
+            videos_folder (Path): Path to the videos folder.
+        Returns:
+            tuple: (all_colors, all_depths) arrays
+        """
+        # Find available cameras by looking for RGB videos
+        # Support two naming conventions:
+        # 1. rgb_cam00.mp4, depth_cam00.mp4 (original)
+        # 2. cam0_rgb.mp4, cam0_depth.mp4 (new)
+        rgb_videos = list(videos_folder.glob("rgb_cam*.mp4"))
+        depth_videos = list(videos_folder.glob("depth_cam*.mp4"))
+        naming_convention = "original"
+        
+        if len(rgb_videos) == 0:
+            # Try alternative naming convention
+            rgb_videos = list(videos_folder.glob("*_rgb.mp4"))
+            depth_videos = list(videos_folder.glob("*_depth.mp4"))
+            naming_convention = "new"
+        
+        if len(rgb_videos) == 0:
+            raise FileNotFoundError(f"No RGB videos found in {videos_folder}")
+        
+        # Extract camera indices and sort
+        if naming_convention == "original":
+            rgb_cam_indices = sorted([int(path.stem.split('_cam')[1]) for path in rgb_videos])
+            depth_cam_indices = sorted([int(path.stem.split('_cam')[1]) for path in depth_videos])
+        else:
+            # For new naming convention: cam0_rgb.mp4 -> extract '0'
+            rgb_cam_indices = sorted([int(path.stem.split('_')[0].replace('cam', '')) for path in rgb_videos])
+            depth_cam_indices = sorted([int(path.stem.split('_')[0].replace('cam', '')) for path in depth_videos])
+        
+        print(f"[INFO] Found RGB videos for cameras: {rgb_cam_indices}")
+        print(f"[INFO] Found depth videos for cameras: {depth_cam_indices}")
+        print(f"[INFO] Using naming convention: {naming_convention}")
+        
+        # Load first RGB video to get dimensions and frame count
+        if naming_convention == "original":
+            first_rgb_path = videos_folder / f"rgb_cam{rgb_cam_indices[0]:02d}.mp4"
+        else:
+            first_rgb_path = videos_folder / f"cam{rgb_cam_indices[0]}_rgb.mp4"
+        
+        cap = cv2.VideoCapture(str(first_rgb_path))
+        num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        cap.release()
+        
+        print(f"[INFO] Video dimensions: {width}x{height}, frames: {num_frames}")
+        
+        # Initialize arrays
+        num_cams = len(rgb_cam_indices)
+        all_colors = np.zeros((num_frames, num_cams, height, width, 3), dtype=np.uint8)
+        all_depths = np.zeros((num_frames, num_cams, height, width), dtype=np.float32)
+        
+        # Load RGB videos
+        for cam_idx, cam_num in enumerate(rgb_cam_indices):
+            if naming_convention == "original":
+                rgb_path = videos_folder / f"rgb_cam{cam_num:02d}.mp4"
+            else:
+                rgb_path = videos_folder / f"cam{cam_num}_rgb.mp4"
+            print(f"[INFO] Loading RGB video: {rgb_path}")
+            frames = self._load_video_frames(rgb_path, is_depth=False)
+            all_colors[:, cam_idx] = frames
+        
+        # Load depth videos if available
+        for cam_idx, cam_num in enumerate(rgb_cam_indices):
+            if cam_num in depth_cam_indices:
+                if naming_convention == "original":
+                    depth_path = videos_folder / f"depth_cam{cam_num:02d}.mp4"
+                else:
+                    depth_path = videos_folder / f"cam{cam_num}_depth.mp4"
+                print(f"[INFO] Loading depth video: {depth_path}")
+                frames = self._load_video_frames(depth_path, is_depth=True)
+                all_depths[:, cam_idx] = frames
+            else:
+                print(f"[WARNING] No depth video found for camera {cam_num}")
+        
+        return all_colors, all_depths
+
+    def _load_video_frames(self, video_path, is_depth=False):
+        """
+        Load all frames from a video file.
+        Args:
+            video_path (Path): Path to the video file.
+            is_depth (bool): Whether this is a depth video (needs special processing).
+        Returns:
+            np.ndarray: Array of frames, shape (num_frames, H, W, 3) for RGB or (num_frames, H, W) for depth
+        """
+        cap = cv2.VideoCapture(str(video_path))
+        num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        
+        if is_depth:
+            frames = np.zeros((num_frames, height, width), dtype=np.float32)
+        else:
+            frames = np.zeros((num_frames, height, width, 3), dtype=np.uint8)
+        
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            if is_depth:
+                # For depth videos, convert back from uint8 to depth values
+                # The video was saved as uint8 (scaled from uint16 by dividing by 256)
+                # So we need to scale back up and convert to meters
+                depth_uint8 = frame[:, :, 0] if frame.ndim == 3 else frame  # Take first channel if grayscale was saved as 3-channel
+                depth_uint16 = depth_uint8.astype(np.uint16) * 256  # Scale back to uint16 range
+                depth_meters = depth_uint16.astype(np.float32) / 1000.0  # Convert mm back to meters
+                frames[frame_idx] = depth_meters
+            else:
+                # Convert BGR to RGB
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames[frame_idx] = rgb_frame
+            
+            frame_idx += 1
+            if frame_idx >= num_frames:
+                break
+        
+        cap.release()
+        return frames
 
     def _load_masks_from_folder(self, mask_root_dir, num_frames, num_cams, h5_name=None, h5_dataset=None):
         """
@@ -87,51 +214,22 @@ class MyClusterLoader:
         """
         mask_root_dir = Path(mask_root_dir)
         if h5_name is not None and (mask_root_dir / h5_name).exists():
+            import h5py
             with h5py.File(mask_root_dir / h5_name, 'r') as f:
-                masks = f[h5_dataset][:, self._cam_h5_indices]  # select active cameras
-            print(f"[INFO] Loaded masks from {mask_root_dir / h5_name}, selected h5 indices {self._cam_h5_indices}, shape: {masks.shape}")
+                masks = f[h5_dataset][:]
+            print(f"[INFO] Loaded masks from {mask_root_dir / h5_name}")
             return masks
         # fallback to npy loading
-        # mask npy files are indexed by original video frame number
-        # npy folder names use original calibration index (e.g. cam2_rgb), not active camera index
         all_masks = []
         for frame_idx in range(num_frames):
-            original_frame_idx = frame_idx + self._start_frame
             frame_masks = []
             for cam_idx in range(num_cams):
-                h5_idx = self._cam_h5_indices[cam_idx]
-                cam_folder = mask_root_dir / f"cam{h5_idx}_rgb"
-                # Try different filename formats using original frame index
-                npy_path = None
-                for fmt in [f"{original_frame_idx:04d}.npy", f"{original_frame_idx}.npy"]:
-                    test_path = cam_folder / fmt
-                    if test_path.exists():
-                        npy_path = test_path
-                        break
-                
-                if npy_path is None or not npy_path.exists():
+                cam_folder = mask_root_dir / f"cam{cam_idx:02d}.mp4"
+                npy_path = cam_folder / f"{frame_idx}.npy"
+                if not npy_path.exists():
                     frame_masks.append(np.zeros((self._rs_height, self._rs_width), dtype=np.uint8))
                     continue
-                
                 mask = np.load(npy_path)
-                # Handle different mask shapes: (1, H, W) -> (H, W), or (H, W) -> (H, W)
-                if mask.ndim == 3:
-                    mask = mask.squeeze(0)  # Remove first dimension if present
-                elif mask.ndim != 2:
-                    print(f"[WARNING] Unexpected mask shape {mask.shape} from {npy_path}, using zeros")
-                    mask = np.zeros((self._rs_height, self._rs_width), dtype=np.uint8)
-                
-                # Resize mask if dimensions don't match
-                if mask.shape[0] != self._rs_height or mask.shape[1] != self._rs_width:
-                    try:
-                        import cv2
-                        mask = cv2.resize(mask, (self._rs_width, self._rs_height), interpolation=cv2.INTER_NEAREST)
-                    except ImportError:
-                        from scipy.ndimage import zoom
-                        scale_h = self._rs_height / mask.shape[0]
-                        scale_w = self._rs_width / mask.shape[1]
-                        mask = zoom(mask, (scale_h, scale_w), order=0).astype(mask.dtype)
-                
                 frame_masks.append(mask)
             all_masks.append(frame_masks)
         all_masks = np.array(all_masks)  # (N, num_cams, H, W)
@@ -219,28 +317,13 @@ class MyClusterLoader:
         self._models_folder = Path(data["models_folder"])
         self._calibration_yaml_path = Path(data["calibration_yaml_path"])
         self._load_camera_params_from_yaml()
-        # _rs_serials now has ALL cameras from calibration YAML (e.g. ['00'..'07'])
-        # _rs_Ks, _extr2world, _extr2world_inv indexed by calibration order
-        all_calib_serials = list(self._rs_serials)  # save full list
-
         self._num_frames = data["num_frames"]
         self._object_ids = data["object_ids"]
         self._mano_sides = data["mano_sides"]
         self._subject_id = data["subject_id"]
-        meta_serials = data["realsense"]["serials"]
+        self._rs_serials = data["realsense"]["serials"]
         self._rs_width = data["realsense"]["width"]
         self._rs_height = data["realsense"]["height"]
-
-        # Compute mapping: meta serial -> h5/calibration index
-        # e.g. meta_serials=['02','03',...'07'] -> _cam_h5_indices=[2,3,...,7]
-        self._cam_h5_indices = [all_calib_serials.index(s) for s in meta_serials]
-        print(f"[INFO] Active cameras: {meta_serials}, h5 indices: {self._cam_h5_indices}")
-
-        # Filter Ks and extrinsics to only active cameras
-        self._rs_Ks = self._rs_Ks[self._cam_h5_indices]
-        self._extr2world = self._extr2world[self._cam_h5_indices]
-        self._extr2world_inv = self._extr2world_inv[self._cam_h5_indices]
-        self._rs_serials = meta_serials
         self.have_hl = data["have_hololens"]
         self.have_mano = data["have_mano"]
         if self.have_hl:
@@ -256,8 +339,7 @@ class MyClusterLoader:
             for obj_id in self._object_ids
         ]
         self._thresholds = data.get("thresholds", [-0.3, 0.3, -0.3, 0.3, -0.2, 0.4])
-        self._start_frame = data.get("start_frame", 0)
-        print(f"[DEBUG] thresholds: {self._thresholds}, start_frame: {self._start_frame}")
+        print(f"[DEBUG] thresholds: {self._thresholds}")
         if self.have_mano:
             self._mano_beta = np.array(data["betas"], dtype=np.float32)
 
@@ -395,22 +477,15 @@ class MyClusterLoader:
 
     def get_valid_seg_serials(self):
         """
-        Get list of camera serials for which segmentation masks exist.
-        Checks for the first frame's mask file using start_frame offset.
+        Get list of camera serials for which segmentation masks exist (checks for 0.npy).
         Returns:
             list[str]: List of valid camera serials.
         """
         valid_serials = []
         for cam_idx, serial in enumerate(self._rs_serials):
-            h5_idx = self._cam_h5_indices[cam_idx]
-            cam_folder = self._seg_folder / f"cam{h5_idx}_rgb"
-            # Check using original frame index (with start_frame offset)
-            found = False
-            for fmt in [f"{self._start_frame:04d}.npy", f"{self._start_frame}.npy"]:
-                if (cam_folder / fmt).exists():
-                    found = True
-                    break
-            if found:
+            cam_folder = self._seg_folder / f"cam{cam_idx:02d}.mp4"
+            npy_path = cam_folder / "0.npy"
+            if npy_path.exists():
                 valid_serials.append(serial)
         return valid_serials
 
@@ -448,11 +523,6 @@ class MyClusterLoader:
         return color
 
     # Properties for dataset attributes
-    @property
-    def cam_h5_indices(self):
-        """Mapping from active camera index to h5 camera dimension index."""
-        return self._cam_h5_indices
-
     @property
     def num_frames(self):
         """Number of frames in the sequence."""

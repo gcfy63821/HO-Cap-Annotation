@@ -9,10 +9,10 @@ from scipy.spatial.transform import Rotation as R
 import multiprocessing
 import h5py
 import torch
-from hocap_annotation.layers import MANOGroupLayer
-from hocap_annotation.utils.color_info import *
-from hocap_annotation.utils.mano_info import *
 from hocap_annotation.loaders.my_cluster_loader import MyClusterLoader
+import pickle
+from hocap_annotation.utils import CFG
+from manopth.manolayer import ManoLayer
 
 
 
@@ -28,26 +28,6 @@ def load_pose(pose_txt):
         T[:3, 3] = t
         return T
 
-def load_mano_sequence(mano_file):
-    mano_data = np.load(mano_file).astype(np.float32)
-    print(f"[INFO] Loaded MANO sequence from {mano_file}, shape: {mano_data.shape}")
-    return mano_data  # 返回形状为(2, N, 51)的数组
-
-# Remove load_mano_beta and load_extrinsics_yaml, and update init_mano_group_layer to use loader.mano_beta
-
-def init_mano_group_layer(betas):
-    mano_group_layer = MANOGroupLayer(['left','right'], [betas] * 2).to('cuda')
-    return mano_group_layer
-
-# 1. 加载MANO姿态数据并传递给层
-def mano_group_layer_forward(poses_m, layer, subset=None):
-    p = torch.cat(poses_m, dim=1)
-    v, j = layer(p, subset)
-    if v.size(0) == 1:
-        v = v.squeeze(0)
-        j = j.squeeze(0)
-    return v, j
-
 def load_poses_m(pose_file):
     poses = np.load(pose_file).astype(np.float32)
     mano_sides = ['left','right']
@@ -56,14 +36,107 @@ def load_poses_m(pose_file):
     )  # (num_hands, num_frames 51)
     return poses
 
-def load_mano_data(mano_file, layer):
-    poses_m = load_poses_m(mano_file)
-    
-    poses_m = [torch.from_numpy(p).to('cuda') for p in poses_m]
-    verts_m, joints_m = mano_group_layer_forward(poses_m, layer)  # 获取verts_m和joints_m
-    verts_m = verts_m.detach().clone().cpu().numpy()
-    joints_m = joints_m.detach().clone().cpu().numpy()
-    return verts_m, joints_m
+def load_pkl_and_get_hand_data(pkl_file):
+    # 加载 .pkl 文件
+    with open(pkl_file, 'rb') as f:
+        data = pickle.load(f)
+    if 'hand_pose' not in data:
+        raise ValueError("No 'hand_pose' found in the .pkl file.")
+    hand_pose = data['hand_pose']
+    # Extract all relevant fields, using None if not present
+    left_hand_pose = np.array(hand_pose.get('left_hand_pose', []))
+    left_hand_beta = np.array(hand_pose.get('left_hand_beta', []))
+    left_hand_translation = np.array(hand_pose.get('left_hand_translation', []))
+    left_hand_base_rot = np.array(hand_pose.get('left_hand_base_rot', []))
+    right_hand_pose = np.array(hand_pose.get('right_hand_pose', []))
+    right_hand_beta = np.array(hand_pose.get('right_hand_beta', []))
+    right_hand_translation = np.array(hand_pose.get('right_hand_translation', []))
+    # right_hand_base_rot is not always present
+    right_hand_base_rot = np.array(hand_pose.get('right_hand_base_rot', []))
+    return {
+        'left_hand_pose': left_hand_pose,
+        'left_hand_beta': left_hand_beta,
+        'left_hand_translation': left_hand_translation,
+        'left_hand_base_rot': left_hand_base_rot,
+        'right_hand_pose': right_hand_pose,
+        'right_hand_beta': right_hand_beta,
+        'right_hand_translation': right_hand_translation,
+        'right_hand_base_rot': right_hand_base_rot,
+    }
+
+def get_betas(b):
+    b = np.array(b)
+    if b.ndim == 2 and b.shape[0] == 1:
+        return b[0]
+    return b.squeeze()
+
+def init_mano_layers(hand_data):
+    mano_betas_left = get_betas(hand_data['left_hand_beta'])
+    mano_betas_right = get_betas(hand_data['right_hand_beta'])
+    mano_layer_right = ManoLayer(side="right",
+                                mano_root=CFG.mano.model_path, 
+                                use_pca=False, 
+                                ncomps=45).to('cuda')
+    mano_layer_left = ManoLayer(side="left",
+                                mano_root=CFG.mano.model_path, 
+                                use_pca=False, 
+                                ncomps=45).to('cuda')
+    return mano_layer_left, mano_layer_right
+
+def reconstruct_left_hand_mesh(hand_data, frame_idx, mano_layer, left_pose, mano_layer_left):
+    # Use pose from npy file, other data from pkl
+    try:
+        pose = torch.tensor(left_pose).to('cuda').unsqueeze(0)
+        translation = torch.tensor(hand_data['left_hand_translation'][frame_idx]).to('cuda').unsqueeze(0)
+        base_rot = torch.tensor(hand_data['left_hand_base_rot'][frame_idx]).to('cuda') if hand_data['left_hand_base_rot'].ndim == 3 else torch.eye(3).to('cuda')
+        hand_beta = torch.tensor(hand_data['left_hand_beta']).to('cuda')
+        
+        verts, joints = mano_layer(pose, hand_beta.float())
+        verts = verts[0] / 1000
+        joints = joints[0] / 1000
+
+        if verts.size(0) == 1:
+            verts = verts.squeeze(0)
+            joints = joints.squeeze(0)
+        
+        root_trans = joints[0].clone().detach()
+        verts -= root_trans
+        verts[:, 0] *= -1
+        verts = verts @ base_rot.T
+        verts += translation
+        faces = mano_layer_left.th_faces.detach().cpu().numpy()
+        
+        mesh = trimesh.Trimesh(verts.detach().cpu().numpy(), faces)
+        return mesh
+    except Exception as e:
+        print(f"Error in reconstruct_left_hand_mesh for frame {frame_idx}: {e}")
+        return None
+
+def reconstruct_right_hand_mesh(hand_data, frame_idx, mano_layer_right, right_pose):
+    # Use pose from npy file, other data from pkl
+    try:
+        pose = torch.tensor(right_pose).to('cuda').unsqueeze(0)
+        translation = torch.tensor(hand_data['right_hand_translation'][frame_idx]).to('cuda').unsqueeze(0)
+        hand_beta = torch.tensor(hand_data['right_hand_beta']).to('cuda')
+        
+        verts, joints = mano_layer_right(pose, hand_beta.float())
+        
+        verts = verts[0] / 1000
+        joints = joints[0] / 1000
+        if verts.size(0) == 1:
+            verts = verts.squeeze(0)
+            joints = joints.squeeze(0)
+        
+        root_trans = joints[0].clone().detach()
+        verts -= root_trans
+        verts += translation
+        faces = mano_layer_right.th_faces.detach().cpu().numpy()
+        
+        mesh = trimesh.Trimesh(verts.detach().cpu().numpy(), faces)
+        return mesh
+    except Exception as e:
+        print(f"Error in reconstruct_right_hand_mesh for frame {frame_idx}: {e}")
+        return None
 
 def project_points(vertices, K):
     pts = vertices @ K[:3, :3].T
@@ -75,6 +148,11 @@ def render_hand_mesh(hand_mesh, K, W, H):
     """
     使用Trimesh渲染手的网格并将其投影到2D图像平面
     """
+    # Check if mesh is valid
+    if hand_mesh is None or len(hand_mesh.vertices) == 0 or len(hand_mesh.faces) == 0:
+        # Return empty image if mesh is invalid
+        return np.ones((H, W, 3), dtype=np.uint8) * 255
+    
     # 投影到2D图像
     hand_pts_2d = project_points(hand_mesh.vertices, K)
 
@@ -83,10 +161,15 @@ def render_hand_mesh(hand_mesh, K, W, H):
 
     # 绘制手部网格的面
     for face in hand_mesh.faces:
-        pts_2d = hand_pts_2d[face]
-        pts_2d = pts_2d.astype(np.int32)
-        if pts_2d.shape[0] == 3:
-            cv2.polylines(hand_img, [pts_2d], isClosed=True, color=(0, 255, 0), thickness=1)
+        if len(face) == 3:  # Ensure face has 3 vertices
+            try:
+                pts_2d = hand_pts_2d[face]
+                pts_2d = pts_2d.astype(np.int32)
+                if pts_2d.shape[0] == 3:
+                    cv2.polylines(hand_img, [pts_2d], isClosed=True, color=(0, 255, 0), thickness=1)
+            except (IndexError, ValueError) as e:
+                # Skip invalid faces
+                continue
 
     return hand_img
 
@@ -104,7 +187,7 @@ def concat_frames_grid(frames, grid_shape=(2, 4)):
     return grid
 
 def process_frame_pose_npy_h5(args):
-    i, pose_data, verts_m, faces_m, outlier_idxs, orig_vertices, orig_mesh, dataloader, object_idx = args
+    i, pose_data, verts_m, faces_m, outlier_idxs, orig_vertices, orig_mesh, dataloader, object_idx, render_hands, hand_data, mano_layer_left, mano_layer_right, poses_m = args
     W, H = 640, 480
     frame_tiles = []
 
@@ -121,8 +204,29 @@ def process_frame_pose_npy_h5(args):
     T[:3, :3] = R_mat
     T[:3, 3] = t
 
-    # 获取当前帧的MANO手部数据
-    mano_verts = verts_m[i, :, :]
+    # 重建左右手mesh - use poses from npy, other data from pkl
+    left_hand_mesh = None
+    right_hand_mesh = None
+    if render_hands and hand_data is not None and mano_layer_left is not None and mano_layer_right is not None:
+        left_pose = poses_m[0][i]  # left hand pose for current frame
+        right_pose = poses_m[1][i]  # right hand pose for current frame
+        
+        try:
+            left_hand_mesh = reconstruct_left_hand_mesh(hand_data, i, mano_layer_right, left_pose, mano_layer_left)
+            right_hand_mesh = reconstruct_right_hand_mesh(hand_data, i, mano_layer_right, right_pose)
+            
+            # Debug: check if meshes are valid
+            if left_hand_mesh is None or len(left_hand_mesh.vertices) == 0:
+                print(f"Warning: Left hand mesh is empty for frame {i}")
+                left_hand_mesh = None
+            if right_hand_mesh is None or len(right_hand_mesh.vertices) == 0:
+                print(f"Warning: Right hand mesh is empty for frame {i}")
+                right_hand_mesh = None
+                
+        except Exception as e:
+            print(f"Error reconstructing hand meshes for frame {i}: {e}")
+            left_hand_mesh = None
+            right_hand_mesh = None
     
     colors_m = [(0.0, 1.0, 1.0), (0.9803921568627451, 0.2901960784313726, 0.16862745098039217)]
     Ks = dataloader.rs_Ks
@@ -153,28 +257,30 @@ def process_frame_pose_npy_h5(args):
         color_dot = (0, 0, 255) if i in outlier_idxs else colors_m[1]
         for x, y in pts:
             cv2.circle(vis, (x, y), 2, color_dot, -1)
-        # slow
-        # for face in mesh.faces:
-        #     pts_2d = pts[face]
-        #     pts_2d = pts_2d.astype(np.int32)
-        #     if pts_2d.shape[0] == 3:
-        #         cv2.polylines(vis, [pts_2d], isClosed=True, color=colors_m[1], thickness=1)
 
-        # 将MANO手部位姿可视化到图像上
-        mano_verts_cpu = mano_verts.cpu().numpy() if torch.is_tensor(mano_verts) else mano_verts
-        faces_m_cpu = faces_m.cpu().numpy().astype(np.int32) if torch.is_tensor(faces_m) else faces_m.astype(np.int32)
-        # 创建Trimesh对象
-        hand_mesh = trimesh.Trimesh(vertices=mano_verts_cpu, faces=faces_m_cpu, process=False)
-        hand_mesh.apply_transform(world2cam)
-        hand_img = render_hand_mesh(hand_mesh, Ks[serial_idx], W, H)
-
-        # 合并结果
-        vis = cv2.addWeighted(vis, 0.6, hand_img, 0.4, 0)
+        # 手部mesh - only process if meshes are valid and hands are enabled
+        if render_hands:
+            if left_hand_mesh is not None:
+                try:
+                    left_hand_mesh_copy = left_hand_mesh.copy()
+                    left_hand_mesh_copy.vertices = left_hand_mesh_copy.vertices.copy()
+                    left_hand_mesh_copy.apply_transform(world2cam)
+                    left_hand_img = render_hand_mesh(left_hand_mesh_copy, K, W, H)
+                    vis = cv2.addWeighted(vis, 0.6, left_hand_img, 0.4, 0)
+                except Exception as e:
+                    print(f"Error processing left hand mesh for frame {i}, serial {serial}: {e}")
+            
+            if right_hand_mesh is not None:
+                try:
+                    right_hand_mesh_copy = right_hand_mesh.copy()
+                    right_hand_mesh_copy.vertices = right_hand_mesh_copy.vertices.copy()
+                    right_hand_mesh_copy.apply_transform(world2cam)
+                    right_hand_img = render_hand_mesh(right_hand_mesh_copy, K, W, H)
+                    vis = cv2.addWeighted(vis, 0.6, right_hand_img, 0.4, 0)
+                except Exception as e:
+                    print(f"Error processing right hand mesh for frame {i}, serial {serial}: {e}")
 
         frame_tiles.append(vis)
-        # vis = visualize_mano_hand(mano_verts, faces_m, colors_m, serial_idx, i, outlier_idxs, dataloader)
-        
-
 
     return concat_frames_grid(frame_tiles, (2, 4))
 
@@ -188,10 +294,12 @@ if __name__ == "__main__":
     parser.add_argument("--pose_file", type=str, default="fd", choices=["fd", "adaptive", "optimized"], help="选择foundation pose 或 optimized")
     parser.add_argument("--uuid", type=str, default="", help="唯一标识符，用于区分不同运行")
     parser.add_argument("--object_idx", type=int, default=1, help="物体索引，默认为0")
+    parser.add_argument("--render_hands", action="store_true", help="是否渲染手部网格")
     args = parser.parse_args()
 
     # Use MyClusterLoader instead of IMGLoader
-    sequence_folder = f"/viscam/projects/robotool/data/{args.data_path}"
+    # sequence_folder = f"/viscam/projects/robotool/data/{args.data_path}"
+    sequence_folder = args.data_path
     loader = MyClusterLoader(sequence_folder)
 
     serials = loader.rs_serials
@@ -213,15 +321,15 @@ if __name__ == "__main__":
     orig_mesh = trimesh.load(str(loader.object_cleaned_files[args.object_idx - 1]), process=False)
     orig_vertices = orig_mesh.vertices.copy()
 
-    # pose_npy_in_cams
-    # Use the same structure as MyClusterLoader for annotated data
-    annotated_base = loader._data_folder.parent.parent / f"{loader._folder_name}_annotated" / loader._sequence_name
+    task_name = loader._data_folder.parent.name
+    sequence_name = loader._data_folder.name
+    annotated_base = loader._data_folder.parent.parent.parent / f"{loader._folder_name}_annotated" / task_name / loader._sequence_name
     if args.pose_file == "fd":
         pose_npy_path = str(annotated_base / "processed/fd_pose_solver/fd_poses_merged_fixed.npy")
     elif args.pose_file == "adaptive":
         pose_npy_path = str(annotated_base / "processed/fd_pose_solver/adaptive_fd_poses_merged_fixed.npy")
     elif args.pose_file == "optimized":
-        pose_npy_path = str(annotated_base / "processed/object_pose_solver/poses_o.npy")
+        pose_npy_path = str(annotated_base / "processed/joint_pose_solver/poses_o.npy")
     output_path2 = Path(f"debug_output/{args.data_path}/pose_npy_in_cams_video")
     output_path2.mkdir(parents=True, exist_ok=True)
     video_out2 = cv2.VideoWriter(
@@ -239,25 +347,34 @@ if __name__ == "__main__":
 
     # MANO hand sequence
     mano_file = str(annotated_base / "processed/joint_pose_solver/poses_m.npy")
-    mano_layer = init_mano_group_layer(loader.mano_beta)
-    verts_m, joints_m = load_mano_data(mano_file, mano_layer)
-    subset_m = list(range(2))
-    faces_m, _ = mano_layer.get_f_from_inds(subset_m)
-    faces_m = [faces_m.detach().clone().cpu().numpy()]
-    mano_sides = ['left','right']
-    colors_m = []
-    for i, side in enumerate(mano_sides):
-        faces_m.append(np.array(NEW_MANO_FACES[side]) + i * NUM_MANO_VERTS)
-        colors_m.append(HAND_COLORS[1 if side == "right" else 2].rgb_norm)
-    faces_m = np.concatenate(faces_m, axis=0).astype(np.int64)
+    # Load hand data and initialize MANO layers if rendering hands
+    hand_data = None
+    mano_layer_left = None
+    mano_layer_right = None
+    poses_m = None
+    if args.render_hands:
+        # Load pkl hand data (for betas, translations, base_rot)
+        pkl_file_path = str(annotated_base / "result_hand_optimized.pkl")
+        try:
+            hand_data = load_pkl_and_get_hand_data(pkl_file_path)
+            mano_layer_left, mano_layer_right = init_mano_layers(hand_data)
+            poses_m = load_poses_m(mano_file)
+            print(f"[INFO] Loaded hand data from {pkl_file_path}")
+            print(f"[INFO] Loaded poses_m from {mano_file}, shape: {poses_m.shape}")
+        except Exception as e:
+            print(f"Warning: Failed to load hand data: {e}")
+            print("Hand rendering will be disabled")
+            args.render_hands = False
+            hand_data = None
+            mano_layer_left = None
+            mano_layer_right = None
+            poses_m = None
 
-    print("verts_m:", verts_m.shape)
-    print("joints_m:", joints_m.shape)
-    print("faces_m:", faces_m.shape)
+    print("Hand rendering enabled:", args.render_hands)
     multiprocessing.set_start_method('spawn', force=True)
-    pool = multiprocessing.Pool(processes=min(8, os.cpu_count() or 8))
+    pool = multiprocessing.Pool(processes=min(12, os.cpu_count() or 12))
     args_list2 = [
-        (i, pose_data, verts_m, faces_m, [], orig_vertices, orig_mesh, loader, args.object_idx)
+        (i, pose_data, None, None, [], orig_vertices, orig_mesh, loader, args.object_idx, args.render_hands, hand_data, mano_layer_left, mano_layer_right, poses_m)
         for i in range(num_frames)
     ]
     for frame in tqdm(pool.imap(process_frame_pose_npy_h5, args_list2), total=num_frames):

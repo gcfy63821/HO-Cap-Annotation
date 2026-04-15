@@ -20,6 +20,8 @@ OPTIMIZE=""
 UUID=""
 TRACK_REFINE_ITER="10"
 HAND=""
+ROT_THRESH="30"
+TRANS_THRESH="0.02"
 # 解析命令行参数
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -53,6 +55,14 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         --hand)
             HAND="$2"
+            shift 2
+            ;;
+        --rot_thresh)
+            ROT_THRESH="$2"
+            shift 2
+            ;;
+        --trans_thresh)
+            TRANS_THRESH="$2"
             shift 2
             ;;
         *)
@@ -89,8 +99,8 @@ TOOL_NAME=${TOOL_NAME:-""}  # 默认值为空
 # fi
 
 # # 运行 04-2_fd_pose_merger.py
-echo "Running fd_pose_merger..."
-python tools/04-2-2_fd_pose_merger_cluster.py --sequence_folder "$SEQUENCE_FOLDER"
+# echo "Running fd_pose_merger..."
+# python tools/04-2-2_fd_pose_merger_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH"
 
 # # 运行 04-2-1_adaptive_fd_merger.py
 # echo "Running adaptive fd_pose_merger..."
@@ -98,13 +108,13 @@ python tools/04-2-2_fd_pose_merger_cluster.py --sequence_folder "$SEQUENCE_FOLDE
 
 
 # 运行 visualize_ob_in_world.py
-# if [ -n "$TOOL_NAME" ]; then
-#     echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
-#     python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID"  --object_idx "$OBJECT_IDX"
+if [ -n "$TOOL_NAME" ]; then
+    echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
+    python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID"  --object_idx "$OBJECT_IDX"
 
-#     echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
-#     python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "adaptive"
-# fi
+    echo "Running visualize_ob_in_world with tool_name=$TOOL_NAME..."
+    python debug/visualize_ob_in_world.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --output_idx "$OUTPUT_IDX" --uuid "$UUID " --object_idx "$OBJECT_IDX" --pose_file "optimized"
+fi
 # added evaluation
 
 # 运行 visualize 并且 分析结果
@@ -119,8 +129,8 @@ python tools/04-2-2_fd_pose_merger_cluster.py --sequence_folder "$SEQUENCE_FOLDE
 
 
 if [ -n "$OPTIMIZE" ]; then
-    echo "Running optimize_fd_pose with optimize=$OPTIMIZE..."
-    python tools/05_mano_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
+    # echo "Running optimize_fd_pose with optimize=$OPTIMIZE..."
+    # python tools/05_mano_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
 
     echo "Running optimize_fd_pose with optimize=$OPTIMIZE..."
     python tools/06_object_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"

@@ -105,9 +105,9 @@ if __name__ == "__main__":
     # mesh_file = "/home/wys/learning-compliant/crq_ws/data/decim_mesh_files_1/decim_mesh_files/blue_scooper.obj"
     # mesh_file = "/home/wys/learning-compliant/crq_ws/data/mesh/decim_mesh_files/blue_spoon.obj"
     # mesh_file = "/home/wys/learning-compliant/crq_ws/data/decim_mesh_files_1/decim_mesh_files/plastic_scoop.obj"
-    mesh_file = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/models/wooden_spoon/cleaned_mesh_10000.obj"
+    mesh_file = "/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/models/blue_cup/cleaned_mesh_10000.obj"
     # mesh_file = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/models/wooden_spoon/textured_mesh.obj"
-    camera_params_file = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/calibration/extrinsics/extrinsics.yaml"
+    camera_params_file = "/home/ruoqu/crq_ws/robotool/DataCollection/calibration.yaml"
 
     # 如果有物体的世界坐标系变换矩阵，可以传入
     transform_obj_in_world = np.eye(4)  # 这是一个示例，你可以替换为实际的变换矩阵

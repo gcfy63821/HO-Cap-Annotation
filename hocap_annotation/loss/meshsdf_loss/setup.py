@@ -17,6 +17,8 @@ CURR_DIR = Path(__file__).parent.resolve()
 # Compiler flags
 c_flags = ["-O3", "-std=c++17"]
 
+# Support multiple GPU architectures
+# RTX 20 series: sm_75, RTX 30 series: sm_86, RTX 40 series: sm_89
 nvcc_flags = [
     "-U__CUDA_NO_HALF_OPERATORS__",
     "-U__CUDA_NO_HALF_CONVERSIONS__",
@@ -24,7 +26,11 @@ nvcc_flags = [
     "--expt-relaxed-constexpr",
     "-Xcompiler", "-O3",
     "-Xcompiler", "-std=c++17",
-    "-gencode=arch=compute_75,code=sm_75"  # 按需修改
+    # Support multiple GPU architectures
+    "-gencode=arch=compute_75,code=sm_75",  # RTX 20 series
+    "-gencode=arch=compute_80,code=sm_80",  # A100
+    "-gencode=arch=compute_86,code=sm_86",  # RTX 30 series
+    "-gencode=arch=compute_89,code=sm_89",  # RTX 40 series (RTX 4090)
 ]
 
 setup(
