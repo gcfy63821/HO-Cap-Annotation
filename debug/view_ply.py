@@ -30,7 +30,7 @@ if __name__ == "__main__":
     # optimize pose
     # ply_path = "/home/wys/learning-compliant/crq_ws/HO-Cap-Annotation/my_dataset/test_1/20250701_012148/processed/object_pose_solver/dpts/dpts_000000.ply"
     # ply_path = "/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/videos_0121/prealign_full.ply"
-    ply_path ="/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/videos_0121_annotated/squeegee_collect_sand/20260122_squeegee_collect_sand_from_table_20/processed/object_pose_solver/dpts/dpts_000000.ply"
+    ply_path ="/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/new_models/sponge.ply"
     # ply_path = "/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/videos_0121/flat_pc/merged_flat_z0.ply"
     # tarun's debug
     # ply_path = "/home/wys/learning-compliant/crq_ws/tool_use_benchmark/FoundationPose/3/scene_raw.ply"

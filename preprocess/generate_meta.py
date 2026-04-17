@@ -4,6 +4,33 @@ import yaml
 import numpy as np
 from pathlib import Path
 import argparse
+import re
+
+
+def discover_camera_folders(mask_root_dir):
+    """
+    Discover actual camera folders from mask directory and return sorted mapping.
+    Supports names like:
+      - cam8_rgb
+      - cam08.mp4
+      - cam8.mp4
+    Returns:
+        list[tuple[int, Path]]: [(camera_id_int, folder_path), ...] sorted by camera_id.
+    """
+    mask_root_dir = Path(mask_root_dir)
+    if not mask_root_dir.exists():
+        return []
+
+    camera_folders = []
+    for child in mask_root_dir.iterdir():
+        if not child.is_dir():
+            continue
+        m = re.match(r"^cam(\d+)(?:_rgb|\.mp4)?$", child.name)
+        if m:
+            camera_folders.append((int(m.group(1)), child))
+
+    camera_folders.sort(key=lambda x: x[0])
+    return camera_folders
 
 def load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=None, expected_W=None, start_frame=0):
     """
@@ -28,31 +55,31 @@ def load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=None,
     mask_root_dir = Path(mask_root_dir)
     all_masks = []
     
+    # Build camera-folder mapping from actual directory names
+    discovered = discover_camera_folders(mask_root_dir)
+    if len(discovered) == 0:
+        camera_folders = []
+    else:
+        if len(discovered) < num_cams:
+            print(f"[WARNING] Discovered {len(discovered)} camera folder(s), but h5 has {num_cams} camera(s). Missing views will be filled with zeros.")
+        elif len(discovered) > num_cams:
+            print(f"[WARNING] Discovered {len(discovered)} camera folder(s), but h5 has {num_cams} camera(s). Using first {num_cams} by camera id.")
+        camera_folders = [folder for _, folder in discovered[:num_cams]]
+
     # 从第一帧推断mask的尺寸
     first_mask_shape = None
-    for cam_idx in range(num_cams):
-        # 尝试多种路径格式
-        possible_cam_folders = [
-            mask_root_dir / f"cam{cam_idx:02d}.mp4",
-            mask_root_dir / f"cam{cam_idx}_rgb",
-            mask_root_dir / f"cam{cam_idx}.mp4",
-        ]
-        
-        for cam_folder in possible_cam_folders:
-            if cam_folder.exists():
-                # 尝试多种文件名格式
-                for fmt in [f"{0:04d}.npy", f"{0}.npy"]:
-                    npy_path = cam_folder / fmt
-                    if npy_path.exists():
-                        mask = np.load(npy_path)
-                        # 处理mask形状
-                        if mask.ndim == 3:
-                            mask = mask.squeeze(0)  # (1, H, W) -> (H, W)
-                        if first_mask_shape is None:
-                            first_mask_shape = mask.shape
-                        break
-                if first_mask_shape is not None:
-                    break
+    for cam_folder in camera_folders:
+        # 尝试多种文件名格式
+        for fmt in [f"{0:04d}.npy", f"{0}.npy"]:
+            npy_path = cam_folder / fmt
+            if npy_path.exists():
+                mask = np.load(npy_path)
+                # 处理mask形状
+                if mask.ndim == 3:
+                    mask = mask.squeeze(0)  # (1, H, W) -> (H, W)
+                if first_mask_shape is None:
+                    first_mask_shape = mask.shape
+                break
         if first_mask_shape is not None:
             break
     
@@ -75,23 +102,14 @@ def load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=None,
         original_frame_idx = frame_idx + start_frame
         frame_masks = []
         for cam_idx in range(num_cams):
-            # 尝试多种路径格式
-            possible_cam_folders = [
-                mask_root_dir / f"cam{cam_idx:02d}.mp4",
-                mask_root_dir / f"cam{cam_idx}_rgb",
-                mask_root_dir / f"cam{cam_idx}.mp4",
-            ]
-
             npy_path = None
-            for cam_folder in possible_cam_folders:
-                if cam_folder.exists():
-                    # 尝试多种文件名格式（使用原始帧号）
-                    for fmt in [f"{original_frame_idx:04d}.npy", f"{original_frame_idx}.npy"]:
-                        test_path = cam_folder / fmt
-                        if test_path.exists():
-                            npy_path = test_path
-                            break
-                    if npy_path is not None:
+            if cam_idx < len(camera_folders):
+                cam_folder = camera_folders[cam_idx]
+                # 尝试多种文件名格式（使用原始帧号）
+                for fmt in [f"{original_frame_idx:04d}.npy", f"{original_frame_idx}.npy"]:
+                    test_path = cam_folder / fmt
+                    if test_path.exists():
+                        npy_path = test_path
                         break
             
             if npy_path is None or not npy_path.exists():
@@ -133,16 +151,56 @@ def save_masks_to_h5(masks, h5_path, dataset_name="masks"):
         f.create_dataset(dataset_name, data=masks, compression="gzip")
     print(f"[INFO] Saved {dataset_name} to {h5_path}")
 
+def detect_num_objects_from_masks(mask_root_dir, num_cams, start_frame=0):
+    """
+    Auto-detect number of objects by scanning mask .npy files for the max label value.
+    Returns the number of distinct objects (max label value).
+    """
+    mask_root_dir = Path(mask_root_dir)
+    max_label = 0
+
+    discovered = discover_camera_folders(mask_root_dir)
+    camera_folders = [folder for _, folder in discovered[:num_cams]] if discovered else []
+    for cam_folder in camera_folders:
+        # Check first few frames to detect max label
+        for frame_offset in range(min(5, 9999)):
+            frame_idx = start_frame + frame_offset
+            for fmt in [f"{frame_idx:04d}.npy", f"{frame_idx}.npy"]:
+                npy_path = cam_folder / fmt
+                if npy_path.exists():
+                    mask = np.load(npy_path)
+                    max_label = max(max_label, int(mask.max()))
+                    break
+
+    return max_label
+
+
+def load_object_names_from_yaml(mask_root_dir):
+    """
+    Read objects.yaml from the mask directory if it exists.
+    Returns list of tool names, or None if not found.
+    """
+    objects_yaml = Path(mask_root_dir) / "objects.yaml"
+    if objects_yaml.exists():
+        with open(objects_yaml, 'r') as f:
+            data = yaml.safe_load(f)
+        if data and "objects" in data:
+            print(f"[INFO] Loaded object names from {objects_yaml}: {data['objects']}")
+            return data["objects"]
+    return None
+
+
 def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_root, subject_id="subject_5", tool_name="blue_scooper", models_folder="models", object_mask_dir=None, start_frame=0, thresholds=None):
     """
     Generate meta.yaml for a HO-Cap dataset sequence. Also saves masks as h5 files in their respective directories.
+    Auto-detects number of objects from mask labels and reads objects.yaml for tool names.
     Args:
         h5_path (str): Path to the .h5 file containing imgs and depths.
         mask_root_dir (str): Path to the tool_masks folder.
         calibration_yaml_path (str): Path to the original calibration YAML file.
         output_root (str): Output root directory for meta.yaml.
         subject_id (str): Subject ID.
-        tool_name (str): Name of the tool/object.
+        tool_name (str): Name of the tool/object (used as fallback if objects.yaml not found).
         models_folder (str): Path to the models folder.
         object_mask_dir (str or None): Path to object_masks folder (optional).
     """
@@ -164,10 +222,46 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
         object_masks_h5_path = Path(object_mask_dir) / "object_masks.h5"
         save_masks_to_h5(object_masks, object_masks_h5_path, dataset_name="object_masks")
 
+    # Auto-detect number of objects from mask labels
+    num_objects_detected = detect_num_objects_from_masks(mask_root_dir, num_cams, start_frame)
+    print(f"[INFO] Detected {num_objects_detected} object(s) from mask labels")
+
+    # Determine object_ids list
+    # Priority: objects.yaml > auto-detect count with tool_name fallback
+    object_names = load_object_names_from_yaml(mask_root_dir)
+    if object_names is not None:
+        # Validate count matches detection
+        if num_objects_detected > 0 and len(object_names) != num_objects_detected:
+            print(f"[WARNING] objects.yaml has {len(object_names)} names but masks have {num_objects_detected} labels. Using objects.yaml.")
+        object_ids = object_names
+    elif num_objects_detected <= 1:
+        # Single object (or no objects detected): use tool_name as before
+        object_ids = [tool_name]
+    else:
+        # Multiple objects detected but no objects.yaml: use tool_name for first, generic for rest
+        print(f"[WARNING] Multiple objects detected ({num_objects_detected}) but no objects.yaml found. "
+              f"Using '{tool_name}' for first object and generic names for the rest.")
+        object_ids = [tool_name] + [f"object_{i+1}" for i in range(1, num_objects_detected)]
+
+    print(f"[INFO] object_ids: {object_ids}")
+
     # Get camera serials from calibration YAML
     with open(calibration_yaml_path, 'r') as f:
         calib_data = yaml.safe_load(f)
-    cam_serials = [str(cam['camera_id']).zfill(2) for cam in calib_data]
+    calib_serials = [str(cam['camera_id']).zfill(2) for cam in calib_data]
+
+    # Prefer actual camera folder names from mask directory (e.g. cam8_rgb -> '08')
+    discovered = discover_camera_folders(mask_root_dir)
+    discovered_serials = [str(cam_id).zfill(2) for cam_id, _ in discovered]
+    if len(discovered_serials) >= num_cams:
+        cam_serials = discovered_serials[:num_cams]
+        print(f"[INFO] Using camera serials from actual mask folders: {cam_serials}")
+    else:
+        cam_serials = calib_serials[:num_cams]
+        if len(discovered_serials) > 0:
+            print(f"[WARNING] Discovered {len(discovered_serials)} camera folder(s) but h5 has {num_cams}. Fallback to calibration serials: {cam_serials}")
+        else:
+            print(f"[WARNING] No camera folders discovered under masks. Using calibration serials: {cam_serials}")
     # Assume width/height from imgs
     width = imgs.shape[3]
     height = imgs.shape[2]
@@ -180,7 +274,7 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
     meta = {
         "num_frames": int(num_frames),
         "start_frame": int(start_frame),
-        "object_ids": [tool_name],
+        "object_ids": object_ids,
         "mano_sides": ['left', 'right'],
         "subject_id": subject_id,
         "realsense": {

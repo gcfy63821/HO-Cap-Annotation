@@ -221,13 +221,14 @@ class MyClusterLoader:
         self._load_camera_params_from_yaml()
         # _rs_serials now has ALL cameras from calibration YAML (e.g. ['00'..'07'])
         # _rs_Ks, _extr2world, _extr2world_inv indexed by calibration order
-        all_calib_serials = list(self._rs_serials)  # save full list
+        all_calib_serials = [str(s).zfill(2) for s in self._rs_serials]  # save full list
 
         self._num_frames = data["num_frames"]
         self._object_ids = data["object_ids"]
         self._mano_sides = data["mano_sides"]
         self._subject_id = data["subject_id"]
-        meta_serials = data["realsense"]["serials"]
+        # Normalize serials to two-digit strings, because YAML may parse values like `08` as integer `8`
+        meta_serials = [str(s).zfill(2) for s in data["realsense"]["serials"]]
         self._rs_width = data["realsense"]["width"]
         self._rs_height = data["realsense"]["height"]
 
@@ -400,15 +401,32 @@ class MyClusterLoader:
         Returns:
             list[str]: List of valid camera serials.
         """
+        # If masks are stored in a single h5 (common in this repo), all active cameras are valid.
+        # The old directory-probing logic below is only needed for per-frame .npy layouts.
+        if (Path(self._seg_folder) / "masks.h5").exists():
+            return list(self._rs_serials)
+
         valid_serials = []
         for cam_idx, serial in enumerate(self._rs_serials):
-            h5_idx = self._cam_h5_indices[cam_idx]
-            cam_folder = self._seg_folder / f"cam{h5_idx}_rgb"
+            # Prefer probing by actual serial id (e.g. '08' -> cam8_rgb) rather than h5/calibration index.
+            serial_int = int(serial) if str(serial).isdigit() else None
+            candidate_folders = []
+            if serial_int is not None:
+                candidate_folders.append(self._seg_folder / f"cam{serial_int}_rgb")
+                candidate_folders.append(self._seg_folder / f"cam{serial_int:02d}_rgb")
+                candidate_folders.append(self._seg_folder / f"cam{serial_int}.mp4")
+                candidate_folders.append(self._seg_folder / f"cam{serial_int:02d}.mp4")
+            candidate_folders.append(self._seg_folder / f"cam{serial}_rgb")
+            candidate_folders.append(self._seg_folder / f"cam{serial}.mp4")
+
             # Check using original frame index (with start_frame offset)
             found = False
             for fmt in [f"{self._start_frame:04d}.npy", f"{self._start_frame}.npy"]:
-                if (cam_folder / fmt).exists():
-                    found = True
+                for cam_folder in candidate_folders:
+                    if (cam_folder / fmt).exists():
+                        found = True
+                        break
+                if found:
                     break
             if found:
                 valid_serials.append(serial)

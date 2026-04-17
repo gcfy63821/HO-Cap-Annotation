@@ -17,8 +17,18 @@
 
 
 
-./run_mydata.sh --sequence_name data/grasp_toothpaste/grasp_toothpaste_1 --tool_name tooth_paste --object_idx 1  --optimize 1 --uuid toothpaste --hand 1
-./run_mydata.sh --sequence_name data/grasp_sponge/grasp_sponge_1 --tool_name sponge --object_idx 1  --optimize 1 --uuid sponge --hand 1
-./run_mydata.sh --sequence_name data/grasp_small_brush/grasp_small_brush_1 --tool_name small_brush --object_idx 1  --optimize 1 --uuid small_brush --hand 1
-./run_mydata.sh --sequence_name data/grasp_cup/grasp_cup_6 --tool_name blue_cup_2 --object_idx 1 --hand 1 --optimize 1 --uuid cup_2 --hand 1
-./run_mydata.sh --sequence_name data/grasp_hammer/grasp_hammer_2 --tool_name yellow_hammer --object_idx 1 --hand 1 --optimize 1 --uuid hammer_2 --hand 1
+# ./run_mydata.sh --sequence_name data/grasp_toothpaste/grasp_toothpaste_1 --tool_name tooth_paste --object_idx 1  --optimize 1 --uuid toothpaste --hand 1
+# ./run_mydata.sh --sequence_name data/grasp_sponge/grasp_sponge_1 --tool_name sponge --object_idx 1  --optimize 1 --uuid sponge --hand 1
+# ./run_mydata.sh --sequence_name data/grasp_small_brush/grasp_small_brush_1 --tool_name small_brush --object_idx 1  --optimize 1 --uuid small_brush --hand 1
+# ./run_mydata.sh --sequence_name data/grasp_cup/grasp_cup_6 --tool_name blue_cup_2 --object_idx 1 --hand 1 --optimize 1 --uuid cup_2 --hand 1
+# ./run_mydata.sh --sequence_name data/grasp_hammer/grasp_hammer_2 --tool_name yellow_hammer --object_idx 1 --hand 1 --optimize 1 --uuid hammer_2 --hand 1
+
+# ./run_mydata.sh --sequence_name data/grasp_hammer/grasp_hammer_3 --tool_name yellow_hammer --object_idx 1 --hand 1 --optimize 1 --uuid hammer_2 --hand 1
+
+# ./run_mydata.sh --sequence_name data/grasp_sponge/grasp_sponge_2 --tool_name sponge --object_idx 1 --hand 1 --optimize 1 --uuid sponge_2 --hand 1
+
+# ./run_mydata.sh --sequence_name data/0315_2/grasp_brush_1 --tool_name small_brush --object_idx 1 --hand 1 --optimize 1 --uuid sponge_2 --hand 1
+./run_mydata.sh --sequence_name data/0315_2/sponge_1 --tool_name sponge --object_idx 1 --hand 1 --optimize 1 --uuid sponge_2 --hand 1
+./run_mydata.sh --sequence_name data/0315_2/sponge_2 --tool_name sponge --object_idx 1 --hand 1 --optimize 1 --uuid sponge_2 --hand 1
+
+./run_mydata.sh --sequence_name data/0315_3/cube_small_1 --tool_name cube_small --object_idx 1 --hand 1 --optimize 1 --uuid cube_small --hand 1

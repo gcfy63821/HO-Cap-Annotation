@@ -110,6 +110,74 @@ def get_6d_pose_arr_from_mat(pose):
     euler_angles = Rotation.from_matrix(rotation_matrix).as_euler('xyz', degrees=False)
     return np.r_[xyz, euler_angles]
 
+def compute_depth_reprojection_error(pose_4x4, mesh_vertices, depth_map, K, mask=None):
+    """
+    Compute depth reprojection error between estimated pose and observed depth.
+
+    Projects mesh vertices into the depth image and compares rendered depth
+    with observed depth. Returns mean absolute error in meters.
+
+    Args:
+        pose_4x4: (4, 4) object-in-camera pose matrix
+        mesh_vertices: (V, 3) mesh vertices in object frame
+        depth_map: (H, W) observed depth in meters
+        K: (3, 3) camera intrinsic matrix
+        mask: (H, W) optional object mask
+
+    Returns:
+        error: mean depth error in meters (np.inf if not computable)
+        inlier_ratio: fraction of projected points with small depth error
+    """
+    if np.all(pose_4x4 == -1):
+        return np.inf, 0.0
+
+    H, W = depth_map.shape[:2]
+    R_mat = pose_4x4[:3, :3]
+    t_vec = pose_4x4[:3, 3]
+
+    # Transform vertices to camera frame
+    verts_cam = (R_mat @ mesh_vertices.T).T + t_vec  # (V, 3)
+
+    # Only keep vertices in front of camera
+    valid_z = verts_cam[:, 2] > 0.01
+    if valid_z.sum() < 10:
+        return np.inf, 0.0
+    verts_cam = verts_cam[valid_z]
+
+    # Project to image plane
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    u = (fx * verts_cam[:, 0] / verts_cam[:, 2] + cx).astype(np.int32)
+    v = (fy * verts_cam[:, 1] / verts_cam[:, 2] + cy).astype(np.int32)
+    rendered_z = verts_cam[:, 2]
+
+    # Filter to image bounds
+    in_bounds = (u >= 0) & (u < W) & (v >= 0) & (v < H)
+    u, v, rendered_z = u[in_bounds], v[in_bounds], rendered_z[in_bounds]
+
+    if len(u) < 10:
+        return np.inf, 0.0
+
+    # Sample observed depth at projected locations
+    observed_z = depth_map[v, u]
+
+    # Only compare where observed depth is valid (non-zero)
+    valid_depth = observed_z > 0.01
+    if mask is not None:
+        valid_depth &= mask[v, u] > 0
+
+    if valid_depth.sum() < 5:
+        return np.inf, 0.0
+
+    rendered_z = rendered_z[valid_depth]
+    observed_z = observed_z[valid_depth]
+
+    depth_diff = np.abs(rendered_z - observed_z)
+    mean_error = np.mean(depth_diff)
+    inlier_ratio = np.mean(depth_diff < 0.02)  # within 2cm
+
+    return float(mean_error), float(inlier_ratio)
+
+
 # Import world integration functions - need to import from the separate_cluster file
 # Since we can't easily import, we'll use a simpler approach: import the module and call functions
 import importlib.util
@@ -138,6 +206,8 @@ def run_tracking_with_kalman_and_integration(
     rot_thresh: float = 1.0,
     trans_thresh: float = 0.02,
     output_suffix: str = "fd_pose_solver",
+    depth_validation: bool = False,
+    depth_error_thresh: float = 0.02,
 ):
     """
     Run FoundationPose++ tracking with Kalman filter for each camera, then integrate to world frame.
@@ -157,6 +227,8 @@ def run_tracking_with_kalman_and_integration(
         rot_thresh: Rotation threshold for world pose integration (degrees)
         trans_thresh: Translation threshold for world pose integration (meters)
         output_suffix: Suffix for output folder name
+        depth_validation: Whether to validate tracked poses against observed depth
+        depth_error_thresh: Depth reprojection error threshold (meters) for re-registration
     """
     sequence_folder = Path(sequence_folder)
     object_idx_0 = object_idx - 1  # Convert to 0-based index
@@ -183,6 +255,22 @@ def run_tracking_with_kalman_and_integration(
         mesh = mesh.simplify_quadric_decimation(0.8)
         print("[INFO] Mesh decimated due to high vertex count.")
     print(f"[INFO] Mesh - vertices: {len(mesh.vertices)}, faces: {len(mesh.faces)}")
+    mesh_vertices_np = np.array(mesh.vertices, dtype=np.float32)
+    if depth_validation:
+        # Subsample mesh vertices for fast depth checking
+        if len(mesh_vertices_np) > 2000:
+            depth_check_verts = mesh_vertices_np[np.random.choice(len(mesh_vertices_np), 2000, replace=False)]
+        else:
+            depth_check_verts = mesh_vertices_np
+        depth_reregister_patience = 10  # consecutive failures before re-registering
+        print(f"[INFO] Depth validation ENABLED (thresh={depth_error_thresh:.3f}m, "
+              f"patience={depth_reregister_patience}, check_verts={len(depth_check_verts)})")
+        depth_errors_log = []  # collect per-frame errors for evaluation
+        reregister_count = 0
+        reject_count = 0
+    else:
+        depth_check_verts = None
+        print(f"[INFO] Depth validation DISABLED")
     
     # Set frame range
     start_frame = max(start_frame, 0)
@@ -267,6 +355,8 @@ def run_tracking_with_kalman_and_integration(
         # Initialize pose storage
         pose_seq = [None] * total_frames
         prev_pose = empty_mat_pose.copy()
+        if depth_validation:
+            consecutive_depth_failures = 0
         
         for frame_id in range(start_frame, end_frame):
             frame_idx = frame_id - start_frame
@@ -392,11 +482,78 @@ def run_tracking_with_kalman_and_integration(
                         iteration=track_refine_iter,
                         prev_pose=prev_pose,
                     )
-                    
+
+                    # Depth validation: check if tracked pose matches observed depth
+                    if depth_validation and depth_check_verts is not None:
+                        # Use unmasked depth for validation
+                        depth_orig = data_loader.get_depth(serial, frame_id)
+                        d_err, d_inlier = compute_depth_reprojection_error(
+                            pose.reshape(4, 4), depth_check_verts, depth_orig, K, mask
+                        )
+                        depth_errors_log.append({
+                            "frame": frame_id, "cam": serial,
+                            "error": d_err, "inlier_ratio": d_inlier
+                        })
+
+                        if d_err > depth_error_thresh:
+                            consecutive_depth_failures += 1
+
+                            if consecutive_depth_failures >= depth_reregister_patience:
+                                # Too many consecutive failures — re-register as last resort
+                                reregister_count += 1
+                                print(f"  Frame {frame_id}: {consecutive_depth_failures} consecutive depth failures, "
+                                      f"re-registering...")
+                                init_ob_pos_center = data_loader.get_init_translation(
+                                    frame_id, [serial], object_idx_0, kernel_size=5
+                                )[0][0]
+                                if init_ob_pos_center is not None:
+                                    pose = estimator.register(
+                                        rgb=color,
+                                        depth=depth,
+                                        ob_mask=mask,
+                                        K=K,
+                                        iteration=est_refine_iter,
+                                        init_ob_pos_center=init_ob_pos_center,
+                                    )
+                                else:
+                                    pose = estimator.register(
+                                        rgb=color,
+                                        depth=depth,
+                                        ob_mask=mask,
+                                        K=K,
+                                        iteration=est_refine_iter,
+                                    )
+                                # Check if re-registered pose is actually better
+                                d_err_new, d_inlier_new = compute_depth_reprojection_error(
+                                    pose.reshape(4, 4), depth_check_verts, depth_orig, K, mask
+                                )
+                                if d_err_new < d_err:
+                                    print(f"    Re-registered: depth error {d_err:.4f}m -> {d_err_new:.4f}m")
+                                    # DON'T reset Kalman — just update it with the new measurement
+                                    consecutive_depth_failures = 0
+                                else:
+                                    # Re-registration didn't help — use Kalman prediction instead
+                                    print(f"    Re-registration worse ({d_err_new:.4f}m), using Kalman prediction")
+                                    if activate_kalman_filter and kf_mean is not None:
+                                        pose = get_mat_from_6d_pose_arr(kf_mean[:6])
+                                        pose = np.array(pose, dtype=np.float32)
+                            else:
+                                # Reject tracked pose, use Kalman filter prediction instead
+                                reject_count += 1
+                                if activate_kalman_filter and kf_mean is not None:
+                                    pose = get_mat_from_6d_pose_arr(kf_mean[:6])
+                                    pose = np.array(pose, dtype=np.float32)
+                                    if frame_id % 10 == 0 or consecutive_depth_failures == 1:
+                                        print(f"  Frame {frame_id}: Depth error {d_err:.4f}m > {depth_error_thresh:.3f}m, "
+                                              f"using Kalman prediction (fail #{consecutive_depth_failures})")
+                                # else: keep tracked pose if no Kalman available
+                        else:
+                            consecutive_depth_failures = 0
+
                     # Update Kalman filter prediction
                     if activate_2d_tracker and activate_kalman_filter:
                         kf_mean, kf_covariance = kf.predict(kf_mean, kf_covariance)
-                    
+
                     if frame_id % 50 == 0:
                         print(f"  Frame {frame_id}: Tracked from previous pose.")
                 else:
@@ -430,9 +587,42 @@ def run_tracking_with_kalman_and_integration(
             write_pose_to_txt(cam_pose_folder / f"{frame_id:06d}.txt", pose_quat)
         
         print(f"  [INFO] Camera {serial} tracking complete. Saved to {cam_pose_folder}")
-        
+
         # Clear GPU memory after each camera
         torch.cuda.empty_cache()
+
+    # Save depth validation report
+    if depth_validation and depth_errors_log:
+        import json
+        errors = [e["error"] for e in depth_errors_log if np.isfinite(e["error"])]
+        inliers = [e["inlier_ratio"] for e in depth_errors_log if np.isfinite(e["error"])]
+        report = {
+            "depth_error_thresh": depth_error_thresh,
+            "total_frames_checked": len(depth_errors_log),
+            "reregister_count": reregister_count,
+            "reject_count": reject_count,
+            "mean_depth_error_m": float(np.mean(errors)) if errors else -1,
+            "median_depth_error_m": float(np.median(errors)) if errors else -1,
+            "mean_inlier_ratio": float(np.mean(inliers)) if inliers else -1,
+            "frames_above_thresh": sum(1 for e in errors if e > depth_error_thresh),
+        }
+        report_path = save_folder / "depth_validation_report.json"
+        with open(report_path, "w") as f:
+            json.dump(report, f, indent=2)
+        # Save per-frame errors for analysis
+        errors_path = save_folder / "depth_errors.npy"
+        np.save(errors_path, np.array(
+            [(e["frame"], e["error"], e["inlier_ratio"]) for e in depth_errors_log],
+            dtype=np.float32
+        ))
+        print(f"\n[DEPTH VALIDATION REPORT]")
+        print(f"  Mean depth error:    {report['mean_depth_error_m']*1000:.2f} mm")
+        print(f"  Median depth error:  {report['median_depth_error_m']*1000:.2f} mm")
+        print(f"  Mean inlier ratio:   {report['mean_inlier_ratio']:.3f}")
+        print(f"  Re-register count:   {report['reregister_count']}")
+        print(f"  Rejected (Kalman):   {report['reject_count']}")
+        print(f"  Frames above thresh: {report['frames_above_thresh']}/{report['total_frames_checked']}")
+        print(f"  Report saved to:     {report_path}")
     
     # ========== STEP 2: Integrate all camera poses to world frame ==========
     print("\n" + "="*60)
@@ -577,7 +767,18 @@ if __name__ == "__main__":
         default="fd_pose_solver",
         help="Suffix for output folder name"
     )
-    
+    parser.add_argument(
+        "--depth_validation",
+        action="store_true",
+        help="Enable depth reprojection validation (re-register on drift)"
+    )
+    parser.add_argument(
+        "--depth_error_thresh",
+        type=float,
+        default=0.02,
+        help="Depth error threshold in meters for re-registration (default: 0.02)"
+    )
+
     args = parser.parse_args()
     
     set_logging_format()
@@ -600,6 +801,8 @@ if __name__ == "__main__":
         rot_thresh=args.rot_thresh,
         trans_thresh=args.trans_thresh,
         output_suffix=args.output_suffix,
+        depth_validation=args.depth_validation,
+        depth_error_thresh=args.depth_error_thresh,
     )
     
     print(f"\n[INFO] Total time: {time.time() - t_start:.2f}s")

@@ -334,6 +334,9 @@ class ObjectPoseSolver:
 
         self._pose_o = self._initialize_pose_o_from_poses_o(poses_o)
         self._optimizer = torch.optim.Adam(self._pose_o, lr=self._lr)
+        self._scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self._optimizer, T_max=self._total_steps, eta_min=self._lr * 0.01
+        )
 
         self._target_pose_o = torch.from_numpy(
             np.stack([quat_to_rvt(p) for p in poses_o], axis=0)
@@ -404,6 +407,7 @@ class ObjectPoseSolver:
 
             loss.backward()
             self._optimizer.step()
+            self._scheduler.step()
 
             self._log_loss[:, step] = [
                 loss.item(),
@@ -412,12 +416,14 @@ class ObjectPoseSolver:
                 loss_smooth.item(),
             ]
 
+            cur_lr = self._scheduler.get_last_lr()[0]
             log_msg = (
                 f"step: {step+1:04d}/{self._total_steps:04d}"
                 + f"| loss: {loss.item():11.8f} "
                 + f"| sdf: {loss_sdf.item():11.8f} "
                 + f"| reg: {loss_reg.item():11.8f} "
                 + f"| smooth: {loss_smooth.item():11.8f} "
+                + f"| lr: {cur_lr:.6f}"
             )
             if (step + 1) % self._log_info_steps == 0:
                 self._logger.info(log_msg + f"| time: {time.time() - tt_s:.2f}s")

@@ -163,3 +163,5 @@ worklog.md
 slurm_outs/
 
 data/
+
+*.npy

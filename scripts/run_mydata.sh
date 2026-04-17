@@ -109,27 +109,34 @@ H5_ARGS="--input_dir $SEQUENCE_FOLDER --output_file $H5_PATH --start_frame $STAR
 if [ -n "$END_FRAME" ]; then
     H5_ARGS="$H5_ARGS --end_frame $END_FRAME"
 fi
-# python tools/00_convert_videos_to_h5.py $H5_ARGS
+python tools/00_convert_videos_to_h5.py $H5_ARGS
 
 # # # 构建 generate_meta 参数，传入 start_frame 写入 meta.yaml
 META_ARGS="--h5_path $H5_PATH \
-    --calibration_yaml_path /home/ruoqu/crq_ws/robotool/DataCollection/calibration_0314.yaml \
+    --calibration_yaml_path /home/ruoqu/crq_ws/robotool/DataCollection/calibration_0319.yaml \
     --models_folder /home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/models \
     --tool_name $TOOL_NAME \
     --start_frame $START_FRAME"
 python preprocess/generate_meta.py $META_ARGS --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4
 
-# # # # # 运行 04-1-1_fd_pose_solver_prep.py
-if [ -n "$OBJECT_IDX" ]; then
+# Detect number of objects from meta.yaml
+NUM_OBJECTS=$(python3 -c "import yaml; meta=yaml.safe_load(open('$SEQUENCE_FOLDER/meta.yaml')); print(len(meta['object_ids']))")
+echo "Detected $NUM_OBJECTS object(s) from meta.yaml"
+
+# # # # # 运行 04-1-1_fd_pose_solver_prep.py - track ALL objects
+if [ -n "$OBJECT_IDX" ] && [ "$NUM_OBJECTS" -le "1" ]; then
+    # Single object mode (backward compatible): use provided object_idx
     echo "Running fd_pose_solver with object_idx=$OBJECT_IDX..."
-    # python tools/04-1-2_fd_pose_solver_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH"
-    # python tools/04-1-4_fd_pose_solver_separate_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH"
-    # python tools/04-1-5_fd_pose_solver_icp_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" 
-    python tools/04-1-4_fd_pose_solver_kalman.py --no_masked_depth --sequence_folder "$SEQUENCE_FOLDER" --activate_2d_tracker --activate_kalman_filter --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" 
-    
+    python tools/04-1-4_fd_pose_solver_kalman.py --no_masked_depth --sequence_folder "$SEQUENCE_FOLDER" --activate_2d_tracker --activate_kalman_filter --object_idx "$OBJECT_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH"
+else
+    # Multi-object mode: track each object
+    for OBJ_IDX in $(seq 1 $NUM_OBJECTS); do
+        echo "Running fd_pose_solver for object $OBJ_IDX / $NUM_OBJECTS ..."
+        python tools/04-1-4_fd_pose_solver_kalman.py --no_masked_depth --sequence_folder "$SEQUENCE_FOLDER" --activate_2d_tracker --activate_kalman_filter --object_idx "$OBJ_IDX" --track_refine_iter "$TRACK_REFINE_ITER" --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH"
+    done
 fi
 
-python debug/visualize_tracking_result_in_cam.py     --data_path "$SEQUENCE_FOLDER"     --tool_name "$TOOL_NAME"     --object_idx "$OBJECT_IDX"     --extract_images --num_workers 1
+# python debug/visualize_tracking_result_in_cam.py     --data_path "$SEQUENCE_FOLDER"     --tool_name "$TOOL_NAME"     --object_idx "$OBJECT_IDX"     --extract_images --num_workers 1
 
 # # # # 运行 04-2_fd_pose_merger.py
 echo "Running fd_pose_merger..."
@@ -200,23 +207,24 @@ fi
 
 
 if [ -n "$OPTIMIZE" ]; then
-    # echo "Running optimize_fd_pose with optimize=$OPTIMIZE..."
-    # python tools/05_mano_pose_solver.py --sequence_folder "$SEQUENCE_FOLDER"
+    # Optimization uses first object only (object_idx=1), consistent with hand-object joint optimization
+    echo "Running optimization (object 1 only, $NUM_OBJECTS total tracked)..."
 
-    # echo "Running optimize_fd_pose with optimize=$OPTIMIZE..."
     python tools/06-2_object_pose_solver_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --debug
 
-    echo "Running joint_pose_optimization (wilor) with optimize=$OPTIMIZE..."
-    # python tools/07-3_joint_pose_solver_wilor.py --sequence_folder "$SEQUENCE_FOLDER" --debug
+    echo "Running joint_pose_optimization (wilor)..."
     python tools/07-2_joint_pose_solver_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --debug
-    
-    
-    echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
+
+    # echo "Running contact optimizer..."
+    # python tools/07-4_contact_optimizer.py --sequence_folder "$SEQUENCE_FOLDER" --grasp_thresh 0.08 --global_steps 200 --perframe_steps 500
+
+    # echo "Running visualize_and_evaluate_result with tool_name=$TOOL_NAME..."
     # python debug/visualize_hand_video.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID "
     # python debug/visualize_hand_video.py --data_path "$SEQUENCE_FOLDER" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID "
     
     # python debug/visualize_cluster_video.py --data_path "$SEQUENCE_NAME" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID " --pose_file "optimized" --render_hands
-    python debug/visualize_cluster_video_fast.py --data_path "$SEQUENCE_FOLDER" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID " --pose_file "optimized" --render_hands --num_workers 1
+    
+    # python debug/visualize_cluster_video_fast.py --data_path "$SEQUENCE_FOLDER" --tool_name "$TOOL_NAME" --object_idx "$OBJECT_IDX" --uuid "$UUID " --pose_file "optimized" --render_hands --num_workers 1
     
 fi
 
