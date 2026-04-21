@@ -205,8 +205,10 @@ def main():
     ap.add_argument("--voxel", type=float, default=0.004)
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--max_trans", type=float, default=0.30)
-    ap.add_argument("--max_rot", type=float, default=20.0)
+    ap.add_argument("--max_trans", type=float, default=1.0,
+                    help="translation slider half-range in meters")
+    ap.add_argument("--max_rot", type=float, default=90.0,
+                    help="rotation slider half-range in degrees")
     ap.add_argument("--only", type=str, default=None,
                     help="comma-separated videos_XXXX names to include (default: all discovered)")
     args = ap.parse_args()
@@ -260,7 +262,7 @@ def main():
     server.gui.add_markdown("---")
     btn_reset = server.gui.add_button("Reset this cam")
     btn_reset_all = server.gui.add_button("Reset ALL cams (this session)")
-    btn_save = server.gui.add_button("Save CURRENT session")
+    btn_save = server.gui.add_button("Save (overwrite *_global_aligned.yaml)")
 
     server.gui.add_markdown("---")
     server.gui.add_markdown("**Point display**")
@@ -491,8 +493,10 @@ def main():
         d = active["data"]
         n = d["n"]
         extrinsic_file = sess["extrinsic_file"]
-        out_yaml = extrinsic_file.parent / f"{extrinsic_file.stem}_slider_aligned.yaml"
-        out_ply = extrinsic_file.parent / f"{extrinsic_file.stem}_slider_aligned.ply"
+        # Overwrite the *_global_aligned.yaml (creating it if absent) so downstream
+        # pipeline and next viser restart pick up this as the new baseline.
+        out_yaml = extrinsic_file.parent / f"{extrinsic_file.stem}_global_aligned.yaml"
+        out_ply = extrinsic_file.parent / f"{extrinsic_file.stem}_global_aligned.ply"
 
         orig_cams = load_extrinsics(extrinsic_file)
         updated = []
