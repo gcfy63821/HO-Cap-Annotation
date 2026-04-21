@@ -1,10 +1,16 @@
 #!/bin/bash
 # For every videos_XXXX/ under --data_root (or each --videos_root passed),
 # if the calibration folder does NOT yet have <stem>_global_aligned.yaml,
-# run the headless global alignment (tools/run_global_align_headless.py,
-# which wraps 00-3_align_cameras_global.py with no viewers). Parameters match
-# scripts/run_full_auto.sh — reference camera defaults to cam6 (that's also
-# 00-3's default, so we don't pass --ref_idx explicitly).
+# run a lightweight one-shot plane-snap alignment (tools/quick_plane_align.py).
+#
+# This does NOT run pairwise ICP / pose-graph optimization. It:
+#   - merges all cached per-camera PLYs,
+#   - fits ONE dominant plane (RANSAC),
+#   - applies the rigid transform that puts that plane at z=0 to every cam.
+# Expected runtime: seconds per session. Peak RAM: few hundred MB.
+#
+# If you need the heavy version (pairwise ICP + pose graph + per-cam refine),
+# use scripts/run_full_auto.sh which calls tools/run_global_align_headless.py.
 #
 # Expects cached_pc/ to already exist for each session (run
 # scripts/batch_cache_pc.sh first if not).
@@ -119,12 +125,12 @@ for VIDEOS_ROOT in "${VIDEOS_ROOTS[@]}"; do
         OK_LIST+=("$VNAME"); continue
     fi
 
-    echo "  [run] global alignment (ref_idx=6, headless)"
-    if ! python "$HOCAP_ROOT/tools/run_global_align_headless.py" \
+    echo "  [run] quick plane-snap alignment (single RANSAC plane fit)"
+    if ! python "$HOCAP_ROOT/tools/quick_plane_align.py" \
             --cached_pc "$CACHED_PC_DIR" \
             --extrinsic_file "$ORIG_YAML" \
             --out_path "$CAL_FOLDER"; then
-        echo "  [FAIL] run_global_align_headless exited nonzero"
+        echo "  [FAIL] quick_plane_align exited nonzero"
         FAIL_LIST+=("$VNAME:align"); continue
     fi
 
