@@ -102,16 +102,27 @@ def main():
     print(f"[INFO] {n_cams} cams, writing to {cache_dir}")
 
     with h5py.File(args.h5_file, "r") as f:
+        h5_frames = f["imgs"].shape[0]
         rgbs = f["imgs"][args.frame_idx]     # (N, H, W, 3) uint8
         depths = f["depths"][args.frame_idx]  # (N, H, W) uint16
+
+    print(f"[INFO] h5 has {h5_frames} frames; reading index {args.frame_idx}")
+    print(f"[INFO] depth stats across all cams: "
+          f"min={depths.min()} max={depths.max()} mean={depths.mean():.1f} "
+          f"nonzero_frac={(depths > 0).mean():.3f}")
 
     if rgbs.shape[0] < n_cams:
         print(f"[WARN] h5 has {rgbs.shape[0]} cams but yaml has {n_cams}; using min")
         n_cams = min(n_cams, rgbs.shape[0])
 
+    n_empty = 0
     for i in tqdm(range(n_cams), desc="caching"):
         rgb = rgbs[i]
         depth = depths[i]
+        per_cam_valid = ((depth > 10) & (depth < args.depth_trunc * args.depth_scale)).mean()
+        if per_cam_valid < 0.001:
+            # <0.1% pixels in [10mm, depth_trunc] — almost certainly warm-up / bad frame
+            print(f"  cam{i}: valid depth frac={per_cam_valid*100:.2f}% (mostly zeros)")
         intrinsic = cams[i]["color_intrinsic_matrix"]
         extrinsic = cams[i]["transformation"]
         pc = build_pc(rgb, depth, intrinsic, extrinsic,
@@ -122,11 +133,18 @@ def main():
         out_file = cache_dir / f"cam{i}_uncropped.ply"
         if n == 0:
             print(f"  cam{i}: 0 points (bounds too tight or depth empty) — skipping write")
+            n_empty += 1
             continue
         o3d.io.write_point_cloud(str(out_file), pc)
         print(f"  cam{i}: {n} pts -> {out_file.name}")
 
-    print(f"[DONE] cached {n_cams} cams in {cache_dir}")
+    if n_empty == n_cams:
+        print(f"[FAIL] all {n_cams} cams produced 0 points. Most likely the frame_idx "
+              f"({args.frame_idx}) in this h5 corresponds to RealSense warm-up where "
+              f"depth is still zero. Try building the tiny h5 from a LATER video frame "
+              f"(e.g. --cal_frame_idx 200 or 500 in batch_cache_pc.sh).")
+        raise SystemExit(2)
+    print(f"[DONE] cached {n_cams-n_empty}/{n_cams} cams in {cache_dir}")
 
 
 if __name__ == "__main__":

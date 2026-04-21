@@ -71,6 +71,13 @@ HOCAP_ROOT="/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation"
 source /home/ruoqu/miniconda3/etc/profile.d/conda.sh
 conda activate hocap-annotation
 
+# ffmpeg is required for decoding 16-bit RealSense depth .mkv; without it the
+# h5 converter silently writes all-zero depth and every downstream step breaks.
+if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "Error: ffmpeg not found. Install with: conda install -c conda-forge ffmpeg -y"
+    exit 1
+fi
+
 echo "=========================================="
 echo "videos_root = $VIDEOS_ROOT"
 echo "=========================================="

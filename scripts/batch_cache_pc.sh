@@ -74,6 +74,13 @@ if [[ "$DRY_RUN" == "0" ]]; then
         echo "Error: cannot find conda.sh"; exit 1
     fi
     conda activate hocap-annotation
+
+    # ffmpeg is required to decode 16-bit RealSense depth .mkv; without it the
+    # h5 converter silently writes all-zero depth.
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        echo "Error: ffmpeg not found. Install with: conda install -c conda-forge ffmpeg -y"
+        exit 1
+    fi
 fi
 
 echo "=========================================="
