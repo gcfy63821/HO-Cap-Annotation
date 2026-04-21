@@ -205,10 +205,12 @@ def main():
     ap.add_argument("--voxel", type=float, default=0.004)
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--max_trans", type=float, default=1.0,
-                    help="translation slider half-range in meters")
-    ap.add_argument("--max_rot", type=float, default=90.0,
-                    help="rotation slider half-range in degrees")
+    ap.add_argument("--max_trans", type=float, default=0.5,
+                    help="initial translation slider half-range in meters "
+                         "(user can change live via GUI)")
+    ap.add_argument("--max_rot", type=float, default=45.0,
+                    help="initial rotation slider half-range in degrees "
+                         "(user can change live via GUI)")
     ap.add_argument("--only", type=str, default=None,
                     help="comma-separated videos_XXXX names to include (default: all discovered)")
     args = ap.parse_args()
@@ -252,12 +254,41 @@ def main():
     server.gui.add_markdown("### Camera edit")
     cam_dd = server.gui.add_dropdown("Edit cam", options=["cam0"], initial_value="cam0")
 
+    # Live-adjustable slider half-ranges (GUI-driven).
+    trans_scale = server.gui.add_slider("Trans half-range (m)",
+                                          min=0.05, max=3.0, step=0.05,
+                                          initial_value=float(args.max_trans))
+    rot_scale = server.gui.add_slider("Rot half-range (°)",
+                                        min=5.0, max=180.0, step=1.0,
+                                        initial_value=float(args.max_rot))
+
     tx = server.gui.add_slider("tx  (m)",  -args.max_trans, args.max_trans, 0.001, 0.0)
     ty = server.gui.add_slider("ty  (m)",  -args.max_trans, args.max_trans, 0.001, 0.0)
     tz = server.gui.add_slider("tz  (m)",  -args.max_trans, args.max_trans, 0.001, 0.0)
     rx = server.gui.add_slider("rx  (°)",  -args.max_rot,   args.max_rot,   0.1,   0.0)
     ry = server.gui.add_slider("ry  (°)",  -args.max_rot,   args.max_rot,   0.1,   0.0)
     rz = server.gui.add_slider("rz  (°)",  -args.max_rot,   args.max_rot,   0.1,   0.0)
+
+    def _apply_slider_ranges():
+        t = float(trans_scale.value)
+        r = float(rot_scale.value)
+        # Clamp current values to the new range first, so viser doesn't reject
+        # the min/max update because the current value falls outside.
+        for h in (tx, ty, tz):
+            v = float(h.value)
+            if v > t: h.value = t
+            elif v < -t: h.value = -t
+            h.min, h.max = -t, t
+        for h in (rx, ry, rz):
+            v = float(h.value)
+            if v > r: h.value = r
+            elif v < -r: h.value = -r
+            h.min, h.max = -r, r
+
+    @trans_scale.on_update
+    def _(_evt): _apply_slider_ranges()
+    @rot_scale.on_update
+    def _(_evt): _apply_slider_ranges()
 
     server.gui.add_markdown("---")
     btn_reset = server.gui.add_button("Reset this cam")
