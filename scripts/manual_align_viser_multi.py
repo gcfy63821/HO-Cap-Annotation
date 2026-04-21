@@ -296,6 +296,12 @@ def main():
     btn_save = server.gui.add_button("Save (overwrite *_global_aligned.yaml)")
 
     server.gui.add_markdown("---")
+    server.gui.add_markdown("### Copy alignment from another session")
+    copy_src_dd = server.gui.add_dropdown("Copy from", options=session_names,
+                                            initial_value=session_names[0])
+    btn_apply_copy = server.gui.add_button("Apply (overwrites current edits)")
+
+    server.gui.add_markdown("---")
     server.gui.add_markdown("**Point display**")
     pt_size = server.gui.add_slider("Point size", 0.0005, 0.01, 0.0005, 0.003)
     show_solid = server.gui.add_checkbox("Solid per-cam colors", initial_value=False)
@@ -499,6 +505,90 @@ def main():
             _apply_cam_transform(i)
         _sync_sliders_from_state()
         _set_status(f"reset ALL cams in {active['name']}")
+
+    def _apply_copy_from(src_name):
+        """Recompute the CURRENT session's T_init so it matches src_name's
+        *_global_aligned.yaml (matched by serial_number), reset all slider
+        state, and rebuild the scene. Does NOT touch disk yet — click Save to
+        persist."""
+        if src_name == active["name"]:
+            _set_status(f"source == current session; nothing to copy")
+            return
+        src = next((s for s in sessions if s["name"] == src_name), None)
+        if src is None:
+            _set_status(f"unknown src session: {src_name}")
+            return
+        # Resolve src aligned yaml (prefer the *_global_aligned.yaml in src's
+        # cal folder — use the same filename convention we save to).
+        src_aligned = src["extrinsic_file"].parent / \
+            f"{src['extrinsic_file'].stem}_global_aligned.yaml"
+        if not src_aligned.exists():
+            _set_status(f"{src_name} has no *_global_aligned.yaml on disk — "
+                        f"align or manually save that session first")
+            return
+        try:
+            src_cams = load_extrinsics(src_aligned)
+        except Exception as e:
+            _set_status(f"failed loading {src_aligned.name}: {e}")
+            return
+        src_by_sn = {str(c["serial_number"]): c for c in src_cams}
+
+        d = active["data"]
+        n = d["n"]
+        cur_cams = d["cams_meta"]
+
+        new_T_init = []
+        missing = []
+        for i in range(n):
+            sn = str(cur_cams[i]["serial_number"])
+            orig = np.array(cur_cams[i]["transformation"]).reshape(4, 4)
+            if sn in src_by_sn:
+                new = np.array(src_by_sn[sn]["transformation"]).reshape(4, 4)
+                new_T_init.append(new @ np.linalg.inv(orig))
+            else:
+                new_T_init.append(np.eye(4))
+                missing.append(sn)
+
+        # Update in-memory T_init, re-apply to raw_pcs to get new init_points.
+        d["T_init"] = new_T_init
+        new_init_points, new_pivots = [], []
+        for i in range(n):
+            pc = copy.deepcopy(d["raw_pcs"][i])
+            pc.transform(new_T_init[i])
+            pts = np.asarray(pc.points, dtype=np.float32)
+            new_init_points.append(pts)
+            new_pivots.append(pts.mean(axis=0) if len(pts) else np.zeros(3, dtype=np.float32))
+        d["init_points"] = new_init_points
+        d["pivots"] = new_pivots
+
+        # Reset slider state for current session
+        session_state[active["name"]] = [dict(tx=0.0, ty=0.0, tz=0.0,
+                                                rx=0.0, ry=0.0, rz=0.0)
+                                           for _ in range(n)]
+
+        # Re-upload point positions (existing handles, new points) and reset frames.
+        for i in range(n):
+            pts = new_init_points[i]
+            cols = d["init_colors"][i]
+            if cols is None or show_solid.value:
+                col = (PALETTE[i % len(PALETTE)] * 255).astype(np.uint8)
+                cols_u8 = np.tile(col, (len(pts), 1))
+            else:
+                cols_u8 = (np.clip(cols, 0, 1) * 255).astype(np.uint8)
+            active["pc_handles"][i].points = pts
+            active["pc_handles"][i].colors = cols_u8
+            _apply_cam_transform(i)
+        _sync_sliders_from_state()
+
+        matched = n - len(missing)
+        msg = f"applied {src_name} -> {active['name']} ({matched}/{n} cams matched)"
+        if missing:
+            msg += f"; unmatched serials: {missing}"
+        _set_status(msg)
+
+    @btn_apply_copy.on_click
+    def _(_evt):
+        _apply_copy_from(copy_src_dd.value)
 
     @pt_size.on_update
     def _(_evt):

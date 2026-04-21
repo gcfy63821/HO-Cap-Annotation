@@ -24,7 +24,10 @@
 #     [--cal_frame_idx 0]      # which frame of the tiny h5 to use for 00-0
 #     [--representative_exp NAME] # override auto-picked experiment
 #     [--force_recalibrate]    # re-run calibration even if aligned yaml exists
-#     [--skip_calibration]     # use the existing original yaml as-is
+#     [--skip_calibration]     # use the existing ORIGINAL yaml as-is (no alignment)
+#     [--use_aligned_only]     # use existing *_global_aligned.yaml only; error
+#                              # out if it doesn't exist (does NOT fall back to
+#                              # running alignment)
 #     [--skip_hand]            # only do calibration, skip batch_task_folder_hand_chunked
 
 set -u
@@ -39,6 +42,7 @@ CAL_FRAME_IDX=100   # frame 0 is usually all-zero depth (RealSense warm-up)
 REPRESENTATIVE_EXP=""
 FORCE_RECAL=0
 SKIP_CAL=0
+USE_ALIGNED_ONLY=0
 SKIP_HAND=0
 
 while [[ "$#" -gt 0 ]]; do
@@ -53,6 +57,7 @@ while [[ "$#" -gt 0 ]]; do
         --representative_exp) REPRESENTATIVE_EXP="$2"; shift 2;;
         --force_recalibrate)  FORCE_RECAL=1; shift;;
         --skip_calibration)   SKIP_CAL=1; shift;;
+        --use_aligned_only)   USE_ALIGNED_ONLY=1; shift;;
         --skip_hand)          SKIP_HAND=1; shift;;
         -h|--help) sed -n '2,30p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
@@ -117,7 +122,17 @@ echo "[tasks]  ${#TASK_FOLDERS[@]} task folder(s):"
 for t in "${TASK_FOLDERS[@]}"; do echo "   - $(basename "$t")"; done
 
 # --- step C: run calibration (or skip) ---
-if [[ "$SKIP_CAL" == "1" ]]; then
+if [[ "$USE_ALIGNED_ONLY" == "1" ]]; then
+    # Hard-require the aligned yaml. Do NOT fall back to running alignment.
+    if [[ ! -f "$ALIGNED_YAML" ]]; then
+        echo "Error: --use_aligned_only given but $ALIGNED_YAML does not exist."
+        echo "       Produce it first via scripts/batch_global_align.sh or"
+        echo "       scripts/manual_align_viser_multi.py, then re-run."
+        exit 1
+    fi
+    echo "[cal] --use_aligned_only set, using existing $ALIGNED_YAML"
+    CAL_YAML_TO_USE="$ALIGNED_YAML"
+elif [[ "$SKIP_CAL" == "1" ]]; then
     echo "[cal] --skip_calibration set, using ORIG_YAML as the calibration"
     CAL_YAML_TO_USE="$ORIG_YAML"
 elif [[ -f "$ALIGNED_YAML" && "$FORCE_RECAL" == "0" ]]; then

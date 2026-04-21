@@ -24,6 +24,12 @@
 #   bash scripts/batch_global_align.sh --data_root /viscam/projects/robotool/data
 #     [--force]     # redo even if _global_aligned.yaml exists
 #     [--dry_run]   # show what would run, don't execute
+#
+#   # Re-use another day's already-aligned yaml (same rig, cameras not moved):
+#     [--copy_pair SRC_VNAME:DST_VNAME]      (repeatable)
+#     [--copy_from SRC_VNAME --copy_to DST1,DST2,...]   (convenience)
+#   Example: reuse videos_0101's hand-tuned alignment for 0102,0103:
+#     --copy_from videos_0101 --copy_to videos_0102,videos_0103
 
 set -u
 
@@ -31,6 +37,10 @@ DATA_ROOT=""
 VIDEOS_ROOTS=()
 FORCE=0
 DRY_RUN=0
+COPY_SRCS=()     # parallel arrays: COPY_SRCS[i] -> COPY_DSTS[i]
+COPY_DSTS=()
+COPY_FROM=""
+COPY_TO=""
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -38,10 +48,34 @@ while [[ "$#" -gt 0 ]]; do
         --videos_root)  VIDEOS_ROOTS+=("$2"); shift 2;;
         --force)        FORCE=1; shift;;
         --dry_run)      DRY_RUN=1; shift;;
-        -h|--help)      sed -n '2,20p' "$0"; exit 0;;
+        --copy_pair)
+            pair="$2"
+            src="${pair%%:*}"
+            dst="${pair##*:}"
+            if [[ -z "$src" || -z "$dst" || "$src" == "$dst" || "$src" == "$pair" ]]; then
+                echo "Error: --copy_pair expects SRC:DST (got '$pair')"; exit 1
+            fi
+            COPY_SRCS+=("$src"); COPY_DSTS+=("$dst")
+            shift 2;;
+        --copy_from)    COPY_FROM="$2"; shift 2;;
+        --copy_to)      COPY_TO="$2"; shift 2;;
+        -h|--help)      sed -n '2,30p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
     esac
 done
+
+# Expand --copy_from + --copy_to into COPY_SRCS/COPY_DSTS entries.
+if [[ -n "$COPY_FROM" || -n "$COPY_TO" ]]; then
+    if [[ -z "$COPY_FROM" || -z "$COPY_TO" ]]; then
+        echo "Error: --copy_from and --copy_to must be given together"; exit 1
+    fi
+    IFS=',' read -r -a _TO_LIST <<< "$COPY_TO"
+    for t in "${_TO_LIST[@]}"; do
+        t="${t// /}"
+        [[ -z "$t" ]] && continue
+        COPY_SRCS+=("$COPY_FROM"); COPY_DSTS+=("$t")
+    done
+fi
 
 HOCAP_ROOT="/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation"
 [[ -d "$HOCAP_ROOT" ]] || HOCAP_ROOT="/viscam/u/chenrq/crq_ws/hocap/HO-Cap-Annotation"
@@ -77,7 +111,36 @@ echo "=========================================="
 echo "videos_roots (${#VIDEOS_ROOTS[@]}):"
 for v in "${VIDEOS_ROOTS[@]}"; do echo "  - $v"; done
 echo "force=$FORCE  dry_run=$DRY_RUN"
+if [[ "${#COPY_DSTS[@]}" -gt 0 ]]; then
+    echo "copy pairs:"
+    for i in "${!COPY_DSTS[@]}"; do
+        echo "  ${COPY_SRCS[$i]} -> ${COPY_DSTS[$i]}"
+    done
+fi
 echo "=========================================="
+
+# -------- helpers --------
+# find_cal_folder <videos_root> -> prints calibration folder or empty
+find_cal_folder() {
+    find "$1" -maxdepth 1 -mindepth 1 -type d -name 'realsense_calibrate_*' | head -n 1
+}
+# find_orig_yaml <cal_folder> -> prints non-derived calibration yaml path
+find_orig_yaml() {
+    find "$1" -maxdepth 1 -type f -name 'realsense_calibration_*.yaml' \
+        ! -name '*_global_aligned.yaml' ! -name '*_slider_aligned.yaml' \
+        ! -name '*_manual_aligned.yaml' ! -name '*_aligned.yaml' | head -n 1
+}
+# get_copy_src_vname <dst_vname> -> prints src vname if dst is a copy-target, else empty
+get_copy_src_vname() {
+    local dst="$1"
+    for i in "${!COPY_DSTS[@]}"; do
+        if [[ "${COPY_DSTS[$i]}" == "$dst" ]]; then
+            echo "${COPY_SRCS[$i]}"
+            return 0
+        fi
+    done
+    echo ""
+}
 
 OK_LIST=()
 SKIP_LIST=()
@@ -114,6 +177,56 @@ for VIDEOS_ROOT in "${VIDEOS_ROOTS[@]}"; do
         echo "  [skip] ${STEM}_global_aligned.yaml already exists (pass --force to redo)"
         SKIP_LIST+=("$VNAME"); continue
     fi
+
+    # -------- copy-from-another-day path --------
+    SRC_VNAME="$(get_copy_src_vname "$VNAME")"
+    if [[ -n "$SRC_VNAME" ]]; then
+        # Resolve src cal folder + src aligned yaml
+        SRC_VIDEOS_ROOT=""
+        if [[ -n "$DATA_ROOT" ]]; then
+            SRC_VIDEOS_ROOT="${DATA_ROOT%/}/$SRC_VNAME"
+        else
+            # fall back: search among the provided videos_roots for a matching basename
+            for v in "${VIDEOS_ROOTS[@]}"; do
+                if [[ "$(basename "$v")" == "$SRC_VNAME" ]]; then SRC_VIDEOS_ROOT="$v"; break; fi
+            done
+        fi
+        if [[ -z "$SRC_VIDEOS_ROOT" || ! -d "$SRC_VIDEOS_ROOT" ]]; then
+            echo "  [FAIL] --copy source $SRC_VNAME not found next to dst"
+            FAIL_LIST+=("$VNAME:src_missing"); continue
+        fi
+        SRC_CAL="$(find_cal_folder "$SRC_VIDEOS_ROOT")"
+        if [[ -z "$SRC_CAL" ]]; then
+            echo "  [FAIL] src $SRC_VNAME has no realsense_calibrate_* folder"
+            FAIL_LIST+=("$VNAME:src_no_cal"); continue
+        fi
+        SRC_ORIG="$(find_orig_yaml "$SRC_CAL")"
+        if [[ -z "$SRC_ORIG" ]]; then
+            echo "  [FAIL] src $SRC_VNAME has no realsense_calibration_*.yaml"
+            FAIL_LIST+=("$VNAME:src_no_yaml"); continue
+        fi
+        SRC_ALIGNED="${SRC_CAL}/$(basename "$SRC_ORIG" .yaml)_global_aligned.yaml"
+        if [[ ! -f "$SRC_ALIGNED" ]]; then
+            echo "  [FAIL] src $SRC_VNAME has no _global_aligned.yaml: $SRC_ALIGNED"
+            FAIL_LIST+=("$VNAME:src_not_aligned"); continue
+        fi
+
+        echo "  [copy] from $SRC_VNAME ($(basename "$SRC_ALIGNED"))"
+        if [[ "$DRY_RUN" == "1" ]]; then
+            echo "  [dry_run] would copy $SRC_ALIGNED -> $ALIGNED_YAML"
+            OK_LIST+=("$VNAME"); continue
+        fi
+        if ! python "$HOCAP_ROOT/tools/copy_aligned_yaml.py" \
+                --src_yaml "$SRC_ALIGNED" \
+                --dst_orig_yaml "$ORIG_YAML" \
+                --dst_aligned_yaml "$ALIGNED_YAML"; then
+            echo "  [FAIL] copy_aligned_yaml exited nonzero"
+            FAIL_LIST+=("$VNAME:copy"); continue
+        fi
+        echo "  [OK]  $ALIGNED_YAML (copied from $SRC_VNAME)"
+        OK_LIST+=("$VNAME"); continue
+    fi
+    # -------- end copy path --------
 
     if [[ ! -d "$CACHED_PC_DIR" ]] || [[ -z "$(ls "$CACHED_PC_DIR"/cam*_uncropped.ply 2>/dev/null)" ]]; then
         echo "  [FAIL] cached_pc missing or empty — run scripts/batch_cache_pc.sh first"
