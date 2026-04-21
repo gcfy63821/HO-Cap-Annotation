@@ -109,28 +109,55 @@ for VIDEOS_ROOT in "${VIDEOS_ROOTS[@]}"; do
     echo "  cal_folder: $CAL_FOLDER"
     echo "  orig_yaml : $(basename "$ORIG_YAML")"
 
-    # already cached? (also auto-detect empty/header-only PLYs from previous buggy runs)
+    # How many cameras SHOULD there be? Read YAML directly so we can detect
+    # incomplete cache dirs (e.g., prior run where some cams wrote 0 points and
+    # Open3D silently refused to save them).
+    EXPECTED_CAMS=$(python - <<PY 2>/dev/null
+import yaml, sys
+with open("$ORIG_YAML") as f:
+    d = yaml.safe_load(f)
+if isinstance(d, list):
+    print(len(d))
+elif isinstance(d, dict) and "extrinsics" in d:
+    print(sum(1 for k in d["extrinsics"] if not k.startswith("tag_")))
+else:
+    print(0)
+PY
+)
+    EXPECTED_CAMS="${EXPECTED_CAMS:-0}"
+
+    n_ply=0
     EMPTY_PLYS=0
     if [[ -d "$CACHED_PC_DIR" ]]; then
         n_ply=$(ls "$CACHED_PC_DIR"/cam*_uncropped.ply 2>/dev/null | wc -l)
         if [[ "$n_ply" -gt 0 ]]; then
-            # any PLY < 1 KB is header-only (≈ 0 points). Threshold chosen to be
-            # well above ~180-byte empty PLY headers but below any real cloud.
+            # any PLY < 1 KB is header-only (≈ 0 points).
             EMPTY_PLYS=$(find "$CACHED_PC_DIR" -maxdepth 1 -name 'cam*_uncropped.ply' \
                          -size -1024c 2>/dev/null | wc -l)
         fi
     fi
 
+    # Decide whether to (re)generate
+    REASON=""
     if [[ "$FORCE" == "1" ]]; then
+        REASON="--force"
+    elif [[ "$n_ply" -eq 0 ]]; then
+        REASON="no cached_pc yet"
+    elif [[ "$EMPTY_PLYS" -gt 0 ]]; then
+        REASON="$EMPTY_PLYS empty PLY(s)"
+    elif [[ "$EXPECTED_CAMS" -gt 0 && "$n_ply" -lt "$EXPECTED_CAMS" ]]; then
+        REASON="only $n_ply of $EXPECTED_CAMS expected cams present"
+    fi
+
+    if [[ -n "$REASON" ]]; then
         if [[ -d "$CACHED_PC_DIR" ]]; then
-            echo "  [force] wiping existing cached_pc dir so 00-0 regenerates"
+            echo "  [regen] wiping cached_pc ($REASON)"
             rm -rf "$CACHED_PC_DIR"
+        else
+            echo "  [regen] $REASON"
         fi
-    elif [[ "${n_ply:-0}" -gt 0 && "$EMPTY_PLYS" -gt 0 ]]; then
-        echo "  [auto] found $EMPTY_PLYS empty PLY(s) in cached_pc — wiping and regenerating"
-        rm -rf "$CACHED_PC_DIR"
-    elif [[ "${n_ply:-0}" -gt 0 ]]; then
-        echo "  [skip] cached_pc already has $n_ply plys (pass --force to redo)"
+    else
+        echo "  [skip] cached_pc has $n_ply/$EXPECTED_CAMS plys, all non-empty (pass --force to redo)"
         SKIP_LIST+=("$VNAME")
         OK_LIST+=("$VNAME|$ORIG_YAML|$CACHED_PC_DIR")
         continue
@@ -184,20 +211,19 @@ for VIDEOS_ROOT in "${VIDEOS_ROOTS[@]}"; do
         FAIL_LIST+=("$VNAME:h5"); rm -f "$TINY_H5"; continue
     fi
 
-    # step 2: 00-0 cache pc
-    #   NOTE: despite the "_uncropped.ply" filename, 00-0 actually crops the
-    #   cloud by its --x/y/z_threshold (defaults are ±0.5m, way too tight for
-    #   raw un-aligned extrinsics). Pass very wide bounds so the cached PLYs
-    #   actually contain the full cloud — downstream (00-3 / manual_align_viser)
-    #   does its own cropping.
-    if ! python "$HOCAP_ROOT/tools/00-0_align_cameras.py" \
+    # step 2: cache per-cam PCs.
+    # We use a minimal cache-only tool instead of tools/00-0_align_cameras.py:
+    # 00-0 writes the same cached PLYs but then proceeds to colored-ICP stages
+    # that OOM on wide world bounds (Killed by OOM after tqdm completes).
+    # cache_pc_only.py skips all ICP / normals / intermediate PLYs.
+    if ! python "$HOCAP_ROOT/tools/cache_pc_only.py" \
             --h5_file "$TINY_H5" \
             --extrinsic_file "$ORIG_YAML" \
             --out_path "$CAL_FOLDER" \
             --frame_idx 0 \
             --x_threshold -5 5 --y_threshold -5 5 --z_threshold -5 5; then
-        echo "  [FAIL] 00-0 cache pc"
-        FAIL_LIST+=("$VNAME:00-0"); rm -f "$TINY_H5"; continue
+        echo "  [FAIL] cache_pc_only"
+        FAIL_LIST+=("$VNAME:cache"); rm -f "$TINY_H5"; continue
     fi
 
     rm -f "$TINY_H5"
