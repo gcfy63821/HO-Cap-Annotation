@@ -154,12 +154,16 @@ else
     fi
 
     # C3. cache per-camera point clouds
+    # 00-0 writes cam*_uncropped.ply but actually applies its --*_threshold crop
+    # before saving. Pass very wide bounds so misaligned cams still produce
+    # non-empty PLYs; 00-3 will re-crop to its own world_bounds.
     echo "[cal] caching per-camera point clouds via 00-0_align_cameras.py"
     if ! python "$HOCAP_ROOT/tools/00-0_align_cameras.py" \
             --h5_file "$TINY_H5" \
             --extrinsic_file "$ORIG_YAML" \
             --out_path "$CAL_FOLDER" \
-            --frame_idx 0; then
+            --frame_idx 0 \
+            --x_threshold -5 5 --y_threshold -5 5 --z_threshold -5 5; then
         echo "Error: 00-0 cached-pc step failed"; rm -f "$TINY_H5"; exit 1
     fi
 

@@ -109,15 +109,31 @@ for VIDEOS_ROOT in "${VIDEOS_ROOTS[@]}"; do
     echo "  cal_folder: $CAL_FOLDER"
     echo "  orig_yaml : $(basename "$ORIG_YAML")"
 
-    # already cached?
-    if [[ -d "$CACHED_PC_DIR" && "$FORCE" == "0" ]]; then
+    # already cached? (also auto-detect empty/header-only PLYs from previous buggy runs)
+    EMPTY_PLYS=0
+    if [[ -d "$CACHED_PC_DIR" ]]; then
         n_ply=$(ls "$CACHED_PC_DIR"/cam*_uncropped.ply 2>/dev/null | wc -l)
         if [[ "$n_ply" -gt 0 ]]; then
-            echo "  [skip] cached_pc already has $n_ply plys (pass --force to redo)"
-            SKIP_LIST+=("$VNAME")
-            OK_LIST+=("$VNAME|$ORIG_YAML|$CACHED_PC_DIR")
-            continue
+            # any PLY < 1 KB is header-only (≈ 0 points). Threshold chosen to be
+            # well above ~180-byte empty PLY headers but below any real cloud.
+            EMPTY_PLYS=$(find "$CACHED_PC_DIR" -maxdepth 1 -name 'cam*_uncropped.ply' \
+                         -size -1024c 2>/dev/null | wc -l)
         fi
+    fi
+
+    if [[ "$FORCE" == "1" ]]; then
+        if [[ -d "$CACHED_PC_DIR" ]]; then
+            echo "  [force] wiping existing cached_pc dir so 00-0 regenerates"
+            rm -rf "$CACHED_PC_DIR"
+        fi
+    elif [[ "${n_ply:-0}" -gt 0 && "$EMPTY_PLYS" -gt 0 ]]; then
+        echo "  [auto] found $EMPTY_PLYS empty PLY(s) in cached_pc — wiping and regenerating"
+        rm -rf "$CACHED_PC_DIR"
+    elif [[ "${n_ply:-0}" -gt 0 ]]; then
+        echo "  [skip] cached_pc already has $n_ply plys (pass --force to redo)"
+        SKIP_LIST+=("$VNAME")
+        OK_LIST+=("$VNAME|$ORIG_YAML|$CACHED_PC_DIR")
+        continue
     fi
 
     # pick representative experiment
@@ -169,11 +185,17 @@ for VIDEOS_ROOT in "${VIDEOS_ROOTS[@]}"; do
     fi
 
     # step 2: 00-0 cache pc
+    #   NOTE: despite the "_uncropped.ply" filename, 00-0 actually crops the
+    #   cloud by its --x/y/z_threshold (defaults are ±0.5m, way too tight for
+    #   raw un-aligned extrinsics). Pass very wide bounds so the cached PLYs
+    #   actually contain the full cloud — downstream (00-3 / manual_align_viser)
+    #   does its own cropping.
     if ! python "$HOCAP_ROOT/tools/00-0_align_cameras.py" \
             --h5_file "$TINY_H5" \
             --extrinsic_file "$ORIG_YAML" \
             --out_path "$CAL_FOLDER" \
-            --frame_idx 0; then
+            --frame_idx 0 \
+            --x_threshold -5 5 --y_threshold -5 5 --z_threshold -5 5; then
         echo "  [FAIL] 00-0 cache pc"
         FAIL_LIST+=("$VNAME:00-0"); rm -f "$TINY_H5"; continue
     fi
