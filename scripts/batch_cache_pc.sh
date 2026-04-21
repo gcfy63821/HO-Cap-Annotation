@@ -24,7 +24,7 @@ set -u
 
 DATA_ROOT=""
 VIDEOS_ROOTS=()
-CAL_FRAME_IDX=0
+CAL_FRAME_IDX=100   # frame 0 is usually all-zero depth (RealSense warm-up)
 REPRESENTATIVE_EXP=""
 FORCE=0
 DRY_RUN=0

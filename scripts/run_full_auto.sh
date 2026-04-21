@@ -35,7 +35,7 @@ SKIP_EXISTING_FLAG=""
 KEEP_H5_FLAG=""
 NO_MERGE_FLAG=""
 KEEP_CHUNK_FILES_FLAG=""
-CAL_FRAME_IDX=0
+CAL_FRAME_IDX=100   # frame 0 is usually all-zero depth (RealSense warm-up)
 REPRESENTATIVE_EXP=""
 FORCE_RECAL=0
 SKIP_CAL=0
@@ -153,12 +153,11 @@ else
         echo "Error: tiny h5 conversion failed"; exit 1
     fi
 
-    # C3. cache per-camera point clouds
-    # 00-0 writes cam*_uncropped.ply but actually applies its --*_threshold crop
-    # before saving. Pass very wide bounds so misaligned cams still produce
-    # non-empty PLYs; 00-3 will re-crop to its own world_bounds.
-    echo "[cal] caching per-camera point clouds via 00-0_align_cameras.py"
-    if ! python "$HOCAP_ROOT/tools/00-0_align_cameras.py" \
+    # C3. cache per-camera point clouds (minimal — no ICP, no normals).
+    # 00-0 does caching + colored-ICP stages that OOM on wide bounds; we use
+    # the trimmed cache_pc_only.py here. 00-3 will do real global alignment.
+    echo "[cal] caching per-camera point clouds via cache_pc_only.py"
+    if ! python "$HOCAP_ROOT/tools/cache_pc_only.py" \
             --h5_file "$TINY_H5" \
             --extrinsic_file "$ORIG_YAML" \
             --out_path "$CAL_FOLDER" \
