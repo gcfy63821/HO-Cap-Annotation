@@ -41,10 +41,14 @@
 set -u
 
 # ---------- cluster paths ----------
-HOCAP_ROOT="/viscam/u/chenrq/crq_ws/hocap/HO-Cap-Annotation"
-CONDA_SH="/viscam/u/chenrq/miniconda3/etc/profile.d/conda.sh"
+# Exported so the batch script (which now honors these env vars) picks them up
+# instead of its local-dev defaults. No more "_cluster" fork needed.
+export HOCAP_ROOT="/viscam/u/chenrq/crq_ws/hocap/HO-Cap-Annotation"
+export HAND_ROOT="/viscam/u/chenrq/crq_ws/robotool/HandReconstruction"
+export MODELS_FOLDER="/viscam/u/chenrq/models"
+export CONDA_SH="/viscam/u/chenrq/miniconda3/etc/profile.d/conda.sh"
 CONDA_ENV_NAME="hocap-annotation"
-HAND_BATCH_SCRIPT="$HOCAP_ROOT/scripts/batch_task_folder_hand_chunked_cluster.sh"
+HAND_BATCH_SCRIPT="$HOCAP_ROOT/scripts/batch_task_folder_hand_chunked.sh"
 
 # ---------- performance env ----------
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"

@@ -99,9 +99,11 @@ CALIBRATION_YAML="$(readlink -f "$CALIBRATION_YAML")"
 # So BASE_PATH = parent of the videos_XXXX folder = task_folder/../..
 VIDEOS_ROOT_ABS="$(dirname "$TASK_FOLDER_ABS")"
 BASE_PATH="$(dirname "$VIDEOS_ROOT_ABS")/"
-HOCAP_ROOT="/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation"
-HAND_ROOT="/home/ruoqu/crq_ws/robotool/HandReconstruction"
-MODELS_FOLDER="${HOCAP_ROOT}/data/models"
+# Allow these to be overridden via env vars so the same script works on
+# different machines without forking. Defaults: local dev machine.
+HOCAP_ROOT="${HOCAP_ROOT:-/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation}"
+HAND_ROOT="${HAND_ROOT:-/home/ruoqu/crq_ws/robotool/HandReconstruction}"
+MODELS_FOLDER="${MODELS_FOLDER:-${HOCAP_ROOT}/data/models}"
 
 SEQUENCE_BASE="${TASK_FOLDER_ABS#$BASE_PATH}"
 
@@ -120,7 +122,17 @@ echo "Skip existing  : $SKIP_EXISTING"
 echo "Keep h5        : $KEEP_H5"
 echo "=========================================="
 
-source /home/ruoqu/miniconda3/etc/profile.d/conda.sh
+# conda.sh path — override via CONDA_SH env var, else try common locations.
+_CONDA_SH_CANDIDATES=(
+    "${CONDA_SH:-}"
+    "/home/ruoqu/miniconda3/etc/profile.d/conda.sh"
+    "/viscam/u/chenrq/miniconda3/etc/profile.d/conda.sh"
+    "$HOME/miniconda3/etc/profile.d/conda.sh"
+    "$HOME/anaconda3/etc/profile.d/conda.sh"
+)
+for _p in "${_CONDA_SH_CANDIDATES[@]}"; do
+    if [[ -n "$_p" && -f "$_p" ]]; then source "$_p"; break; fi
+done
 
 TOTAL_EXP=0; OK_CHUNK=0; FAIL_CHUNK=0; SKIP_CHUNK=0; SKIP_EXP=0
 FAILED_CHUNKS=()
