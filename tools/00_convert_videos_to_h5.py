@@ -18,6 +18,7 @@ import argparse
 import cv2
 import h5py
 import numpy as np
+import os
 import subprocess
 from pathlib import Path
 from tqdm import tqdm
@@ -373,22 +374,35 @@ class VideoToHDF5Converter:
         # are efficient and don't require decompressing/recompressing unrelated data.
         print(f"[INFO] Creating HDF5 file with shape ({self.num_frames}, {self.num_cameras}, "
               f"{self.height}, {self.width})...")
+        # Compression: gzip level 4 is ~10x slower than lzf for a ~5% smaller
+        # file, which is the wrong trade-off for per-chunk throwaway h5s.
+        # Default = 'lzf'. Override via env var H5_COMPRESSION={lzf,gzip,none}.
+        comp_mode = os.environ.get("H5_COMPRESSION", "lzf").lower()
+        if comp_mode == "gzip":
+            comp_kwargs = dict(compression="gzip", compression_opts=4)
+        elif comp_mode == "lzf":
+            comp_kwargs = dict(compression="lzf")
+        elif comp_mode in ("none", "off", "raw"):
+            comp_kwargs = {}
+        else:
+            print(f"[WARN] unknown H5_COMPRESSION={comp_mode}, falling back to lzf")
+            comp_kwargs = dict(compression="lzf")
+        print(f"[INFO] h5 compression = {comp_mode}")
+
         with h5py.File(self.output_file, 'w') as f:
             imgs_dataset = f.create_dataset(
                 'imgs',
                 shape=(self.num_frames, self.num_cameras, self.height, self.width, 3),
                 dtype=np.uint8,
                 chunks=(1, 1, self.height, self.width, 3),
-                compression='gzip',
-                compression_opts=4
+                **comp_kwargs,
             )
             depths_dataset = f.create_dataset(
                 'depths',
                 shape=(self.num_frames, self.num_cameras, self.height, self.width),
                 dtype=np.uint16,
                 chunks=(1, 1, self.height, self.width),
-                compression='gzip',
-                compression_opts=4
+                **comp_kwargs,
             )
 
             # Load and write RGB videos one camera at a time, streaming in batches
