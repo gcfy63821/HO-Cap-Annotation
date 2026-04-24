@@ -320,17 +320,29 @@ else
 fi
 
 # ---------- Stage 6: hand reconstruction (optional) ----------
+# Idempotent: skip if the final optimized hand result already exists.
+# If only the intermediate result.pkl exists (reconstruct done but optimize
+# failed/interrupted), re-run just the optimize step.
+HAND_FINAL="${ANNOTATED_PATH}/result_hand_optimized.pkl"
+HAND_INTERMEDIATE="${ANNOTATED_PATH}/result.pkl"
 if [[ -n "$HAND" && "$HAND" != "0" ]]; then
-    echo "[6/7] hand reconstruction ..."
-    cd "$HAND_ROOT"
-    conda activate reconstruct-hand
-    python cluster_reconstruct.py --sequence_folder "$SEQUENCE_FOLDER"
-    SAVED_FILE="${ANNOTATED_PATH}/result.pkl"
-    if [[ -f "$SAVED_FILE" ]]; then
-        python cluster_optimize_hand.py --file_name "$SAVED_FILE"
+    if [[ -f "$HAND_FINAL" ]]; then
+        echo "[6/7] [skip] hand already annotated: $HAND_FINAL"
+    else
+        echo "[6/7] hand reconstruction ..."
+        cd "$HAND_ROOT"
+        conda activate reconstruct-hand
+        if [[ -f "$HAND_INTERMEDIATE" ]]; then
+            echo "  [skip] $HAND_INTERMEDIATE exists — resuming at optimize step"
+        else
+            python cluster_reconstruct.py --sequence_folder "$SEQUENCE_FOLDER"
+        fi
+        if [[ -f "$HAND_INTERMEDIATE" ]]; then
+            python cluster_optimize_hand.py --file_name "$HAND_INTERMEDIATE"
+        fi
+        cd "$HOCAP_ROOT"
+        conda activate hocap-annotation
     fi
-    cd "$HOCAP_ROOT"
-    conda activate hocap-annotation
 fi
 
 # ---------- Stage 7: object + joint optimization (optional) ----------
