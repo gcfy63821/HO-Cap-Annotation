@@ -31,6 +31,11 @@ import re
 import sys
 from pathlib import Path
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 
 def tokenize(s):
     """Lowercase + split on underscore / hyphen / digit boundaries, drop empties."""
@@ -52,8 +57,40 @@ def main():
                     help='Require matched model to contain the task\'s first token')
     ap.add_argument('--no_require_category', dest='require_category',
                     action='store_false')
+    ap.add_argument('--mapping_yaml', default=None,
+                    help='Optional YAML with a top-level `mappings:` dict of '
+                         'keyword->tool_name (produced by '
+                         'scripts/data_inspector_viser.py). If a keyword '
+                         '(normalized) appears as a substring of the '
+                         'normalized exp_name, that tool wins — bypassing '
+                         'the fuzzy auto-matcher entirely.')
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()
+
+    # ---- keyword mapping override (manual, from data_inspector_viser.py) ----
+    if args.mapping_yaml:
+        mp = Path(args.mapping_yaml)
+        if mp.exists() and yaml is not None:
+            try:
+                data = yaml.safe_load(mp.read_text()) or {}
+                mapping = dict(data.get('mappings', {}) or {})
+            except Exception as e:
+                print(f'[match] WARN: could not read {mp}: {e}', file=sys.stderr)
+                mapping = {}
+            exp_norm = normalize(args.exp_name)
+            for kw, tool in mapping.items():
+                if not kw or not tool:
+                    continue
+                if normalize(str(kw)) in exp_norm:
+                    if args.verbose:
+                        print(f'[match] mapping HIT: keyword="{kw}" -> tool="{tool}" '
+                              f'(source: {mp.name})', file=sys.stderr)
+                    print(tool)
+                    return
+            if args.verbose and mapping:
+                print(f'[match] mapping file had {len(mapping)} keyword(s) but '
+                      f'none matched exp; falling back to auto-match',
+                      file=sys.stderr)
 
     models_dir = Path(args.models_folder)
     if not models_dir.is_dir():
@@ -69,33 +106,37 @@ def main():
 
     task_tokens = tokenize(args.task_name)
     category = task_tokens[0] if task_tokens else None
-    combined_norm = normalize(f'{args.task_name}_{args.exp_name}')
+    task_norm = normalize(args.task_name)
+    exp_norm = normalize(args.exp_name)
+    combined_norm = task_norm + exp_norm
 
-    def _score_all(with_category_filter):
-        out = []
-        for m in candidates:
-            m_tokens = tokenize(m)
-            matched = [t for t in m_tokens if t and t in combined_norm]
-            if not matched:
-                continue
-            if with_category_filter and category:
-                if not any(category in t or t in category for t in m_tokens):
-                    continue
-            score = (
-                len(matched),                       # more matched tokens = better
-                max(len(t) for t in matched),       # longer matched token = better
-                -len(m),                            # shorter model name = better (canonical)
-            )
-            out.append((score, m, matched))
-        return out
-
-    # First pass: require the task's category token (e.g. "mallet" for "mallet_*")
-    scored = _score_all(with_category_filter=True) if args.require_category else []
+    # New scoring scheme (no hard category filter):
+    #   (exp_matches, all_matches, category_hit, longest_matched_token, -name_len)
+    # The exp name describes the ACTUAL tool instance (colour, material, etc.),
+    # so exp_matches is the primary signal. `category_hit` (task's first token
+    # appearing among the model's tokens) is only a tiebreaker — it will NOT
+    # override a stronger exp-match signal, which fixes cases like
+    # task="spatula_spread_tomatosauce" + exp="...bluescooper..." -> blue_scooper
+    # even though the task's category ("spatula") is absent from the models.
+    scored = []
+    for m in candidates:
+        m_tokens = tokenize(m)
+        matched_all = [t for t in m_tokens if t and t in combined_norm]
+        if not matched_all:
+            continue
+        matched_exp = [t for t in m_tokens if t and t in exp_norm]
+        category_hit = 0
+        if category and any(category in t or t in category for t in m_tokens):
+            category_hit = 1
+        score = (
+            len(matched_exp),                   # PRIMARY: exp-specific hits
+            len(matched_all),                   # total hits
+            category_hit,                        # prefer category match on ties
+            max(len(t) for t in matched_all),   # longest matched token
+            -len(m),                            # shorter model name = canonical
+        )
+        scored.append((score, m, matched_all))
     fallback = False
-    if not scored:
-        # Fallback: allow any model whose tokens appear in the combined string
-        scored = _score_all(with_category_filter=False)
-        fallback = bool(scored)
 
     if not scored:
         print(f'ERROR: no model matched task="{args.task_name}" exp="{args.exp_name}" '

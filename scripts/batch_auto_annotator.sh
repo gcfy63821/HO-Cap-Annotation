@@ -82,12 +82,18 @@ VIDEOS_FOLDER_NAME="$(basename "$TASK_PARENT")"
 BASE="$(dirname "$TASK_PARENT")"
 ANNOTATED_ROOT="${BASE}/${VIDEOS_FOLDER_NAME}_annotated/${TASK_NAME}"
 
+# Manual keyword mapping file (written by scripts/data_inspector_viser.py).
+# Lives next to the calibration folder at the videos_root level so every task
+# under the same date shares it.
+MAPPING_YAML="${TASK_PARENT}/tool_keyword_mapping.yaml"
+
 echo "=========================================="
 echo "task folder     : $TASK_FOLDER"
 echo "task name       : $TASK_NAME"
 echo "models folder   : $MODELS_FOLDER"
 echo "calibration     : $CALIBRATION_YAML"
 echo "annotated root  : $ANNOTATED_ROOT"
+echo "mapping yaml    : $MAPPING_YAML $([[ -f "$MAPPING_YAML" ]] && echo '(found)' || echo '(absent — auto-match only)')"
 echo "hand=$HAND  optimize=$OPTIMIZE  skip_existing=$SKIP_EXISTING  dry_run=$DRY_RUN"
 [[ -n "$FORCE_TOOL" ]] && echo "force_tool      : $FORCE_TOOL"
 echo "=========================================="
@@ -118,10 +124,13 @@ for EXP_DIR in "$TASK_FOLDER"/*/; do
     if [[ -n "$FORCE_TOOL" ]]; then
         TOOL="$FORCE_TOOL"
     else
-        TOOL=$(python "$HOCAP_ROOT/scripts/match_tool_name.py" \
-            --models_folder "$MODELS_FOLDER" \
-            --task_name "$TASK_NAME" \
-            --exp_name "$EXP_NAME" 2>/dev/null)
+        MATCH_ARGS=(
+            --models_folder "$MODELS_FOLDER"
+            --task_name "$TASK_NAME"
+            --exp_name "$EXP_NAME"
+        )
+        [[ -f "$MAPPING_YAML" ]] && MATCH_ARGS+=(--mapping_yaml "$MAPPING_YAML")
+        TOOL=$(python "$HOCAP_ROOT/scripts/match_tool_name.py" "${MATCH_ARGS[@]}" 2>/dev/null)
         if [[ -z "$TOOL" ]]; then
             echo ""
             echo "[$TOTAL] $EXP_NAME  [FAIL: no model matched]"
