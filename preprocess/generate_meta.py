@@ -7,6 +7,31 @@ import argparse
 import re
 
 
+def _load_mask_file(path):
+    """Load a per-frame mask saved as .npy OR .npz. For .npz we expect key 'mask'
+    (our writers use np.savez_compressed(..., mask=m)) but fall back to the
+    default 'arr_0' key for files saved via np.savez without a keyword."""
+    p = Path(path)
+    if p.suffix == '.npz':
+        with np.load(p) as npz:
+            if 'mask' in npz.files:
+                return np.array(npz['mask'])
+            return np.array(npz['arr_0'])
+    return np.load(p)
+
+
+def _find_mask_file(cam_folder, frame_idx):
+    """Return the first existing frame-mask file for (cam_folder, frame_idx),
+    trying both compressed (.npz) and plain (.npy) variants with zero-padded
+    and un-padded names."""
+    for fmt in (f"{frame_idx:04d}.npz", f"{frame_idx}.npz",
+                f"{frame_idx:04d}.npy", f"{frame_idx}.npy"):
+        p = cam_folder / fmt
+        if p.exists():
+            return p
+    return None
+
+
 def discover_camera_folders(mask_root_dir):
     """
     Discover actual camera folders from mask directory and return sorted mapping.
@@ -105,18 +130,13 @@ def load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=None,
             npy_path = None
             if cam_idx < len(camera_folders):
                 cam_folder = camera_folders[cam_idx]
-                # 尝试多种文件名格式（使用原始帧号）
-                for fmt in [f"{original_frame_idx:04d}.npy", f"{original_frame_idx}.npy"]:
-                    test_path = cam_folder / fmt
-                    if test_path.exists():
-                        npy_path = test_path
-                        break
-            
-            if npy_path is None or not npy_path.exists():
+                npy_path = _find_mask_file(cam_folder, original_frame_idx)
+
+            if npy_path is None:
                 frame_masks.append(np.zeros((H, W), dtype=np.uint8))
                 continue
-            
-            mask = np.load(npy_path)
+
+            mask = _load_mask_file(npy_path)
             
             # 处理mask形状
             if mask.ndim == 3:
@@ -165,12 +185,10 @@ def detect_num_objects_from_masks(mask_root_dir, num_cams, start_frame=0):
         # Check first few frames to detect max label
         for frame_offset in range(min(5, 9999)):
             frame_idx = start_frame + frame_offset
-            for fmt in [f"{frame_idx:04d}.npy", f"{frame_idx}.npy"]:
-                npy_path = cam_folder / fmt
-                if npy_path.exists():
-                    mask = np.load(npy_path)
-                    max_label = max(max_label, int(mask.max()))
-                    break
+            p = _find_mask_file(cam_folder, frame_idx)
+            if p is not None:
+                mask = _load_mask_file(p)
+                max_label = max(max_label, int(mask.max()))
 
     return max_label
 

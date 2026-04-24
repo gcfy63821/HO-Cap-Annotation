@@ -49,6 +49,8 @@
 #     [--models_folder PATH]
 #     [--start_frame 0] [--end_frame N]
 #     [--rot_thresh 15] [--trans_thresh 0.03]
+#     [--frame0_only]          # DINO-register only on frame 0, no re-seeding,
+#                              # skips Phase 3-7. Much faster on cluster.
 #     [--dry_run]              # show tool matches per exp, don't actually run
 
 set -u
@@ -61,8 +63,11 @@ export CONDA_SH="/viscam/u/chenrq/miniconda3/etc/profile.d/conda.sh"
 CONDA_ENV_NAME="hocap-annotation"
 HAND_BATCH_SCRIPT="$HOCAP_ROOT/scripts/batch_auto_annotator.sh"
 
-# SAM2 (used by dino_tool_segment.py)
-export SAM2_CKPT="${SAM2_CKPT:-/viscam/u/chenrq/crq_ws/robotool/mesh_reconstruction/sam2/checkpoints/sam2.1_hiera_large.pt}"
+# SAM2 (used by dino_tool_segment.py). On this cluster layout, sam2 lives
+# under robotool/, not hocap/, so ROBOTOOL_ROOT cannot be inferred from
+# HOCAP_ROOT's parent — SAM2_CKPT must be exported explicitly here.
+export SAM2_ROOT="${SAM2_ROOT:-/viscam/u/chenrq/crq_ws/robotool/sam2}"
+export SAM2_CKPT="${SAM2_CKPT:-${SAM2_ROOT}/checkpoints/sam2.1_hiera_large.pt}"
 export SAM2_VIDEO_CFG="${SAM2_VIDEO_CFG:-$HOCAP_ROOT/config/sam2_config/sam2.1_hiera_l.yaml}"
 export SAM2_IMAGE_CFG="${SAM2_IMAGE_CFG:-configs/sam2.1/sam2.1_hiera_l.yaml}"
 
@@ -104,6 +109,13 @@ ROT_THRESH=15
 TRANS_THRESH=0.03
 TRACK_REFINE_ITER=10
 DRY_RUN_FLAG=""
+MAPPING_ONLY_FLAG=""
+DINO_MESH_SCAN_EVERY=""
+DINO_DENSE_SCAN_EVERY=""
+DINO_SEED_MIN_AREA=""
+DINO_SEED_MAX_AREA=""
+DINO_SEED_MIN_SIM=""
+FRAME0_ONLY_FLAG=""
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -119,6 +131,13 @@ while [[ "$#" -gt 0 ]]; do
         --trans_thresh)       TRANS_THRESH="$2"; shift 2;;
         --track_refine_iter)  TRACK_REFINE_ITER="$2"; shift 2;;
         --dry_run)            DRY_RUN_FLAG="--dry_run"; shift;;
+        --mapping_only)       MAPPING_ONLY_FLAG="--mapping_only"; shift;;
+        --mesh_scan_every)    DINO_MESH_SCAN_EVERY="$2"; shift 2;;
+        --dense_scan_every)   DINO_DENSE_SCAN_EVERY="$2"; shift 2;;
+        --seed_min_area)      DINO_SEED_MIN_AREA="$2"; shift 2;;
+        --seed_max_area)      DINO_SEED_MAX_AREA="$2"; shift 2;;
+        --seed_min_sim)       DINO_SEED_MIN_SIM="$2"; shift 2;;
+        --frame0_only)        FRAME0_ONLY_FLAG="--frame0_only"; shift;;
         -h|--help)            sed -n '2,50p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
     esac
@@ -205,10 +224,17 @@ for task_dir in "${TASK_FOLDERS[@]}"; do
         --track_refine_iter "$TRACK_REFINE_ITER"
         --h5_scratch_dir "$H5_SCRATCH"
     )
-    [[ -n "$END_FRAME" ]]          && BA_ARGS+=(--end_frame "$END_FRAME")
-    [[ -n "$FORCE_TOOL" ]]         && BA_ARGS+=(--force_tool "$FORCE_TOOL")
-    [[ -n "$SKIP_EXISTING_FLAG" ]] && BA_ARGS+=("$SKIP_EXISTING_FLAG")
-    [[ -n "$DRY_RUN_FLAG" ]]       && BA_ARGS+=("$DRY_RUN_FLAG")
+    [[ -n "$END_FRAME" ]]           && BA_ARGS+=(--end_frame "$END_FRAME")
+    [[ -n "$FORCE_TOOL" ]]          && BA_ARGS+=(--force_tool "$FORCE_TOOL")
+    [[ -n "$SKIP_EXISTING_FLAG" ]]  && BA_ARGS+=("$SKIP_EXISTING_FLAG")
+    [[ -n "$DRY_RUN_FLAG" ]]        && BA_ARGS+=("$DRY_RUN_FLAG")
+    [[ -n "$MAPPING_ONLY_FLAG" ]]       && BA_ARGS+=("$MAPPING_ONLY_FLAG")
+    [[ -n "$DINO_MESH_SCAN_EVERY" ]]    && BA_ARGS+=(--mesh_scan_every  "$DINO_MESH_SCAN_EVERY")
+    [[ -n "$DINO_DENSE_SCAN_EVERY" ]]   && BA_ARGS+=(--dense_scan_every "$DINO_DENSE_SCAN_EVERY")
+    [[ -n "$DINO_SEED_MIN_AREA" ]]      && BA_ARGS+=(--seed_min_area    "$DINO_SEED_MIN_AREA")
+    [[ -n "$DINO_SEED_MAX_AREA" ]]      && BA_ARGS+=(--seed_max_area    "$DINO_SEED_MAX_AREA")
+    [[ -n "$DINO_SEED_MIN_SIM" ]]       && BA_ARGS+=(--seed_min_sim     "$DINO_SEED_MIN_SIM")
+    [[ -n "$FRAME0_ONLY_FLAG" ]]        && BA_ARGS+=("$FRAME0_ONLY_FLAG")
 
     if bash "$HAND_BATCH_SCRIPT" "${BA_ARGS[@]}"; then
         TASK_OK=$((TASK_OK+1))

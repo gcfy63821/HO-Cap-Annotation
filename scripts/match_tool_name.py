@@ -64,6 +64,12 @@ def main():
                          '(normalized) appears as a substring of the '
                          'normalized exp_name, that tool wins — bypassing '
                          'the fuzzy auto-matcher entirely.')
+    ap.add_argument('--require_mapping', action='store_true',
+                    help='Only return a tool if --mapping_yaml has a keyword '
+                         'matching exp_name. If no keyword matches, exit '
+                         'with a dedicated non-zero code (3) instead of '
+                         'falling back to the fuzzy auto-matcher. Useful '
+                         'for "only annotate what I have explicitly mapped".')
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()
 
@@ -87,10 +93,20 @@ def main():
                               f'(source: {mp.name})', file=sys.stderr)
                     print(tool)
                     return
+            if args.require_mapping:
+                print(f'[match] require_mapping set but no keyword matched '
+                      f'exp="{args.exp_name}" in {mp.name} '
+                      f'({len(mapping)} keyword(s)); skipping',
+                      file=sys.stderr)
+                sys.exit(3)
             if args.verbose and mapping:
                 print(f'[match] mapping file had {len(mapping)} keyword(s) but '
                       f'none matched exp; falling back to auto-match',
                       file=sys.stderr)
+        elif args.require_mapping:
+            print(f'[match] require_mapping set but mapping file missing: {mp}',
+                  file=sys.stderr)
+            sys.exit(3)
 
     models_dir = Path(args.models_folder)
     if not models_dir.is_dir():

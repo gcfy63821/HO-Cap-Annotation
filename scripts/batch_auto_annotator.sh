@@ -22,7 +22,15 @@
 #     [--models_folder /abs/path/models]       # default: <HOCAP_ROOT>/data/models
 #     [--start_frame 0] [--end_frame 999]
 #     [--rot_thresh 15] [--trans_thresh 0.03]
+#     [--frame0_only]                          # DINO-register only on frame 0,
+#                                              #   no re-seeding, no Phase 3-7.
+#                                              #   Much faster on cluster.
 #     [--force_tool NAME]                      # override auto-match for ALL exps
+#     [--mapping_only]                         # only annotate exps that have a
+#                                              #   matching keyword in
+#                                              #   <videos_root>/tool_keyword_mapping.yaml
+#                                              #   (written by data_inspector_viser.py);
+#                                              #   unmatched exps are skipped
 #     [--dry_run]                              # only print what would run
 
 set -u
@@ -41,6 +49,14 @@ TRACK_REFINE_ITER=10
 FORCE_TOOL=""
 DRY_RUN=0
 H5_SCRATCH_DIR=""
+MAPPING_ONLY=0    # if 1, skip exps that don't match a mapping keyword
+DINO_MESH_SCAN_EVERY=""
+DINO_DENSE_SCAN_EVERY=""
+DINO_SEED_MIN_AREA=""
+DINO_SEED_MAX_AREA=""
+DINO_SEED_MIN_SIM=""
+DINO_SEED_FAST=0
+DINO_FRAME0_ONLY=0
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -58,6 +74,14 @@ while [[ "$#" -gt 0 ]]; do
         --force_tool)         FORCE_TOOL="$2"; shift 2;;
         --dry_run)            DRY_RUN=1; shift;;
         --h5_scratch_dir)     H5_SCRATCH_DIR="$2"; shift 2;;
+        --mapping_only)       MAPPING_ONLY=1; shift;;
+        --mesh_scan_every)    DINO_MESH_SCAN_EVERY="$2"; shift 2;;
+        --dense_scan_every)   DINO_DENSE_SCAN_EVERY="$2"; shift 2;;
+        --seed_min_area)      DINO_SEED_MIN_AREA="$2"; shift 2;;
+        --seed_max_area)      DINO_SEED_MAX_AREA="$2"; shift 2;;
+        --seed_min_sim)       DINO_SEED_MIN_SIM="$2"; shift 2;;
+        --seed_fast)          DINO_SEED_FAST=1; shift;;
+        --frame0_only)        DINO_FRAME0_ONLY=1; shift;;
         -h|--help) sed -n '2,30p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
     esac
@@ -130,10 +154,22 @@ for EXP_DIR in "$TASK_FOLDER"/*/; do
             --exp_name "$EXP_NAME"
         )
         [[ -f "$MAPPING_YAML" ]] && MATCH_ARGS+=(--mapping_yaml "$MAPPING_YAML")
-        TOOL=$(python "$HOCAP_ROOT/scripts/match_tool_name.py" "${MATCH_ARGS[@]}" 2>/dev/null)
-        if [[ -z "$TOOL" ]]; then
+        [[ "$MAPPING_ONLY" == "1" ]] && MATCH_ARGS+=(--require_mapping)
+        # Don't redirect stderr — useful debug info like "mapping HIT" / reasons
+        # for skip come through there.
+        TOOL=$(python "$HOCAP_ROOT/scripts/match_tool_name.py" "${MATCH_ARGS[@]}" 2>/tmp/match_err.$$)
+        MATCH_RC=$?
+        MATCH_ERR="$(cat /tmp/match_err.$$ 2>/dev/null)"; rm -f /tmp/match_err.$$
+        if [[ $MATCH_RC -eq 3 ]]; then
+            # exit code 3 = --require_mapping hit, no keyword for this exp
             echo ""
-            echo "[$TOTAL] $EXP_NAME  [FAIL: no model matched]"
+            echo "[$TOTAL] $EXP_NAME  [skip: no mapping keyword (--mapping_only)]"
+            SKIP=$((SKIP+1))
+            continue
+        fi
+        if [[ $MATCH_RC -ne 0 || -z "$TOOL" ]]; then
+            echo ""
+            echo "[$TOTAL] $EXP_NAME  [FAIL: matcher rc=$MATCH_RC -- $MATCH_ERR]"
             FAIL=$((FAIL+1)); FAILED+=("$EXP_NAME:no_match")
             continue
         fi
@@ -176,10 +212,17 @@ for EXP_DIR in "$TASK_FOLDER"/*/; do
         --trans_thresh "$TRANS_THRESH"
         --track_refine_iter "$TRACK_REFINE_ITER"
     )
-    [[ -n "$END_FRAME" ]]       && RUN_ARGS+=(--end_frame "$END_FRAME")
-    [[ -n "$HAND" ]]            && RUN_ARGS+=(--hand "$HAND")
-    [[ -n "$OPTIMIZE" ]]        && RUN_ARGS+=(--optimize "$OPTIMIZE")
-    [[ -n "$H5_SCRATCH_DIR" ]]  && RUN_ARGS+=(--h5_scratch_dir "$H5_SCRATCH_DIR")
+    [[ -n "$END_FRAME" ]]              && RUN_ARGS+=(--end_frame "$END_FRAME")
+    [[ -n "$HAND" ]]                   && RUN_ARGS+=(--hand "$HAND")
+    [[ -n "$OPTIMIZE" ]]               && RUN_ARGS+=(--optimize "$OPTIMIZE")
+    [[ -n "$H5_SCRATCH_DIR" ]]         && RUN_ARGS+=(--h5_scratch_dir "$H5_SCRATCH_DIR")
+    [[ -n "$DINO_MESH_SCAN_EVERY" ]]   && RUN_ARGS+=(--mesh_scan_every  "$DINO_MESH_SCAN_EVERY")
+    [[ -n "$DINO_DENSE_SCAN_EVERY" ]]  && RUN_ARGS+=(--dense_scan_every "$DINO_DENSE_SCAN_EVERY")
+    [[ -n "$DINO_SEED_MIN_AREA" ]]     && RUN_ARGS+=(--seed_min_area    "$DINO_SEED_MIN_AREA")
+    [[ -n "$DINO_SEED_MAX_AREA" ]]     && RUN_ARGS+=(--seed_max_area    "$DINO_SEED_MAX_AREA")
+    [[ -n "$DINO_SEED_MIN_SIM" ]]      && RUN_ARGS+=(--seed_min_sim     "$DINO_SEED_MIN_SIM")
+    [[ "$DINO_SEED_FAST" == "1" ]]     && RUN_ARGS+=(--seed_fast)
+    [[ "$DINO_FRAME0_ONLY" == "1" ]]   && RUN_ARGS+=(--frame0_only)
 
     if bash "$HOCAP_ROOT/scripts/run_auto_annotator.sh" "${RUN_ARGS[@]}"; then
         OK=$((OK+1))
