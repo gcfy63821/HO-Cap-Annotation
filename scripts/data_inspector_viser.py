@@ -26,6 +26,7 @@ Usage
 Then SSH-forward the port and open http://localhost:<port> in a browser.
 """
 import argparse
+import os
 import re
 from pathlib import Path
 
@@ -193,9 +194,17 @@ def main():
     if not videos_root.is_dir():
         raise SystemExit(f"videos_root not a dir: {videos_root}")
 
+    # Resolution order for models folder:
+    #   1. --models_folder CLI
+    #   2. $MODELS_FOLDER env var (matches sbatch wrappers)
+    #   3. <HO-Cap-Annotation>/data/models  (local dev default)
     hocap_root = Path(__file__).resolve().parent.parent
-    models_folder = Path(args.models_folder) if args.models_folder \
-        else (hocap_root / "data" / "models")
+    if args.models_folder:
+        models_folder = Path(args.models_folder)
+    elif os.environ.get("MODELS_FOLDER"):
+        models_folder = Path(os.environ["MODELS_FOLDER"])
+    else:
+        models_folder = hocap_root / "data" / "models"
     if not models_folder.is_dir():
         print(f"[WARN] models folder not found: {models_folder} — dropdown will be empty")
 
