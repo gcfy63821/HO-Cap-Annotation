@@ -381,9 +381,16 @@ def run_tracking_with_kalman_and_integration(
             # First frame: register pose and initialize tracker
             if frame_idx == 0:
                 if mask.sum() < 10:
-                    print(f"  Frame {frame_id}: Invalid mask (sum={mask.sum()}), cannot register.")
-                    pose_seq[frame_idx] = empty_mat_pose.copy()
-                    continue
+                    # Without a valid frame-0 mask we cannot register and
+                    # cannot initialize the 2D tracker — every subsequent
+                    # frame would crash inside tracker_2D.track() (Cutie has
+                    # no memory yet). Mark the entire camera as failed and
+                    # skip to the next one.
+                    print(f"  Frame {frame_id}: Invalid mask (sum={mask.sum()}), cannot register. "
+                          f"Skipping camera {serial} entirely.")
+                    for fi in range(total_frames):
+                        pose_seq[fi] = empty_mat_pose.copy()
+                    break
                 
                 # Get initial translation
                 init_ob_pos_center = data_loader.get_init_translation(
