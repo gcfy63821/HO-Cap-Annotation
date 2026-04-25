@@ -303,18 +303,21 @@ echo "  detected $NUM_OBJECTS object(s)"
 if [[ "$SKIP_TRACKING" != "1" ]]; then
     for OBJ_IDX in $(seq 1 $NUM_OBJECTS); do
         echo "[4/7] fd_pose_solver object $OBJ_IDX / $NUM_OBJECTS ..."
-        python tools/04-1-4_fd_pose_solver_kalman.py \
+        # 2>&1 merges stderr into stdout so Python tracebacks appear in the
+        # slurm .out log alongside the stage progress, instead of being split
+        # off into the .err file where they're easy to miss.
+        python -u tools/04-1-4_fd_pose_solver_kalman.py \
             --no_masked_depth \
             --sequence_folder "$SEQUENCE_FOLDER" \
             --activate_2d_tracker --activate_kalman_filter \
             --object_idx "$OBJ_IDX" \
             --track_refine_iter "$TRACK_REFINE_ITER" \
-            --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH"
+            --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" 2>&1
     done
 
     # ---------- Stage 5: multi-view pose merge ----------
     echo "[5/7] fd_pose_merger ..."
-    python tools/04-2-2_fd_pose_merger_cluster.py --sequence_folder "$SEQUENCE_FOLDER"
+    python -u tools/04-2-2_fd_pose_merger_cluster.py --sequence_folder "$SEQUENCE_FOLDER" 2>&1
 else
     echo "[4-5/7] [skip] tracking skipped"
 fi
