@@ -33,7 +33,7 @@ sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure'
 # Add ho-cap root to path for hocap_annotation imports (tools/ lives one level below the root)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-H, W = 480, 640
+H, W = 480, 640  # default fallback; overridden from H5 imgs shape at runtime
 CHUNK_SIZE = 100  # frames per SAM2 video chunk
 MAX_ITERS = 3
 DRIFT_THRESHOLD = 0.35  # re-seed if area drops below 35% of rolling reference
@@ -875,6 +875,10 @@ def visualize(data_h5, masks_path, output_dir, make_video=True):
     mf = h5py.File(masks_path, 'r')
     N = data_h5['imgs'].shape[0]
     n_cams = data_h5['imgs'].shape[1]
+    # Use the H5's actual image resolution rather than module-level H,W
+    # constants — those default to 480x640 and only get overridden inside main().
+    H = int(data_h5['imgs'].shape[2])
+    W = int(data_h5['imgs'].shape[3])
     # canvas grid: up to 4 cols, rows as needed
     cols = min(n_cams, 4)
     rows = max(1, (n_cams + cols - 1) // cols)
@@ -1044,7 +1048,13 @@ def main():
     data_h5 = h5py.File(args.data_h5, 'r')
     N = data_h5['imgs'].shape[0]
     n_cams = data_h5['imgs'].shape[1]
-    print(f'[INFO] {N} frames, {n_cams} cameras')
+    # Override module-level H,W to match the actual H5 image resolution so
+    # masks_ds has the right shape (older defaults assumed 480x640, but cluster
+    # recordings are typically 720x1280).
+    global H, W
+    H = int(data_h5['imgs'].shape[2])
+    W = int(data_h5['imgs'].shape[3])
+    print(f'[INFO] {N} frames, {n_cams} cameras, image {H}x{W}')
 
     def _elapsed():
         return f'[{time.time() - t_start:.0f}s]'
