@@ -28,13 +28,18 @@
 #     <another_task>/
 #
 # Frame-0 visibility filtering:
-#   For each task, if `<task>/frame0_visibility.yaml` exists, ONLY exps with
-#   label "visible" are processed by default. Exps labeled "not_visible" /
-#   "unsure" / unannotated are skipped.
+#   For each task:
+#     · If `<task>/frame0_visibility.yaml` is ABSENT → run all exps.
+#     · If yaml is PRESENT → only run exps the user has explicitly labeled
+#       "visible". Exps labeled "not_visible" / "unsure" or NOT in the yaml at
+#       all are skipped. The script prints a WARN listing un-annotated exps so
+#       you can rerun frame0_visibility_inspector.py to label them and re-queue.
+#
 #   Override via --frame0_mode:
-#     visible_only   : only label==visible           (default when yaml present)
-#     visible_unsure : visible OR unsure             (rescue mode)
-#     all            : ignore the yaml entirely      (default when yaml absent)
+#     auto           : (default) yaml absent → all; yaml present → visible_only
+#     visible_only   : same as auto-with-yaml — only label==visible
+#     visible_unsure : rescue mode: visible OR unsure
+#     all            : ignore the yaml entirely (run everything)
 #
 #   The yaml is produced by:
 #     python scripts/frame0_visibility_inspector.py --videos_root <videos_root>
@@ -280,22 +285,30 @@ echo "tasks (${#TASKS[@]}):"; for t in "${TASKS[@]}"; do echo "  - $(basename "$
 # ---------- helper: read frame0_visibility.yaml -> filtered exp list ----------
 # Usage: filter_exps_for_task <task_dir>
 # Echoes one exp name per line. Honors $FRAME0_MODE.
+# Also writes WARN lines to stderr listing un-annotated exps when a yaml is
+# present (so you know what's pending review without silently dropping them).
 filter_exps_for_task() {
     local task_dir="$1"
     local mode="$FRAME0_MODE"
     local f0_yaml="${task_dir}/frame0_visibility.yaml"
-    if [[ "$mode" == "auto" ]]; then
-        if [[ -f "$f0_yaml" ]]; then mode="visible_only"; else mode="all"; fi
+
+    # No yaml → no filter regardless of mode (nothing to filter against).
+    if [[ ! -f "$f0_yaml" ]]; then
+        mode="all"
+    elif [[ "$mode" == "auto" ]]; then
+        # yaml present + auto → strict visible-only (the user's intent: pick
+        # only exps they've manually green-lit).
+        mode="visible_only"
     fi
 
     F0_YAML="$f0_yaml" MODE="$mode" TASK_DIR="$task_dir" python3 - <<'PY'
 import os, sys, yaml
 from pathlib import Path
-task_dir = Path(os.environ["TASK_DIR"])
-mode     = os.environ["MODE"]
-yaml_path= Path(os.environ["F0_YAML"])
+task_dir   = Path(os.environ["TASK_DIR"])
+mode       = os.environ["MODE"]
+yaml_path  = Path(os.environ["F0_YAML"])
 
-# All candidate exp dirs (must have at least one cam*_rgb.mp4)
+# All candidate exp dirs (must have at least one cam*_rgb.mp4).
 candidates = []
 for sub in sorted(task_dir.iterdir()):
     if not sub.is_dir(): continue
@@ -312,16 +325,50 @@ if mode == "all" or not yaml_path.exists():
 try:
     data = yaml.safe_load(yaml_path.read_text()) or {}
 except Exception as e:
-    sys.stderr.write(f"[WARN] failed to parse {yaml_path}: {e}; running all exps\n")
-    for n in candidates:
-        print(n)
-    sys.exit(0)
+    # Don't silently swallow un-annotated exps when the yaml is broken — fail
+    # loud so the user fixes it instead of getting a partial run.
+    sys.stderr.write(f"[ERROR] failed to parse {yaml_path}: {e}\n")
+    sys.exit(1)
 
 ann = (data.get("annotations") or {})
-keep = {"visible"} if mode == "visible_only" else {"visible", "unsure"}
+
+# Per-mode predicate. label == None means the exp isn't in the yaml at all.
+def keeps(label):
+    if mode == "visible_only":
+        return label == "visible"
+    if mode == "visible_unsure":
+        return label in ("visible", "unsure")
+    return True  # "all" handled above
+
+kept, dropped_explicit, dropped_unannot = [], [], []
 for n in candidates:
-    if ann.get(n) in keep:
-        print(n)
+    label = ann.get(n)
+    if keeps(label):
+        kept.append(n)
+    elif label is None:
+        dropped_unannot.append(n)
+    else:
+        dropped_explicit.append((n, label))
+
+# Headline summary
+sys.stderr.write(
+    f"[frame0:{mode}] kept={len(kept)}  "
+    f"dropped_explicit={len(dropped_explicit)}  "
+    f"unannotated={len(dropped_unannot)}\n"
+)
+# Detail: un-annotated exps under strict mode are skipped (treated like
+# not-visible). Print them so the user can decide to label & re-queue.
+if dropped_unannot:
+    sys.stderr.write("[frame0]   skipped (NO label in yaml — re-run frame0_visibility_inspector.py):\n")
+    for n in dropped_unannot:
+        sys.stderr.write(f"[frame0]     - {n}\n")
+if dropped_explicit:
+    sys.stderr.write("[frame0]   skipped (explicit label):\n")
+    for n, lbl in dropped_explicit:
+        sys.stderr.write(f"[frame0]     - {n}  [{lbl}]\n")
+
+for n in kept:
+    print(n)
 PY
 }
 
