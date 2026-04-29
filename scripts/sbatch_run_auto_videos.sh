@@ -85,6 +85,15 @@
 #     [--mapping_yaml PATH]        (词表 yaml; auto-detected at <videos_root>/tool_keyword_mapping.yaml)
 #     [--mapping_only]             (only run exps whose name matches a词表 keyword)
 #     [--start_frame 0] [--end_frame N]
+#     [--object_chunk_overlap N]   (overlap between obj chunks; legacy)
+#     [--hand_chunk_size N]        (hand chunked path window)
+#     [--long_video_threshold N]   (auto-disable real optim for long videos)
+#     [--frame0_only]              (DINO: only register on frame 0, no re-seed —
+#                                   skips Phase 3-7 of dino_tool_segment.py;
+#                                   much faster on slow GPUs but masks won't
+#                                   re-seek if the tool drifts out of view)
+#     [--mesh_scan_every N] [--dense_scan_every N]    (DINO seed strides)
+#     [--seed_min_area N] [--seed_max_area N] [--seed_min_sim F]
 #     [--dry_run]                  (list what would run, don't actually run)
 
 set -u
@@ -138,7 +147,15 @@ ROT_THRESH=15
 TRANS_THRESH=0.03
 TRACK_REFINE_ITER=10
 OBJECT_CHUNK_SIZE=600
+OBJECT_CHUNK_OVERLAP=""
 HAND_CHUNK_SIZE=""
+LONG_VIDEO_THRESHOLD=""
+FRAME0_ONLY=0             # forward to run_auto_annotator → DINO Phase 1 only, no re-seeding
+DINO_MESH_SCAN_EVERY=""
+DINO_DENSE_SCAN_EVERY=""
+DINO_SEED_MIN_AREA=""
+DINO_SEED_MAX_AREA=""
+DINO_SEED_MIN_SIM=""
 DRY_RUN=0
 
 while [[ "$#" -gt 0 ]]; do
@@ -160,7 +177,15 @@ while [[ "$#" -gt 0 ]]; do
         --trans_thresh)       TRANS_THRESH="$2"; shift 2;;
         --track_refine_iter)  TRACK_REFINE_ITER="$2"; shift 2;;
         --object_chunk_size)  OBJECT_CHUNK_SIZE="$2"; shift 2;;
+        --object_chunk_overlap) OBJECT_CHUNK_OVERLAP="$2"; shift 2;;
         --hand_chunk_size)    HAND_CHUNK_SIZE="$2"; shift 2;;
+        --long_video_threshold) LONG_VIDEO_THRESHOLD="$2"; shift 2;;
+        --frame0_only)        FRAME0_ONLY=1; shift;;
+        --mesh_scan_every)    DINO_MESH_SCAN_EVERY="$2"; shift 2;;
+        --dense_scan_every)   DINO_DENSE_SCAN_EVERY="$2"; shift 2;;
+        --seed_min_area)      DINO_SEED_MIN_AREA="$2"; shift 2;;
+        --seed_max_area)      DINO_SEED_MAX_AREA="$2"; shift 2;;
+        --seed_min_sim)       DINO_SEED_MIN_SIM="$2"; shift 2;;
         --dry_run)            DRY_RUN=1; shift;;
         -h|--help)            sed -n '2,72p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
@@ -419,11 +444,19 @@ for TASK_DIR in "${TASKS[@]}"; do
             --track_refine_iter "$TRACK_REFINE_ITER"
             --object_chunk_size "$OBJECT_CHUNK_SIZE"
         )
-        [[ -n "$END_FRAME" ]]        && RUN_ARGS+=(--end_frame "$END_FRAME")
-        [[ -n "$HAND" ]]             && RUN_ARGS+=(--hand "$HAND")
-        [[ -n "$HAND_CHUNK_SIZE" ]]  && RUN_ARGS+=(--hand_chunk_size "$HAND_CHUNK_SIZE")
-        [[ "$RESUME" == "1" ]]       && RUN_ARGS+=(--resume)
-        [[ "$FAKE_OPTIMIZE" == "1" ]] && RUN_ARGS+=(--fake_optimize)
+        [[ -n "$END_FRAME" ]]                && RUN_ARGS+=(--end_frame "$END_FRAME")
+        [[ -n "$HAND" ]]                     && RUN_ARGS+=(--hand "$HAND")
+        [[ -n "$HAND_CHUNK_SIZE" ]]          && RUN_ARGS+=(--hand_chunk_size "$HAND_CHUNK_SIZE")
+        [[ -n "$OBJECT_CHUNK_OVERLAP" ]]     && RUN_ARGS+=(--object_chunk_overlap "$OBJECT_CHUNK_OVERLAP")
+        [[ -n "$LONG_VIDEO_THRESHOLD" ]]     && RUN_ARGS+=(--long_video_threshold "$LONG_VIDEO_THRESHOLD")
+        [[ "$FRAME0_ONLY" == "1" ]]          && RUN_ARGS+=(--frame0_only)
+        [[ -n "$DINO_MESH_SCAN_EVERY" ]]     && RUN_ARGS+=(--mesh_scan_every  "$DINO_MESH_SCAN_EVERY")
+        [[ -n "$DINO_DENSE_SCAN_EVERY" ]]    && RUN_ARGS+=(--dense_scan_every "$DINO_DENSE_SCAN_EVERY")
+        [[ -n "$DINO_SEED_MIN_AREA" ]]       && RUN_ARGS+=(--seed_min_area    "$DINO_SEED_MIN_AREA")
+        [[ -n "$DINO_SEED_MAX_AREA" ]]       && RUN_ARGS+=(--seed_max_area    "$DINO_SEED_MAX_AREA")
+        [[ -n "$DINO_SEED_MIN_SIM" ]]        && RUN_ARGS+=(--seed_min_sim     "$DINO_SEED_MIN_SIM")
+        [[ "$RESUME" == "1" ]]               && RUN_ARGS+=(--resume)
+        [[ "$FAKE_OPTIMIZE" == "1" ]]        && RUN_ARGS+=(--fake_optimize)
 
         if bash "$RUN_SCRIPT" "${RUN_ARGS[@]}"; then
             OK=$((OK+1))
