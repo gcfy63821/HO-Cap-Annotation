@@ -116,6 +116,9 @@ DINO_SEED_MIN_AREA=""
 DINO_SEED_MAX_AREA=""
 DINO_SEED_MIN_SIM=""
 FRAME0_ONLY_FLAG=""
+LONG_VIDEO_THRESHOLD=""    # empty = run_auto_annotator.sh default (1000); 0 = disable
+OBJECT_CHUNK_SIZE=""       # empty = run_auto_annotator default (1000); 0 = disable chunking
+OBJECT_CHUNK_OVERLAP=""    # empty = run_auto_annotator default (20)
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -138,6 +141,9 @@ while [[ "$#" -gt 0 ]]; do
         --seed_max_area)      DINO_SEED_MAX_AREA="$2"; shift 2;;
         --seed_min_sim)       DINO_SEED_MIN_SIM="$2"; shift 2;;
         --frame0_only)        FRAME0_ONLY_FLAG="--frame0_only"; shift;;
+        --long_video_threshold) LONG_VIDEO_THRESHOLD="$2"; shift 2;;
+        --object_chunk_size)    OBJECT_CHUNK_SIZE="$2"; shift 2;;
+        --object_chunk_overlap) OBJECT_CHUNK_OVERLAP="$2"; shift 2;;
         -h|--help)            sed -n '2,50p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
     esac
@@ -235,6 +241,9 @@ for task_dir in "${TASK_FOLDERS[@]}"; do
     [[ -n "$DINO_SEED_MAX_AREA" ]]      && BA_ARGS+=(--seed_max_area    "$DINO_SEED_MAX_AREA")
     [[ -n "$DINO_SEED_MIN_SIM" ]]       && BA_ARGS+=(--seed_min_sim     "$DINO_SEED_MIN_SIM")
     [[ -n "$FRAME0_ONLY_FLAG" ]]        && BA_ARGS+=("$FRAME0_ONLY_FLAG")
+    [[ -n "$LONG_VIDEO_THRESHOLD" ]]    && BA_ARGS+=(--long_video_threshold "$LONG_VIDEO_THRESHOLD")
+    [[ -n "$OBJECT_CHUNK_SIZE" ]]       && BA_ARGS+=(--object_chunk_size    "$OBJECT_CHUNK_SIZE")
+    [[ -n "$OBJECT_CHUNK_OVERLAP" ]]    && BA_ARGS+=(--object_chunk_overlap "$OBJECT_CHUNK_OVERLAP")
 
     if bash "$HAND_BATCH_SCRIPT" "${BA_ARGS[@]}"; then
         TASK_OK=$((TASK_OK+1))

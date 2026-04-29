@@ -205,7 +205,7 @@ def build_rich_reference(dino, data_h5, masks_ds, ref_cam, sample_every=10):
 def mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor,
                    scan_every=10, top_k=5,
                    min_area=100, max_area=15000, min_sim=0.20,
-                   first_hit=False):
+                   first_hit=False, frames=None):
     """Seed a camera using mesh DINOv2 reference.
 
     Scans frames, clicks SAM2 at top-matching DINOv2 patches, validates
@@ -233,8 +233,11 @@ def mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor,
     """
     N = data_h5['imgs'].shape[0]
     best = None
+    # Explicit frame list (used by frame0_only's --seed_frames) takes
+    # precedence over the scan_every stride.
+    frame_iter = list(frames) if frames is not None else range(0, N, scan_every)
 
-    for fr in range(0, N, scan_every):
+    for fr in frame_iter:
         rgb = data_h5['imgs'][fr, cam]
         fm, ph, pw, fh, fw = get_dino_features(dino, rgb)
         flat = fm.reshape(-1, fm.shape[-1])
@@ -1000,6 +1003,10 @@ def main():
     parser.add_argument('--cvr_mesh_gate_frac', type=float, default=0.70,
         help='Require this fraction of added patches above mesh-gate threshold')
     parser.add_argument('--no_video', action='store_true')
+    parser.add_argument('--no_viz', action='store_true',
+        help='Skip the entire visualize() step (no snapshot PNGs, no video). '
+             'Saves time and disk in batch jobs where masks.h5 + the pipeline-'
+             'format export are the only outputs that matter.')
     parser.add_argument('--frame0_only', action='store_true',
         help='Simple/fast mode: for every camera, run DINOv2+SAM2 seeding ONLY '
              'on frame 0, then SAM2-propagate forward/backward with no drift '
@@ -1007,6 +1014,19 @@ def main():
              '6/7. Use this when DINO on the cluster is too slow and you are '
              'OK with per-camera mask quality being determined by frame 0. '
              'Cameras whose frame-0 seed fails are left with empty masks.')
+    parser.add_argument('--seed_frames', type=int, nargs='+', default=None,
+        help='Override the candidate frame indices used by --frame0_only. '
+             'For each camera the seeder tries every frame in this list and '
+             'keeps the highest mesh-similarity hit. Use this when the tool '
+             'is occluded / off-frame at frame 0 — e.g. "--seed_frames 0 60 '
+             '200 500". Default = just [0].')
+    parser.add_argument('--seed_min_mesh_sim', type=float, default=None,
+        help='Hard minimum on mesh_sim for a seed to be accepted in '
+             '--frame0_only mode. Tightening this (e.g. 0.40) rejects '
+             'low-confidence seeds that would otherwise lock onto the wrong '
+             'object — better to have an empty camera than a wrong-object '
+             'mask propagated through the whole sequence. Defaults to '
+             '--seed_min_sim if omitted.')
     parser.add_argument('--cameras', type=int, nargs='+', default=None,
         help='Only process these cameras (reuses existing masks.h5 for others)')
     parser.add_argument('--existing_masks', type=str, default=None,
@@ -1118,9 +1138,9 @@ def main():
         masks_h5.close()
         del dino, image_predictor; torch.cuda.empty_cache(); gc.collect()
 
-        print(f'\n{_elapsed()} === Generating visualizations ===')
+        (None if args.no_viz else print(f'\n{_elapsed()} === Generating visualizations ==='))
         viz_dir = output_dir / 'viz'
-        visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video)
+        (print("  [skip viz] --no_viz set") if args.no_viz else visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video))
 
         data_h5.close()
         elapsed = time.time() - t_start
@@ -1154,23 +1174,41 @@ def main():
     # Seed every camera using only frame 0 via the mesh DINOv2 reference,
     # then SAM2-propagate with re-seeding disabled. Skips Phase 3–7.
     if args.frame0_only:
-        print(f'\n{_elapsed()} === frame0_only: seeding every camera at frame 0 ===')
+        # Candidate frames to seed from. Default is just frame 0. Pass
+        # --seed_frames "0 60 200 500" to look at multiple frames per camera
+        # and pick the highest-confidence hit — important when the tool is
+        # not visible at frame 0 in some cameras.
+        candidate_frames = list(args.seed_frames) if args.seed_frames else [0]
+        candidate_frames = sorted({fr for fr in candidate_frames if 0 <= fr < N})
+        # Hard mesh_sim floor — anything below is rejected as likely wrong-object.
+        mesh_sim_floor = args.seed_min_mesh_sim if args.seed_min_mesh_sim is not None else args.seed_min_sim
+        print(f'\n{_elapsed()} === frame0_only: seeding every camera (candidates={candidate_frames}, '
+              f'mesh_sim_floor={mesh_sim_floor:.2f}) ===')
         for cam in range(n_cams):
-            # scan_every=N+1 guarantees only frame 0 is tested; first_hit stops
-            # immediately on success.
-            result = mesh_dino_seed(
-                dino, data_h5, cam, mesh_ref, image_predictor,
-                scan_every=N + 1,
-                min_area=args.seed_min_area,
-                max_area=args.seed_max_area,
-                min_sim=args.seed_min_sim,
-                first_hit=True)
-            if result:
-                seeds[cam] = result
-                print(f'  cam{cam}: frame0 seed OK (area={result["area"]}, '
-                      f'mesh_sim={result["mesh_sim"]:.3f})')
+            best = None
+            for fr in candidate_frames:
+                result = mesh_dino_seed(
+                    dino, data_h5, cam, mesh_ref, image_predictor,
+                    frames=[fr],
+                    min_area=args.seed_min_area,
+                    max_area=args.seed_max_area,
+                    min_sim=args.seed_min_sim,
+                    first_hit=True)
+                if result is None:
+                    continue
+                if result['mesh_sim'] < mesh_sim_floor:
+                    print(f'  cam{cam} frame{fr}: rejected '
+                          f'(mesh_sim={result["mesh_sim"]:.3f} < floor {mesh_sim_floor:.2f}) — '
+                          f'avoids locking onto wrong object')
+                    continue
+                if best is None or result['mesh_sim'] > best['mesh_sim']:
+                    best = result
+            if best:
+                seeds[cam] = best
+                print(f'  cam{cam}: seed OK at frame {best["frame"]} '
+                      f'(area={best["area"]}, mesh_sim={best["mesh_sim"]:.3f})')
             else:
-                print(f'  cam{cam}: frame0 seed FAILED (mask left empty)')
+                print(f'  cam{cam}: seed FAILED on all candidates (mask left empty)')
 
         if not seeds:
             print('  ERROR: No camera produced a valid frame-0 seed.')
@@ -1228,10 +1266,10 @@ def main():
                 fmt=args.pipeline_mask_format,
             )
 
-        print(f'\n{_elapsed()} === Generating visualizations ===')
+        (None if args.no_viz else print(f'\n{_elapsed()} === Generating visualizations ==='))
         viz_dir = output_dir / 'viz'
         try:
-            visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video)
+            (print("  [skip viz] --no_viz set") if args.no_viz else visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video))
         except Exception as e:
             print(f'  [WARN] visualize failed: {e}')
             print('         masks.h5 and pipeline-format masks are still valid.')
@@ -1609,10 +1647,10 @@ def main():
             fmt=args.pipeline_mask_format,
         )
 
-    print(f'\n{_elapsed()} === Generating visualizations ===')
+    (None if args.no_viz else print(f'\n{_elapsed()} === Generating visualizations ==='))
     viz_dir = output_dir / 'viz'
     try:
-        visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video)
+        (print("  [skip viz] --no_viz set") if args.no_viz else visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video))
     except Exception as e:
         print(f'  [WARN] visualize failed: {e}')
         print('         masks.h5 and pipeline-format masks are still valid.')
@@ -1895,9 +1933,9 @@ def repair_masks():
     torch.cuda.empty_cache(); gc.collect()
 
     # Visualize
-    print(f'\n{_elapsed()} === Generating visualizations ===')
+    (None if args.no_viz else print(f'\n{_elapsed()} === Generating visualizations ==='))
     viz_dir = Path(args.output_dir) / 'viz'
-    visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video)
+    (print("  [skip viz] --no_viz set") if args.no_viz else visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video))
 
     masks_h5.close()
     data_h5.close()

@@ -171,6 +171,90 @@ def save_masks_to_h5(masks, h5_path, dataset_name="masks"):
         f.create_dataset(dataset_name, data=masks, compression="gzip")
     print(f"[INFO] Saved {dataset_name} to {h5_path}")
 
+
+def stream_masks_folder_to_h5(mask_root_dir, h5_path, num_frames, num_cams,
+                              expected_H=None, expected_W=None, start_frame=0,
+                              dataset_name="masks"):
+    """Stream per-frame masks from on-disk .npy/.npz files directly into a
+    chunked H5 dataset, frame by frame, without ever holding the full
+    (N, n_cams, H, W) array in RAM. Memory use is bounded by one frame
+    of masks (~10 MB) plus the H5 chunk cache.
+
+    Mirrors the per-frame logic of load_masks_from_folder but writes each
+    frame as soon as it's read.
+    """
+    mask_root_dir = Path(mask_root_dir)
+    discovered = discover_camera_folders(mask_root_dir)
+    if len(discovered) == 0:
+        camera_folders = []
+    else:
+        if len(discovered) < num_cams:
+            print(f"[WARNING] Discovered {len(discovered)} camera folder(s), but h5 has {num_cams} camera(s). Missing views will be filled with zeros.")
+        elif len(discovered) > num_cams:
+            print(f"[WARNING] Discovered {len(discovered)} camera folder(s), but h5 has {num_cams} camera(s). Using first {num_cams} by camera id.")
+        camera_folders = [folder for _, folder in discovered[:num_cams]]
+
+    # Infer mask shape from the first available file.
+    first_mask_shape = None
+    for cam_folder in camera_folders:
+        for fmt in [f"{0:04d}.npy", f"{0}.npy"]:
+            npy_path = cam_folder / fmt
+            if npy_path.exists():
+                m = np.load(npy_path)
+                if m.ndim == 3:
+                    m = m.squeeze(0)
+                first_mask_shape = m.shape
+                break
+        if first_mask_shape is not None:
+            break
+
+    if first_mask_shape is None:
+        H, W = expected_H or 480, expected_W or 640
+        print(f"[WARNING] Could not infer mask shape, using default: ({H}, {W})")
+    else:
+        H, W = first_mask_shape
+        print(f"[INFO] Inferred mask shape: ({H}, {W})")
+
+    if expected_H is not None and expected_W is not None:
+        H, W = expected_H, expected_W
+        print(f"[INFO] Using expected mask shape: ({H}, {W})")
+
+    with h5py.File(h5_path, 'w') as f:
+        ds = f.create_dataset(
+            dataset_name,
+            shape=(num_frames, num_cams, H, W),
+            dtype=np.uint8,
+            chunks=(1, 1, H, W),
+            compression="gzip",
+        )
+        for frame_idx in range(num_frames):
+            original_frame_idx = frame_idx + start_frame
+            for cam_idx in range(num_cams):
+                npy_path = None
+                if cam_idx < len(camera_folders):
+                    npy_path = _find_mask_file(camera_folders[cam_idx], original_frame_idx)
+                if npy_path is None:
+                    ds[frame_idx, cam_idx] = np.zeros((H, W), dtype=np.uint8)
+                    continue
+                mask = _load_mask_file(npy_path)
+                if mask.ndim == 3:
+                    mask = mask.squeeze(0)
+                elif mask.ndim != 2:
+                    print(f"[WARNING] Unexpected mask shape {mask.shape} from {npy_path}, using zeros")
+                    ds[frame_idx, cam_idx] = np.zeros((H, W), dtype=np.uint8)
+                    continue
+                if mask.shape[0] != H or mask.shape[1] != W:
+                    try:
+                        import cv2
+                        mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_NEAREST)
+                    except ImportError:
+                        from scipy.ndimage import zoom
+                        mask = zoom(mask, (H / mask.shape[0], W / mask.shape[1]), order=0).astype(mask.dtype)
+                ds[frame_idx, cam_idx] = mask.astype(np.uint8)
+            if (frame_idx + 1) % 200 == 0 or frame_idx == num_frames - 1:
+                print(f"  streamed {frame_idx + 1}/{num_frames} frames")
+    print(f"[INFO] Saved {dataset_name} to {h5_path} (streamed)")
+
 def detect_num_objects_from_masks(mask_root_dir, num_cams, start_frame=0):
     """
     Auto-detect number of objects by scanning mask .npy files for the max label value.
@@ -222,17 +306,19 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
         models_folder (str): Path to the models folder.
         object_mask_dir (str or None): Path to object_masks folder (optional).
     """
-    # Load .h5 to get number of frames and cameras
+    # Read H5 metadata (shape only — never load imgs into RAM, that's ~40+ GB
+    # for long videos at 720p×8 cams).
     with h5py.File(h5_path, 'r') as f:
-        imgs = f["imgs"][:]  # (N, num_cams, H, W, 3)
-    num_frames, num_cams = imgs.shape[0], imgs.shape[1]
-    img_H, img_W = imgs.shape[2], imgs.shape[3]
+        imgs_shape = f["imgs"].shape
+    num_frames, num_cams = imgs_shape[0], imgs_shape[1]
+    img_H, img_W = imgs_shape[2], imgs_shape[3]
 
-    # Save masks as h5 file in mask_root_dir
-    # 使用图像尺寸作为期望的mask尺寸，start_frame用于mask npy文件的偏移
-    masks = load_masks_from_folder(mask_root_dir, num_frames, num_cams, expected_H=img_H, expected_W=img_W, start_frame=start_frame)  # (N, num_cams, H, W)
+    # Stream per-frame masks straight into masks.h5 instead of building a
+    # giant in-RAM (N, n_cams, H, W) array (~14 GB for 1923 frames @720p×8).
     masks_h5_path = Path(mask_root_dir) / "masks.h5"
-    save_masks_to_h5(masks, masks_h5_path, dataset_name="masks")
+    stream_masks_folder_to_h5(
+        mask_root_dir, masks_h5_path, num_frames, num_cams,
+        expected_H=img_H, expected_W=img_W, start_frame=start_frame)
 
     # Save object masks if provided
     if object_mask_dir is not None:
