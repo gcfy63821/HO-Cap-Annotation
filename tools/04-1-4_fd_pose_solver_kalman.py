@@ -208,16 +208,17 @@ def run_tracking_with_kalman_and_integration(
     output_suffix: str = "fd_pose_solver",
     depth_validation: bool = False,
     depth_error_thresh: float = 0.02,
+    frame_id_offset: int = 0,
 ):
     """
     Run FoundationPose++ tracking with Kalman filter for each camera, then integrate to world frame.
-    
+
     Args:
         sequence_folder: Path to the sequence folder
         object_idx: Object index (1-based)
         est_refine_iter: Iterations for initial pose estimation
         track_refine_iter: Iterations for tracking refinement
-        start_frame: Starting frame index
+        start_frame: Starting frame index (in-h5; relative to chunk h5 if chunked)
         end_frame: Ending frame index (-1 for all frames)
         activate_2d_tracker: Whether to use Cutie 2D tracker
         activate_kalman_filter: Whether to use Kalman filter for smoothing
@@ -229,6 +230,9 @@ def run_tracking_with_kalman_and_integration(
         output_suffix: Suffix for output folder name
         depth_validation: Whether to validate tracked poses against observed depth
         depth_error_thresh: Depth reprojection error threshold (meters) for re-registration
+        frame_id_offset: Added to in-h5 frame index to compute the absolute frame id
+            used for output filenames + log messages. Set to chunk start when running
+            on a chunked h5 so outputs from multiple chunks accumulate at absolute ids.
     """
     sequence_folder = Path(sequence_folder)
     object_idx_0 = object_idx - 1  # Convert to 0-based index
@@ -358,26 +362,27 @@ def run_tracking_with_kalman_and_integration(
         if depth_validation:
             consecutive_depth_failures = 0
         
-        for frame_id in range(start_frame, end_frame):
-            frame_idx = frame_id - start_frame
-            
+        for h5_idx in range(start_frame, end_frame):
+            frame_idx = h5_idx - start_frame
+            abs_frame_id = h5_idx + frame_id_offset
+
             # Load frame data
-            color = data_loader.get_color(serial, frame_id)
-            depth = data_loader.get_depth(serial, frame_id)
-            mask = data_loader.get_mask(serial, frame_id, object_idx_0)
-            
+            color = data_loader.get_color(serial, h5_idx)
+            depth = data_loader.get_depth(serial, h5_idx)
+            mask = data_loader.get_mask(serial, h5_idx, object_idx_0)
+
             # Store original color for visualization
             color_orig = color.copy()
-            
+
             # Apply masking if enabled
             if use_masked_depth:
                 depth = depth.copy()
                 depth[mask == 0] = 0
-            
+
             if use_masked_image:
                 color = color.copy()
                 color[mask == 0] = 0
-            
+
             # First frame: register pose and initialize tracker
             if frame_idx == 0:
                 if mask.sum() < 10:
@@ -386,17 +391,17 @@ def run_tracking_with_kalman_and_integration(
                     # frame would crash inside tracker_2D.track() (Cutie has
                     # no memory yet). Mark the entire camera as failed and
                     # skip to the next one.
-                    print(f"  Frame {frame_id}: Invalid mask (sum={mask.sum()}), cannot register. "
+                    print(f"  Frame {abs_frame_id}: Invalid mask (sum={mask.sum()}), cannot register. "
                           f"Skipping camera {serial} entirely.")
                     for fi in range(total_frames):
                         pose_seq[fi] = empty_mat_pose.copy()
                     break
-                
+
                 # Get initial translation
                 init_ob_pos_center = data_loader.get_init_translation(
-                    frame_id, [serial], object_idx_0, kernel_size=5
+                    h5_idx, [serial], object_idx_0, kernel_size=5
                 )[0][0]
-                
+
                 if init_ob_pos_center is not None:
                     pose = estimator.register(
                         rgb=color,
@@ -406,7 +411,7 @@ def run_tracking_with_kalman_and_integration(
                         iteration=est_refine_iter,
                         init_ob_pos_center=init_ob_pos_center,
                     )
-                    print(f"  Frame {frame_id}: Registered initial pose.")
+                    print(f"  Frame {abs_frame_id}: Registered initial pose.")
                 else:
                     pose = estimator.register(
                         rgb=color,
@@ -415,7 +420,7 @@ def run_tracking_with_kalman_and_integration(
                         K=K,
                         iteration=est_refine_iter,
                     )
-                    print(f"  Frame {frame_id}: Registered initial pose (no init center).")
+                    print(f"  Frame {abs_frame_id}: Registered initial pose (no init center).")
                 
                 # Initialize Kalman filter
                 if activate_kalman_filter:
@@ -479,7 +484,7 @@ def run_tracking_with_kalman_and_integration(
                 # Check if we have valid previous pose
                 if mask.sum() < 10:
                     pose = empty_mat_pose.copy()
-                    print(f"  Frame {frame_id}: Invalid mask, using empty pose.")
+                    print(f"  Frame {abs_frame_id}: Invalid mask, using empty pose.")
                 elif is_valid_ob_pose(prev_pose, x_threshold, y_threshold, z_threshold, cam_RT):
                     # Track from previous pose
                     pose = estimator.track_one(
@@ -493,12 +498,12 @@ def run_tracking_with_kalman_and_integration(
                     # Depth validation: check if tracked pose matches observed depth
                     if depth_validation and depth_check_verts is not None:
                         # Use unmasked depth for validation
-                        depth_orig = data_loader.get_depth(serial, frame_id)
+                        depth_orig = data_loader.get_depth(serial, h5_idx)
                         d_err, d_inlier = compute_depth_reprojection_error(
                             pose.reshape(4, 4), depth_check_verts, depth_orig, K, mask
                         )
                         depth_errors_log.append({
-                            "frame": frame_id, "cam": serial,
+                            "frame": abs_frame_id, "cam": serial,
                             "error": d_err, "inlier_ratio": d_inlier
                         })
 
@@ -508,10 +513,10 @@ def run_tracking_with_kalman_and_integration(
                             if consecutive_depth_failures >= depth_reregister_patience:
                                 # Too many consecutive failures — re-register as last resort
                                 reregister_count += 1
-                                print(f"  Frame {frame_id}: {consecutive_depth_failures} consecutive depth failures, "
+                                print(f"  Frame {abs_frame_id}: {consecutive_depth_failures} consecutive depth failures, "
                                       f"re-registering...")
                                 init_ob_pos_center = data_loader.get_init_translation(
-                                    frame_id, [serial], object_idx_0, kernel_size=5
+                                    h5_idx, [serial], object_idx_0, kernel_size=5
                                 )[0][0]
                                 if init_ob_pos_center is not None:
                                     pose = estimator.register(
@@ -550,8 +555,8 @@ def run_tracking_with_kalman_and_integration(
                                 if activate_kalman_filter and kf_mean is not None:
                                     pose = get_mat_from_6d_pose_arr(kf_mean[:6])
                                     pose = np.array(pose, dtype=np.float32)
-                                    if frame_id % 10 == 0 or consecutive_depth_failures == 1:
-                                        print(f"  Frame {frame_id}: Depth error {d_err:.4f}m > {depth_error_thresh:.3f}m, "
+                                    if abs_frame_id % 10 == 0 or consecutive_depth_failures == 1:
+                                        print(f"  Frame {abs_frame_id}: Depth error {d_err:.4f}m > {depth_error_thresh:.3f}m, "
                                               f"using Kalman prediction (fail #{consecutive_depth_failures})")
                                 # else: keep tracked pose if no Kalman available
                         else:
@@ -561,16 +566,16 @@ def run_tracking_with_kalman_and_integration(
                     if activate_2d_tracker and activate_kalman_filter:
                         kf_mean, kf_covariance = kf.predict(kf_mean, kf_covariance)
 
-                    if frame_id % 50 == 0:
-                        print(f"  Frame {frame_id}: Tracked from previous pose.")
+                    if abs_frame_id % 50 == 0:
+                        print(f"  Frame {abs_frame_id}: Tracked from previous pose.")
                 else:
                     # Re-register if previous pose is invalid
-                    print(f"  Frame {frame_id}: Re-registering due to invalid previous pose...")
+                    print(f"  Frame {abs_frame_id}: Re-registering due to invalid previous pose...")
                     ob_in_world = cam_RT @ prev_pose
                     x, y, z = ob_in_world[:3, 3]
                     print(f"debug:{x}, {y}, {z}")
                     init_ob_pos_center = data_loader.get_init_translation(
-                        frame_id, [serial], object_idx_0, kernel_size=5
+                        h5_idx, [serial], object_idx_0, kernel_size=5
                     )[0][0]
                     
                     if init_ob_pos_center is not None:
@@ -589,9 +594,9 @@ def run_tracking_with_kalman_and_integration(
                 pose_seq[frame_idx] = pose.reshape(4, 4) if not np.all(pose == -1) else pose
                 prev_pose = pose_seq[frame_idx]
             
-            # Save pose to file
+            # Save pose to file (named by absolute frame id so chunked runs accumulate)
             pose_quat = mat_to_quat(pose_seq[frame_idx])
-            write_pose_to_txt(cam_pose_folder / f"{frame_id:06d}.txt", pose_quat)
+            write_pose_to_txt(cam_pose_folder / f"{abs_frame_id:06d}.txt", pose_quat)
         
         print(f"  [INFO] Camera {serial} tracking complete. Saved to {cam_pose_folder}")
 
@@ -636,33 +641,35 @@ def run_tracking_with_kalman_and_integration(
     print("STEP 2: Integrate camera poses to world frame")
     print("="*60)
     print(f"[INFO] Valid serials: {valid_serials}")
-    # Load all per-camera poses
+    # Load all per-camera poses (filenames are absolute frame ids).
     ob_in_cam_poses_per_cam = [[] for _ in range(len(valid_serials))]
     for serial_idx, serial in enumerate(valid_serials):
         print(f"[INFO] Processing camera: {serial}")
-        for frame_id in range(start_frame, end_frame):
-            pose_path = save_folder / object_id / "ob_in_cam" / serial / f"{frame_id:06d}.txt"
+        for h5_idx in range(start_frame, end_frame):
+            abs_frame_id = h5_idx + frame_id_offset
+            pose_path = save_folder / object_id / "ob_in_cam" / serial / f"{abs_frame_id:06d}.txt"
             if pose_path.exists():
                 pose_quat = np.loadtxt(pose_path)
                 ob_in_cam_poses_per_cam[serial_idx].append(pose_quat)
             else:
                 # If file is missing, append a placeholder
                 ob_in_cam_poses_per_cam[serial_idx].append(np.full(7, -1.0, dtype=np.float32))
-    
+
     # Integrate poses frame by frame
     all_poses_w = []
     save_pose_folder = save_folder / object_id / "ob_in_world"
     save_pose_folder.mkdir(parents=True, exist_ok=True)
-    
+
     for frame_idx in range(total_frames):
-        frame_id = start_frame + frame_idx
-        
+        h5_idx = start_frame + frame_idx
+        abs_frame_id = h5_idx + frame_id_offset
+
         # Collect poses from all cameras for this frame
         ob_in_cam_poses = [ob_in_cam_poses_per_cam[serial_idx][frame_idx] for serial_idx in range(len(valid_serials))]
-        
+
         # Convert quaternion poses to 4x4 matrices
         ob_in_cam_poses_mat = [quat_to_mat(pose[:7]) for pose in ob_in_cam_poses]
-        
+
         # Get consistent pose in world frame
         curr_pose_w = get_consistent_pose_w(
             mat_poses_c=ob_in_cam_poses_mat,
@@ -676,12 +683,12 @@ def run_tracking_with_kalman_and_integration(
             y_threshold=y_threshold,
             z_threshold=z_threshold,
         )
-        
+
         all_poses_w.append(curr_pose_w)
-        print(f"[RESULT] ob_in_world (Frame {frame_id}): {curr_pose_w[4:7]}")
-        
+        print(f"[RESULT] ob_in_world (Frame {abs_frame_id}): {curr_pose_w[4:7]}")
+
         # Save world pose
-        write_pose_to_txt(save_pose_folder / f"{frame_id:06d}.txt", curr_pose_w)
+        write_pose_to_txt(save_pose_folder / f"{abs_frame_id:06d}.txt", curr_pose_w)
     
     print(f"\n[INFO] Integration complete! Results saved to {save_folder}")
     print(f"[INFO] Per-camera poses: {save_folder / object_id / 'ob_in_cam'}")
@@ -785,6 +792,14 @@ if __name__ == "__main__":
         default=0.02,
         help="Depth error threshold in meters for re-registration (default: 0.02)"
     )
+    parser.add_argument(
+        "--frame_id_offset",
+        type=int,
+        default=0,
+        help="Added to in-h5 frame index to compute the absolute frame id used for "
+             "output filenames. Set to chunk start when running on a chunked h5 so "
+             "outputs from multiple chunks accumulate at absolute frame ids."
+    )
 
     args = parser.parse_args()
     
@@ -810,6 +825,7 @@ if __name__ == "__main__":
         output_suffix=args.output_suffix,
         depth_validation=args.depth_validation,
         depth_error_thresh=args.depth_error_thresh,
+        frame_id_offset=args.frame_id_offset,
     )
     
     print(f"\n[INFO] Total time: {time.time() - t_start:.2f}s")

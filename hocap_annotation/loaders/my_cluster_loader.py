@@ -9,11 +9,17 @@ class MyClusterLoader:
     """
     Data loader for HO-Cap dataset. Loads images, depths, masks, and camera parameters directly from the original data and calibration YAML.
     """
-    def __init__(self, sequence_folder) -> None:
+    def __init__(self, sequence_folder, lazy: bool = False) -> None:
         """
         Initialize the loader.
         Args:
             sequence_folder (str): Path to the folder containing the .h5 file and mask folders.
+            lazy (bool): If True, do NOT materialise the full color/depth/mask
+                arrays into RAM. Instead keep h5 handles open and serve frames
+                on demand via get_color/get_depth/get_mask. Use this from
+                callers that only need metadata (num_frames, intrinsics, etc.)
+                or that read a small subset of frames — eager mode otherwise
+                allocates ~100 GB+ on long 720p×8-cam sequences.
         """
         self._data_folder = Path(sequence_folder)
         # Updated path parsing for new structure: videos_0901/taskname/xxxvideoname
@@ -22,9 +28,9 @@ class MyClusterLoader:
         self._task_name = task_folder.name  # taskname
         video_root_folder = task_folder.parent  # .../videos_0901
         self._folder_name = video_root_folder.name  # videos_0901
-        
+
         print(f"[INFO] folder_name: {self._folder_name}, task_name: {self._task_name}, sequence_name: {self._sequence_name}")
-        
+
         # Create annotated paths with taskname included: videos_0901_annotated/taskname/xxxvideoname
         annotated_base_folder = f"{self._folder_name}_annotated"  # videos_0901_annotated
         annotated_root = video_root_folder.parent / annotated_base_folder  # .../videos_0901_annotated
@@ -35,16 +41,77 @@ class MyClusterLoader:
         masks_folder = annotated_sequence_path / "masks"
         self._object_masks_folder = annotated_sequence_path / "object_masks"
         print(f"[INFO] tool mask folder_name: {tool_masks_folder}, is dir: {tool_masks_folder.is_dir()}")
-        
+
         if tool_masks_folder.exists() and tool_masks_folder.is_dir():
             self._seg_folder = tool_masks_folder
         elif masks_folder.exists() and masks_folder.is_dir():
             self._seg_folder = masks_folder
         else:
             raise FileNotFoundError(f"No tool_masks or object_masks folder found in {self._folder_name}_annotated/{self._task_name}/{self._sequence_name}")
-        
+
+        self._lazy = lazy
+        self._h5_file = None
+        self._masks_h5_file = None
+        self._object_masks_h5_file = None
+        self._imgs_ds = None
+        self._depths_ds = None
+        self._masks_ds = None
+        self._object_masks_ds = None
+
         self._load_metadata()
-        self._load_h5_and_masks()
+        if lazy:
+            self._setup_lazy_h5()
+        else:
+            self._load_h5_and_masks()
+
+    def __del__(self):
+        # Best-effort close of any open h5 handles in lazy mode.
+        for attr in ("_h5_file", "_masks_h5_file", "_object_masks_h5_file"):
+            f = getattr(self, attr, None)
+            if f is not None:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+
+    def _setup_lazy_h5(self):
+        """Open h5 + masks.h5 handles for on-demand single-frame reads.
+        Sets:
+            self._imgs_ds, self._depths_ds, self._masks_ds, self._object_masks_ds
+            self._num_frames, self._num_cams, self._rs_height, self._rs_width
+            self._all_colors / depths / masks / object_masks = None  (sentinel for lazy)
+        """
+        h5_files = list(self._data_folder.glob('*.h5'))
+        assert len(h5_files) > 0, f"No .h5 file found in {self._data_folder}"
+        h5_path = h5_files[0]
+        self._h5_file = h5py.File(h5_path, 'r')
+        self._imgs_ds = self._h5_file["imgs"]      # (N, all_cams, H, W, 3) uint8
+        self._depths_ds = self._h5_file["depths"]  # (N, all_cams, H, W)   uint16 (mm)
+
+        # Trust the h5's frame count over meta.yaml's (cheaper than re-reading meta).
+        self._num_frames = int(self._imgs_ds.shape[0])
+        self._num_cams = len(self._cam_h5_indices)
+        self._rs_height, self._rs_width = int(self._imgs_ds.shape[2]), int(self._imgs_ds.shape[3])
+
+        masks_h5_path = self._seg_folder / "masks.h5"
+        if masks_h5_path.exists():
+            self._masks_h5_file = h5py.File(masks_h5_path, 'r')
+            self._masks_ds = self._masks_h5_file["masks"]  # (N, all_cams, H, W) uint8
+        # else: get_mask falls back to per-file npy reads on demand.
+
+        obj_masks_h5_path = self._object_masks_folder / "object_masks.h5"
+        if obj_masks_h5_path.exists():
+            self._object_masks_h5_file = h5py.File(obj_masks_h5_path, 'r')
+            self._object_masks_ds = self._object_masks_h5_file["object_masks"]
+
+        # Sentinels: get_*() use these to detect lazy mode.
+        self._all_colors = None
+        self._all_depths = None
+        self._all_masks = None
+        self._all_object_masks = None
+        print(f"[INFO] Lazy h5 mode: imgs={self._imgs_ds.shape}, "
+              f"masks_h5={'yes' if self._masks_ds is not None else 'no'}, "
+              f"object_masks_h5={'yes' if self._object_masks_ds is not None else 'no'}")
 
     def _load_h5_and_masks(self):
         """
@@ -285,7 +352,11 @@ class MyClusterLoader:
             np.ndarray: RGB image, shape (H, W, 3), dtype=uint8
         """
         cam_idx = self._rs_serials.index(serial)
-        return self._all_colors[frame_id, cam_idx]
+        if self._all_colors is not None:
+            return self._all_colors[frame_id, cam_idx]
+        # Lazy: read a single (H, W, 3) slice from the open h5.
+        h5_cam = self._cam_h5_indices[cam_idx]
+        return np.asarray(self._imgs_ds[frame_id, h5_cam])
 
     def get_depth(self, serial, frame_id):
         """
@@ -294,10 +365,15 @@ class MyClusterLoader:
             serial (str): Camera serial number (e.g., '00').
             frame_id (int): Frame index.
         Returns:
-            np.ndarray: Depth image, shape (H, W), dtype=float32
+            np.ndarray: Depth image, shape (H, W), dtype=float32 (meters)
         """
         cam_idx = self._rs_serials.index(serial)
-        return self._all_depths[frame_id, cam_idx]
+        if self._all_depths is not None:
+            return self._all_depths[frame_id, cam_idx]
+        # Lazy: read raw uint16 mm depth and convert to meters (eager mode does this in bulk).
+        h5_cam = self._cam_h5_indices[cam_idx]
+        d = np.asarray(self._depths_ds[frame_id, h5_cam], dtype=np.float32)
+        return d * 0.001
 
     def get_mask(self, serial, frame_id, object_idx, kernel_size=1):
         """
@@ -311,7 +387,19 @@ class MyClusterLoader:
             np.ndarray: Binary mask, shape (H, W), dtype=uint8
         """
         cam_idx = self._rs_serials.index(serial)
-        mask = self._all_masks[frame_id, cam_idx]
+        if self._all_masks is not None:
+            mask = self._all_masks[frame_id, cam_idx]
+        elif self._masks_ds is not None:
+            # Lazy: read a single mask frame from masks.h5 (which stores all
+            # cameras at the same indexing as the data h5, so use h5_cam).
+            h5_cam = self._cam_h5_indices[cam_idx]
+            mask = np.asarray(self._masks_ds[frame_id, h5_cam])
+        else:
+            # Lazy + no masks.h5: caller must ensure generate_meta.py ran.
+            raise RuntimeError(
+                f"Lazy MyClusterLoader without masks.h5 in {self._seg_folder}; "
+                f"run preprocess/generate_meta.py first."
+            )
         mask = (mask == (object_idx + 1)).astype(np.uint8)
         # if kernel_size > 1:
         #     mask = erode_mask(mask, kernel_size)
@@ -332,8 +420,10 @@ class MyClusterLoader:
         cam_idx = self._rs_serials.index(serial)
         if self._all_object_masks is not None:
             return self._all_object_masks[frame_id, cam_idx]
-        else:
-            return np.zeros((self._rs_height, self._rs_width), dtype=np.uint8)
+        if self._object_masks_ds is not None:
+            h5_cam = self._cam_h5_indices[cam_idx]
+            return np.asarray(self._object_masks_ds[frame_id, h5_cam])
+        return np.zeros((self._rs_height, self._rs_width), dtype=np.uint8)
 
     def get_all_colors(self):
         """

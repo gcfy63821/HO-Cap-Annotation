@@ -464,12 +464,17 @@ def reseed_at_frame(dino, data_h5, cam, fr, global_ref, image_predictor, ref_are
 
 def propagate_camera(video_predictor, cam_dir, seed_mask, seed_frame, N, masks_ds, cam,
                      dino=None, image_predictor=None, global_ref=None, data_h5=None,
-                     ref_area=None, drift_threshold=None, chunk_size=None):
+                     ref_area=None, drift_threshold=None, chunk_size=None,
+                     pbar=None):
     """Propagate seed mask forward+backward with optional periodic re-seeding.
 
     When dino/image_predictor/global_ref are provided, detects drift at chunk
     boundaries and re-generates fresh seeds using DINOv2+SAM2 to prevent
     partial segmentation from accumulating.
+
+    If `pbar` is given (a tqdm-like object with .update(n)), it gets ticked
+    once per frame written. The caller is responsible for sizing it
+    correctly (typically total = sum_of_per_camera_frame_budgets).
     """
     written = 0
     reseed_count = 0
@@ -497,6 +502,8 @@ def propagate_camera(video_predictor, cam_dir, seed_mask, seed_frame, N, masks_d
                 masks_ds[actual, cam] = m
                 last = m
                 written += 1
+                if pbar is not None:
+                    pbar.update(1)
             del state; torch.cuda.empty_cache(); gc.collect()
             return last
         except Exception as e:
@@ -1230,20 +1237,30 @@ def main():
             dtype=np.uint8, chunks=(1, 1, H, W), compression='gzip')
 
         print(f'\n{_elapsed()} === frame0_only: propagating (no re-seeding) ===')
-        for cam in seeded_cams:
-            s = seeds[cam]
-            cam_dir = tmp_dir / f'cam{cam:02d}'
-            print(f'  cam{cam}: propagating from frame {s["frame"]} ...')
-            # drift_threshold=0.0 makes the drift check `area >= 0 * ref` always
-            # true, so propagate_camera never triggers a DINO re-seed.
-            written, reseeds = propagate_camera(
-                video_predictor, cam_dir, s['mask'], s['frame'], N,
-                masks_ds, cam,
-                dino=None, image_predictor=None, global_ref=None, data_h5=None,
-                ref_area=float(s['mask'].sum()),
-                drift_threshold=0.0, chunk_size=args.chunk_size)
-            masks_h5.flush()
-            print(f'  cam{cam}: wrote {written} frames')
+        # One global tqdm bar across every camera × every frame so progress
+        # shows up as a single line instead of one per chunk. Total budget =
+        # forward + backward frames per camera; for seed_frame=0 backward is 0.
+        from tqdm import tqdm
+        total_budget = sum(
+            (N - s['frame']) + max(0, s['frame']) for s in seeds.values()
+        )
+        with tqdm(total=total_budget, desc='SAM2 propagate',
+                  unit='fr', dynamic_ncols=True, mininterval=1.0) as pbar:
+            for cam in seeded_cams:
+                s = seeds[cam]
+                cam_dir = tmp_dir / f'cam{cam:02d}'
+                pbar.set_description(f'SAM2 propagate cam{cam}')
+                # drift_threshold=0.0 makes the drift check `area >= 0 * ref`
+                # always true, so propagate_camera never triggers a DINO re-seed.
+                written, reseeds = propagate_camera(
+                    video_predictor, cam_dir, s['mask'], s['frame'], N,
+                    masks_ds, cam,
+                    dino=None, image_predictor=None, global_ref=None, data_h5=None,
+                    ref_area=float(s['mask'].sum()),
+                    drift_threshold=0.0, chunk_size=args.chunk_size,
+                    pbar=pbar)
+                masks_h5.flush()
+                pbar.write(f'  cam{cam}: wrote {written} frames')
 
         del dino, image_predictor, video_predictor
         torch.cuda.empty_cache(); gc.collect()

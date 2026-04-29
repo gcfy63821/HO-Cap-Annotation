@@ -36,6 +36,15 @@
 #     [--start_frame 0] [--end_frame 999]
 #     [--skip_h5] [--skip_masks] [--skip_tracking]
 #     [--rot_thresh 15] [--trans_thresh 0.03] [--track_refine_iter 10]
+#     [--hand_chunk_size 500]      # 0 = single-pass hand; otherwise chunk hand
+#                                  # into K-frame windows (per-chunk h5+meta,
+#                                  # reconstruct + optimize, then merge).
+#     [--hand_keep_chunk_files]    # keep per-chunk *_{S}_{E}.pkl after merge
+#     [--fake_optimize]            # skip Stage 6+7 optimizers, assemble fake
+#                                  # joint_pose_solver outputs from fd merge +
+#                                  # result_hand_optimized.pkl. Mutually
+#                                  # exclusive with --optimize 1. Useful when
+#                                  # the joint optimizer OOMs on long videos.
 #     [--frame0_only]       # DINO-register only on frame 0, no re-seeding,
 #                           # skips Phase 3-7. Fastest on slow/cluster GPUs.
 #
@@ -53,6 +62,11 @@ TOOL_NAME=""
 TOOL_MESH=""
 HAND=""
 OPTIMIZE=""
+# Skip Stage 6 (object_pose_solver) + Stage 7 (joint_pose_solver) optimizations
+# and instead assemble the canonical joint_pose_solver outputs from
+# fd_poses_merged_fixed.npy + result_hand_optimized.pkl. Mutually exclusive
+# with --optimize 1.
+FAKE_OPTIMIZE=0
 START_FRAME=0
 END_FRAME=""
 ROT_THRESH=15
@@ -61,20 +75,34 @@ TRACK_REFINE_ITER=10
 SKIP_H5=0
 SKIP_MASKS=0
 # When the sequence has more than LONG_VIDEO_THRESHOLD frames, automatically
-# skip the hand reconstruction and joint optimization stages so the object
-# annotation can finish in this job. Set to 0 to disable (always run hand).
-# Run hand separately afterward via scripts/batch_task_folder_hand_chunked.sh.
+# skip the joint optimization stage so the rest can finish in this job. Hand
+# is now handled inline via the chunked path below (HAND_CHUNK_SIZE) and is no
+# longer auto-disabled. Set LONG_VIDEO_THRESHOLD=0 to disable optim auto-skip.
 LONG_VIDEO_THRESHOLD=1000
-# Chunk fd_pose_solver into windows of OBJECT_CHUNK_SIZE frames each. The
-# merger reads per-frame txt files from disk (absolute frame ids), so
-# chunks naturally append. Keeps Cutie 2D tracker memory bounded — its
-# inference state otherwise grows linearly with frames processed and can
-# OOM on long videos. Set to 0 to disable (one call covers all frames).
-OBJECT_CHUNK_SIZE=1000
-# Frames of overlap between consecutive object-tracking chunks. Each chunk
-# re-registers from its own first frame, so the pose at a chunk boundary
-# can jump; overlap lets the merger smooth across the seam.
-OBJECT_CHUNK_OVERLAP=20
+# Chunk hand reconstruction + optimization into windows of HAND_CHUNK_SIZE
+# frames each (mirrors scripts/batch_task_folder_hand_chunked.sh inline).
+# Per chunk: rebuild a chunk-only h5 + meta, run cluster_reconstruct +
+# cluster_optimize_hand, rename outputs to *_{S}_{E}.pkl/.npy. After all
+# chunks finish, merge_hand_chunks.py stitches them back into the canonical
+# result.pkl / result_hand_optimized.pkl / poses_m.npy and the full h5+meta
+# are restored so Stage 7 sees the original sequence. Set 0 to disable
+# (single-pass hand, like before).
+HAND_CHUNK_SIZE=500
+# Keep per-chunk result_*_{S}_{E}.pkl files after merging (debug). Default 0.
+HAND_KEEP_CHUNK_FILES=0
+# Chunk fd_pose_solver into windows of OBJECT_CHUNK_SIZE frames each. We
+# rebuild a chunk-only h5 + meta per chunk so the loader's RAM footprint
+# stays bounded (MyClusterLoader currently materialises the entire h5 +
+# masks.h5 into memory; on long 720p×8-cam sequences that's ~100+ GB and
+# will swap to death). The chunk loop re-registers from each chunk's frame 0
+# and writes per-frame txts at absolute frame ids via --frame_id_offset, so
+# Stage 5's merger reads a unified per-object output dir afterwards. Set to
+# 0 to disable (single full-h5 pass; only safe on short sequences).
+OBJECT_CHUNK_SIZE=200
+# Legacy: previously controlled overlap between frame-range-only chunks
+# (same h5 reused). The new chunked-h5 path doesn't overlap (each chunk has
+# its own h5 + frame 0). Kept for CLI back-compat; ignored.
+OBJECT_CHUNK_OVERLAP=0
 SKIP_TRACKING=0
 # Resume mode: per-stage auto-skip when the stage's primary output already
 # exists. Useful for re-running after a partial failure without redoing the
@@ -98,10 +126,16 @@ DINO_SEED_MAX_AREA=""       # large tools -> raise this    (default 15000)
 DINO_SEED_MIN_SIM=""        # partial views -> lower this (default 0.20)
 DINO_SEED_FAST=0            # 1 = first-hit mode (try frame 0, then stride, stop on first OK)
 DINO_FRAME0_ONLY=0          # 1 = frame-0-only mode (skip Phase 3-7, no re-seeding; fast path for cluster)
+DINO_USE_SIMPLE=0           # 1 = use tools/dino_simple_segment.py (minimal 2-stage version)
+                            #     instead of the full tools/dino_tool_segment.py.
+                            #     Behaviour ≈ frame0_only, but in a clean ~200-line script.
 DINO_SEED_FRAMES=""         # space-separated frame indices for frame0_only's per-cam best-of search,
                             #   e.g. "0 60 200 500". Empty = just frame 0.
 DINO_SEED_MIN_MESH_SIM=""   # hard mesh_sim floor for frame0_only seeds (default = seed_min_sim).
                             #   Tighten (e.g. 0.40) to reject wrong-object seeds outright.
+DINO_SAM2_CHUNK_SIZE=""     # SAM2 video propagation chunk size (default 100). Larger = fewer
+                            #   propagate_in_video calls (faster) but more CPU RAM per chunk.
+                            #   Try 200-300 if your node has plenty of RAM.
 
 HOCAP_ROOT="${HOCAP_ROOT:-/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation}"
 HAND_ROOT="${HAND_ROOT:-/home/ruoqu/crq_ws/robotool/HandReconstruction}"
@@ -162,10 +196,15 @@ while [[ "$#" -gt 0 ]]; do
         --seed_fast)           DINO_SEED_FAST=1; shift;;
         --seed_frames)         DINO_SEED_FRAMES="$2"; shift 2;;
         --seed_min_mesh_sim)   DINO_SEED_MIN_MESH_SIM="$2"; shift 2;;
+        --sam2_chunk_size)     DINO_SAM2_CHUNK_SIZE="$2"; shift 2;;
         --frame0_only)         DINO_FRAME0_ONLY=1; shift;;
+        --simple_dino)         DINO_USE_SIMPLE=1; shift;;
         --long_video_threshold) LONG_VIDEO_THRESHOLD="$2"; shift 2;;
         --object_chunk_size)    OBJECT_CHUNK_SIZE="$2"; shift 2;;
         --object_chunk_overlap) OBJECT_CHUNK_OVERLAP="$2"; shift 2;;
+        --hand_chunk_size)      HAND_CHUNK_SIZE="$2"; shift 2;;
+        --hand_keep_chunk_files) HAND_KEEP_CHUNK_FILES=1; shift;;
+        --fake_optimize)        FAKE_OPTIMIZE=1; shift;;
         -h|--help)             sed -n '2,45p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
     esac
@@ -253,6 +292,27 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "Error: ffmpeg not on PATH"; exit 1
 fi
 
+# ---------- Auto-recover from interrupted chunked Stage 4/6 ----------
+# A backup file means a prior run died mid-chunk and didn't restore the full
+# h5/meta. The on-disk h5/meta are then chunk-only (e.g. 400 frames out of
+# 1864), which silently corrupts downstream stages: lazy merger sees
+# num_frames=400, reads 400 ob_in_world txts, mostly missing, writes an
+# all-(-1) fd_poses_merged_fixed.npy, and the viewer shows nothing.
+# Restoring before the run pre-empts that whole class of bugs.
+for _bk_kind in obj hand; do
+    _bk_h5="${H5_REAL_PATH}.full_backup_${_bk_kind}"
+    _bk_meta="${META_YAML_PATH:-$SEQUENCE_FOLDER/meta.yaml}.full_backup_${_bk_kind}"
+    if [[ -f "$_bk_h5" ]]; then
+        echo "[recover] found ${_bk_kind} h5 backup ($_bk_h5); restoring (prior run was interrupted)"
+        mv -f "$_bk_h5" "$H5_REAL_PATH"
+    fi
+    if [[ -f "$_bk_meta" ]]; then
+        echo "[recover] found ${_bk_kind} meta backup; restoring"
+        mv -f "$_bk_meta" "${SEQUENCE_FOLDER}/meta.yaml"
+    fi
+done
+# META_YAML_PATH is set later (Stage 3 block); use SEQUENCE_FOLDER/meta.yaml here directly.
+
 # ---------- Stage 1: videos -> h5 ----------
 if { [[ "$SKIP_H5" == "1" ]] || [[ "$RESUME" == "1" ]]; } && [[ -f "$H5_PATH" ]]; then
     echo "[1/7] [skip] h5 exists: $H5_PATH"
@@ -269,23 +329,18 @@ else
     fi
 fi
 
-# ---------- Long-video gate: skip hand+optim when N > LONG_VIDEO_THRESHOLD ----------
-# Hand reconstruction (cluster_reconstruct + cluster_optimize_hand) is the most
-# expensive stage and tends to OOM/timeout on long videos. For sequences over
-# the threshold, drop hand+optim from THIS job; the user runs hand separately
-# via scripts/batch_task_folder_hand_chunked.sh, which handles chunking.
+# ---------- Long-video gate: skip joint optim when N > LONG_VIDEO_THRESHOLD ----------
+# Stage 7 (joint optim) is global over the sequence and tends to OOM/timeout
+# on long videos. Hand reconstruction is no longer auto-disabled — Stage 6
+# below chunks it inline whenever HAND_CHUNK_SIZE > 0 and N_FRAMES exceeds it.
 N_FRAMES=$(python3 -c "import h5py; print(h5py.File('$H5_PATH','r')['imgs'].shape[0])" 2>/dev/null || echo 0)
 if [[ "$LONG_VIDEO_THRESHOLD" -gt 0 && "$N_FRAMES" -gt "$LONG_VIDEO_THRESHOLD" ]]; then
-    if [[ -n "$HAND" && "$HAND" != "0" ]] || [[ -n "$OPTIMIZE" && "$OPTIMIZE" != "0" ]]; then
+    if [[ -n "$OPTIMIZE" && "$OPTIMIZE" != "0" ]]; then
         echo "=========================================="
         echo "[long-video] $N_FRAMES frames > threshold $LONG_VIDEO_THRESHOLD"
-        echo "[long-video] forcing --hand 0 --optimize 0 for this exp."
-        echo "[long-video] run hand separately afterwards:"
-        echo "[long-video]   bash $HOCAP_ROOT/scripts/batch_task_folder_hand_chunked.sh \\"
-        echo "[long-video]     --task_folder $(dirname "$SEQUENCE_FOLDER") \\"
-        echo "[long-video]     --calibration_yaml $CALIBRATION_YAML --skip_existing"
+        echo "[long-video] forcing --optimize 0 for this exp (joint optim is global)."
+        echo "[long-video] consider --fake_optimize to assemble joint outputs from fd merge + hand pkl."
         echo "=========================================="
-        HAND="0"
         OPTIMIZE="0"
     fi
 fi
@@ -339,15 +394,55 @@ else
     [[ "$DINO_FRAME0_ONLY" == "1" ]]   && DINO_ARGS+=(--frame0_only)
     [[ -n "$DINO_SEED_FRAMES" ]]       && DINO_ARGS+=(--seed_frames $DINO_SEED_FRAMES)
     [[ -n "$DINO_SEED_MIN_MESH_SIM" ]] && DINO_ARGS+=(--seed_min_mesh_sim "$DINO_SEED_MIN_MESH_SIM")
+    [[ -n "$DINO_SAM2_CHUNK_SIZE" ]]   && DINO_ARGS+=(--chunk_size "$DINO_SAM2_CHUNK_SIZE")
     [[ "$WITH_VIZ" != "1" ]]           && DINO_ARGS+=(--no_viz)
-    python "$HOCAP_ROOT/tools/dino_tool_segment.py" "${DINO_ARGS[@]}"
+    if [[ "$DINO_USE_SIMPLE" == "1" ]]; then
+        # The simple tool ignores the full tool's drift / phase / scan_every
+        # flags, so strip those before invoking. Everything in DINO_ARGS that
+        # the simple tool accepts (data_h5, calib_yaml, tool_mesh, output_dir,
+        # sam2_*, pipeline_tool_masks_dir, tool_name, cam_serials, seed_min_area,
+        # seed_max_area, seed_min_sim, seed_frames, seed_min_mesh_sim,
+        # chunk_size, no_viz) is preserved as-is. Drop --no_video / --frame0_only
+        # / --seed_fast / --mesh_scan_every / --dense_scan_every which only
+        # exist on the full tool.
+        SIMPLE_ARGS=()
+        skip_next=0
+        for tok in "${DINO_ARGS[@]}"; do
+            if [[ "$skip_next" == "1" ]]; then skip_next=0; continue; fi
+            case "$tok" in
+                --no_video|--frame0_only|--seed_fast)
+                    continue;;
+                --mesh_scan_every|--dense_scan_every)
+                    skip_next=1; continue;;
+            esac
+            SIMPLE_ARGS+=("$tok")
+        done
+        echo "  [dino] using SIMPLE tool: tools/dino_simple_segment.py"
+        python "$HOCAP_ROOT/tools/dino_simple_segment.py" "${SIMPLE_ARGS[@]}"
+    else
+        python "$HOCAP_ROOT/tools/dino_tool_segment.py" "${DINO_ARGS[@]}"
+    fi
 fi
 
 # ---------- Stage 3: generate_meta ----------
 META_YAML_PATH="${SEQUENCE_FOLDER}/meta.yaml"
 META_MASKS_H5="${TOOL_MASKS_DIR}/masks.h5"
 cd "$HOCAP_ROOT"
-if [[ "$RESUME" == "1" && -f "$META_YAML_PATH" && -f "$META_MASKS_H5" ]]; then
+# Treat the cached meta.yaml as stale if its baked-in calibration_yaml_path
+# no longer points at an existing file (e.g. the meta was generated on the
+# cluster under /viscam/... and we're now running locally). Regenerating is
+# cheap (streams masks); reusing a stale path makes Stage 4 explode with a
+# FileNotFoundError that's hard to read.
+META_STALE=0
+if [[ -f "$META_YAML_PATH" ]]; then
+    META_CAL=$(python3 -c "import yaml; m=yaml.safe_load(open('$META_YAML_PATH')); print(m.get('calibration_yaml_path',''))" 2>/dev/null || true)
+    if [[ -n "$META_CAL" && ! -f "$META_CAL" ]]; then
+        echo "[3/7] cached meta.yaml references missing calibration: $META_CAL"
+        echo "      regenerating with current --calibration_yaml=$CALIBRATION_YAML"
+        META_STALE=1
+    fi
+fi
+if [[ "$RESUME" == "1" && "$META_STALE" == "0" && -f "$META_YAML_PATH" && -f "$META_MASKS_H5" ]]; then
     echo "[3/7] [skip] meta.yaml + masks.h5 exist"
 else
     echo "[3/7] generate_meta ..."
@@ -364,25 +459,22 @@ fi
 NUM_OBJECTS=$(python3 -c "import yaml; m=yaml.safe_load(open('$SEQUENCE_FOLDER/meta.yaml')); print(len(m['object_ids']))")
 echo "  detected $NUM_OBJECTS object(s)"
 
-# ---------- Stage 4: per-object 6-DoF tracking (optionally chunked) ----------
-# fd_pose_solver writes per-frame poses to processed/fd_pose_solver/<obj>/ob_in_world/{frame_id:06d}.txt
-# using ABSOLUTE frame ids, so chunked runs of the same exp accumulate into
-# the same folder and Stage 5's merger picks them up uniformly.
-_run_fd_pose_solver() {
-    local obj_idx="$1" s="$2" e="$3"
-    local extra=""
-    [[ -n "$s" ]] && extra="$extra --start_frame $s"
-    [[ -n "$e" ]] && extra="$extra --end_frame $e"
-    # 2>&1 merges stderr into stdout so Python tracebacks appear in the
-    # slurm .out log alongside the stage progress.
+# ---------- Stage 4: per-object 6-DoF tracking (chunked h5) ----------
+# fd_pose_solver writes per-frame poses to processed/fd_pose_solver/<obj>/ob_in_world/{abs_frame_id:06d}.txt
+# When chunking is enabled we rebuild a chunk-only h5 + meta per chunk so the
+# loader's RAM footprint stays bounded (single full h5 = ~30+ GB at 720p×8 cams),
+# then call fd_pose_solver with --frame_id_offset $s so per-frame txts land at
+# absolute frame ids in the shared output folder. After all chunks finish the
+# original h5 + meta are restored so Stage 5's merger sees the full sequence.
+_run_fd_pose_solver_unchunked() {
+    local obj_idx="$1"
     python -u tools/04-1-4_fd_pose_solver_kalman.py \
         --no_masked_depth \
         --sequence_folder "$SEQUENCE_FOLDER" \
         --activate_2d_tracker --activate_kalman_filter \
         --object_idx "$obj_idx" \
         --track_refine_iter "$TRACK_REFINE_ITER" \
-        --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" \
-        $extra 2>&1
+        --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" 2>&1
 }
 
 FD_POSE_FOLDER="${ANNOTATED_PATH}/processed/fd_pose_solver"
@@ -410,36 +502,96 @@ if [[ "$SKIP_TRACKING" != "1" ]]; then
         # per-chunk resume check; matches fd_pose_solver's output layout).
         OBJECT_IDS=( $(python3 -c "import yaml; m=yaml.safe_load(open('$SEQUENCE_FOLDER/meta.yaml')); print(' '.join(m['object_ids']))") )
 
-        for OBJ_IDX in $(seq 1 $NUM_OBJECTS); do
-            OBJ_ID="${OBJECT_IDS[$((OBJ_IDX-1))]}"
-            if [[ "$OBJECT_CHUNK_SIZE" -gt 0 && "$N_FRAMES" -gt "$OBJECT_CHUNK_SIZE" ]]; then
-                n_chunks=$(( (N_FRAMES + OBJECT_CHUNK_SIZE - 1) / OBJECT_CHUNK_SIZE ))
-                echo "[4/7] fd_pose_solver object $OBJ_IDX / $NUM_OBJECTS  (chunked: $n_chunks x $OBJECT_CHUNK_SIZE frames, overlap=$OBJECT_CHUNK_OVERLAP)"
+        use_chunked=0
+        if [[ "$OBJECT_CHUNK_SIZE" -gt 0 && "$N_FRAMES" -gt "$OBJECT_CHUNK_SIZE" ]]; then
+            use_chunked=1
+        fi
+
+        if [[ $use_chunked -eq 1 ]]; then
+            # Back up the full h5 and meta so per-chunk regeneration doesn't
+            # destroy them. mv for h5 (multi-GB; avoid copy).
+            #
+            # IMPORTANT: regenerate the full meta against the *current* h5 +
+            # local --models_folder BEFORE backing it up. Sequences synced
+            # from a cluster often carry a stale meta.yaml whose
+            # `models_folder` points at a path that doesn't exist locally; if
+            # we just `cp` that as the backup, the post-Stage-4 restore
+            # silently brings back the cluster path and downstream stages
+            # (and the viewer) can't find object meshes. A fresh meta is
+            # cheap (streams masks) and authoritative for the rest of the
+            # pipeline.
+            H5_FULL_BACKUP_OBJ="${H5_REAL_PATH}.full_backup_obj"
+            META_FULL_BACKUP_OBJ="${META_YAML_PATH}.full_backup_obj"
+            python preprocess/generate_meta.py \
+                --h5_path "$H5_PATH" \
+                --calibration_yaml_path "$CALIBRATION_YAML" \
+                --models_folder "$MODELS_FOLDER" \
+                --tool_name "$TOOL_NAME" \
+                --start_frame "$START_FRAME" \
+                --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4
+            mv -f "$H5_REAL_PATH" "$H5_FULL_BACKUP_OBJ"
+            cp -f "$META_YAML_PATH" "$META_FULL_BACKUP_OBJ"
+            mkdir -p "${ANNOTATED_PATH}/masks"
+
+            n_chunks=$(( (N_FRAMES + OBJECT_CHUNK_SIZE - 1) / OBJECT_CHUNK_SIZE ))
+            for OBJ_IDX in $(seq 1 $NUM_OBJECTS); do
+                OBJ_ID="${OBJECT_IDS[$((OBJ_IDX-1))]}"
+                echo "[4/7] fd_pose_solver object $OBJ_IDX / $NUM_OBJECTS  (chunked h5: $n_chunks x $OBJECT_CHUNK_SIZE frames)"
                 chunk_idx=0
                 s=0
                 while [[ $s -lt $N_FRAMES ]]; do
                     chunk_idx=$((chunk_idx + 1))
                     e=$((s + OBJECT_CHUNK_SIZE))
                     [[ $e -gt $N_FRAMES ]] && e=$N_FRAMES
+                    chunk_len=$((e - s))
                     if [[ "$RESUME" == "1" ]] && _chunk_already_done "$OBJ_ID" "$s" "$e"; then
-                        echo "  --- chunk $chunk_idx/$n_chunks: frames [$s, $e)  [skip: all per-frame txts exist]"
-                    else
-                        echo "  --- chunk $chunk_idx/$n_chunks: frames [$s, $e) ---"
-                        _run_fd_pose_solver "$OBJ_IDX" "$s" "$e"
+                        echo "  --- chunk $chunk_idx/$n_chunks: abs frames [$s, $e)  [skip: all per-frame txts exist]"
+                        s=$e
+                        continue
                     fi
-                    next=$((e - OBJECT_CHUNK_OVERLAP))
-                    [[ $next -le $s ]] && next=$e
-                    s=$next
+                    echo "  --- chunk $chunk_idx/$n_chunks: abs frames [$s, $e) (chunk_len=$chunk_len) ---"
+                    # 1) chunk-only h5 (overwrites $H5_REAL_PATH; symlink at $H5_PATH stays valid)
+                    rm -f "$H5_REAL_PATH"
+                    python tools/00_convert_videos_to_h5.py \
+                        --input_dir "$SEQUENCE_FOLDER" \
+                        --output_file "$H5_REAL_PATH" \
+                        --start_frame "$s" --end_frame "$e"
+                    # 2) chunk-only meta.yaml (start_frame=s; generate_meta streams a chunk-sized masks.h5)
+                    python preprocess/generate_meta.py \
+                        --h5_path "$H5_PATH" \
+                        --calibration_yaml_path "$CALIBRATION_YAML" \
+                        --models_folder "$MODELS_FOLDER" \
+                        --tool_name "$TOOL_NAME" \
+                        --start_frame "$s" \
+                        --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4
+                    # 3) fd_pose_solver: in-h5 idx [0, chunk_len), txts named by abs id (offset=$s)
+                    python -u tools/04-1-4_fd_pose_solver_kalman.py \
+                        --no_masked_depth \
+                        --sequence_folder "$SEQUENCE_FOLDER" \
+                        --activate_2d_tracker --activate_kalman_filter \
+                        --object_idx "$OBJ_IDX" \
+                        --start_frame 0 --end_frame "$chunk_len" \
+                        --frame_id_offset "$s" \
+                        --track_refine_iter "$TRACK_REFINE_ITER" \
+                        --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" 2>&1
+                    s=$e
                 done
-            else
+            done
+
+            # Restore full h5 + meta so Stage 5 merger (and any later stages) see the original sequence.
+            mv -f "$H5_FULL_BACKUP_OBJ" "$H5_REAL_PATH"
+            mv -f "$META_FULL_BACKUP_OBJ" "$META_YAML_PATH"
+        else
+            for OBJ_IDX in $(seq 1 $NUM_OBJECTS); do
+                OBJ_ID="${OBJECT_IDS[$((OBJ_IDX-1))]}"
                 if [[ "$RESUME" == "1" ]] && _chunk_already_done "$OBJ_ID" 0 "$N_FRAMES"; then
                     echo "[4/7] fd_pose_solver object $OBJ_IDX / $NUM_OBJECTS  [skip: all per-frame txts exist]"
                 else
                     echo "[4/7] fd_pose_solver object $OBJ_IDX / $NUM_OBJECTS  (single pass, $N_FRAMES frames)"
-                    _run_fd_pose_solver "$OBJ_IDX" "" ""
+                    _run_fd_pose_solver_unchunked "$OBJ_IDX"
                 fi
-            fi
-        done
+            done
+        fi
 
         # ---------- Stage 5: multi-view pose merge ----------
         if [[ "$RESUME" == "1" && -f "$MERGED_FIXED" ]]; then
@@ -453,17 +605,113 @@ else
     echo "[4-5/7] [skip] tracking skipped"
 fi
 
-# ---------- Stage 6: hand reconstruction (optional) ----------
+# ---------- Stage 6: hand reconstruction (optional, chunked for long videos) ----------
 # Idempotent: skip if the final optimized hand result already exists.
 # If only the intermediate result.pkl exists (reconstruct done but optimize
 # failed/interrupted), re-run just the optimize step.
+# Long videos: chunk into HAND_CHUNK_SIZE-frame windows (mirrors
+# scripts/batch_task_folder_hand_chunked.sh inline). Per chunk: rebuild a
+# chunk-only h5 + meta, run reconstruct + optimize, rename outputs to
+# *_{S}_{E}.pkl/.npy. Then merge_hand_chunks.py stitches them and the full
+# h5+meta are restored so Stage 7 still sees the original sequence.
 HAND_FINAL="${ANNOTATED_PATH}/result_hand_optimized.pkl"
 HAND_INTERMEDIATE="${ANNOTATED_PATH}/result.pkl"
 if [[ -n "$HAND" && "$HAND" != "0" ]]; then
     if [[ -f "$HAND_FINAL" ]]; then
         echo "[6/7] [skip] hand already annotated: $HAND_FINAL"
+    elif [[ "$HAND_CHUNK_SIZE" -gt 0 && "$N_FRAMES" -gt "$HAND_CHUNK_SIZE" ]]; then
+        n_hand_chunks=$(( (N_FRAMES + HAND_CHUNK_SIZE - 1) / HAND_CHUNK_SIZE ))
+        echo "[6/7] hand reconstruction (chunked: $n_hand_chunks x $HAND_CHUNK_SIZE frames)"
+
+        # Back up the full h5 and meta so per-chunk regeneration doesn't
+        # destroy them. Use mv for h5 (avoids copying multi-GB files); meta
+        # is small so cp is fine.
+        H5_FULL_BACKUP="${H5_REAL_PATH}.full_backup"
+        META_FULL_BACKUP="${META_YAML_PATH}.full_backup"
+        mv -f "$H5_REAL_PATH" "$H5_FULL_BACKUP"
+        cp -f "$META_YAML_PATH" "$META_FULL_BACKUP"
+        # generate_meta still writes masks/masks.h5 — pre-create dir to avoid failures.
+        mkdir -p "${ANNOTATED_PATH}/masks"
+
+        chunk_idx=0
+        s=0
+        any_chunk_ran=0
+        while [[ $s -lt $N_FRAMES ]]; do
+            chunk_idx=$((chunk_idx + 1))
+            e=$((s + HAND_CHUNK_SIZE - 1))
+            [[ $e -ge $N_FRAMES ]] && e=$((N_FRAMES - 1))
+            chunk_tag="${s}_${e}"
+            chunk_final="${ANNOTATED_PATH}/result_hand_optimized_${chunk_tag}.pkl"
+            chunk_recon="${ANNOTATED_PATH}/result_${chunk_tag}.pkl"
+            chunk_poses="${ANNOTATED_PATH}/poses_m_${chunk_tag}.npy"
+            echo "  --- hand chunk $chunk_idx/$n_hand_chunks: frames [$s, $e] ---"
+            if [[ "$RESUME" == "1" && -f "$chunk_final" ]]; then
+                echo "    [skip] $chunk_final exists"
+                s=$((e + 1)); continue
+            fi
+            # Per-chunk h5 (overwrites $H5_REAL_PATH; symlink at $H5_PATH stays valid)
+            conda activate hocap-annotation
+            cd "$HOCAP_ROOT"
+            rm -f "$H5_REAL_PATH"
+            python tools/00_convert_videos_to_h5.py \
+                --input_dir "$SEQUENCE_FOLDER" \
+                --output_file "$H5_REAL_PATH" \
+                --start_frame "$s" --end_frame "$e"
+            # Per-chunk meta with start_frame=s for absolute mask alignment
+            python preprocess/generate_meta.py \
+                --h5_path "$H5_PATH" \
+                --calibration_yaml_path "$CALIBRATION_YAML" \
+                --models_folder "$MODELS_FOLDER" \
+                --tool_name "$TOOL_NAME" \
+                --start_frame "$s" \
+                --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4
+            # reconstruct + optimize (hand env)
+            cd "$HAND_ROOT"
+            conda activate reconstruct-hand
+            rm -f "${ANNOTATED_PATH}/result.pkl" \
+                  "${ANNOTATED_PATH}/result_hand_optimized.pkl" \
+                  "${ANNOTATED_PATH}/poses_m.npy"
+            python cluster_reconstruct.py --sequence_folder "$SEQUENCE_FOLDER" || \
+                echo "    [WARN] reconstruct failed for chunk $chunk_tag"
+            opt_ok=0
+            if [[ -f "${ANNOTATED_PATH}/result.pkl" ]]; then
+                if python cluster_optimize_hand.py --file_name "${ANNOTATED_PATH}/result.pkl"; then
+                    opt_ok=1
+                else
+                    echo "    [WARN] optimize failed for chunk $chunk_tag"
+                fi
+            fi
+            mv -f "${ANNOTATED_PATH}/result.pkl" "$chunk_recon" 2>/dev/null || true
+            if [[ $opt_ok -eq 1 ]]; then
+                mv -f "${ANNOTATED_PATH}/result_hand_optimized.pkl" "$chunk_final" 2>/dev/null || true
+                mv -f "${ANNOTATED_PATH}/poses_m.npy" "$chunk_poses" 2>/dev/null || true
+            fi
+            cd "$HOCAP_ROOT"
+            conda activate hocap-annotation
+            any_chunk_ran=1
+            s=$((e + 1))
+        done
+
+        # Merge per-chunk results into the canonical filenames
+        if ls "${ANNOTATED_PATH}"/result_hand_optimized_[0-9]*_[0-9]*.pkl >/dev/null 2>&1; then
+            echo "  [merge] merging hand chunks ..."
+            python "$HOCAP_ROOT/scripts/merge_hand_chunks.py" --annotated_path "$ANNOTATED_PATH" \
+                || echo "  [WARN] merge_hand_chunks failed"
+            if [[ "$HAND_KEEP_CHUNK_FILES" != "1" ]]; then
+                rm -f "${ANNOTATED_PATH}"/result_hand_optimized_[0-9]*_[0-9]*.pkl \
+                      "${ANNOTATED_PATH}"/result_[0-9]*_[0-9]*.pkl \
+                      "${ANNOTATED_PATH}"/poses_m_[0-9]*_[0-9]*.npy
+            fi
+        else
+            echo "  [WARN] no hand chunk outputs produced — skipping merge"
+        fi
+
+        # Restore full h5 + meta so Stage 7 (and re-runs with --resume) see
+        # the original sequence.
+        mv -f "$H5_FULL_BACKUP" "$H5_REAL_PATH"
+        mv -f "$META_FULL_BACKUP" "$META_YAML_PATH"
     else
-        echo "[6/7] hand reconstruction ..."
+        echo "[6/7] hand reconstruction (single pass, $N_FRAMES frames) ..."
         cd "$HAND_ROOT"
         conda activate reconstruct-hand
         if [[ -f "$HAND_INTERMEDIATE" ]]; then
@@ -480,10 +728,17 @@ if [[ -n "$HAND" && "$HAND" != "0" ]]; then
 fi
 
 # ---------- Stage 7: object + joint optimization (optional) ----------
+if [[ -n "$OPTIMIZE" && "$OPTIMIZE" != "0" && "$FAKE_OPTIMIZE" == "1" ]]; then
+    echo "[7/7] [warn] both --optimize and --fake_optimize given; running real optimizers"
+    FAKE_OPTIMIZE=0
+fi
 if [[ -n "$OPTIMIZE" && "$OPTIMIZE" != "0" ]]; then
     echo "[7/7] object + joint optimization (first object only) ..."
     python tools/06-2_object_pose_solver_cluster.py --sequence_folder "$SEQUENCE_FOLDER" --debug
     python tools/07-2_joint_pose_solver_cluster.py  --sequence_folder "$SEQUENCE_FOLDER" --debug
+elif [[ "$FAKE_OPTIMIZE" == "1" ]]; then
+    echo "[7/7] fake joint result (skip Stage 6+7 optimizers) ..."
+    python tools/build_fake_joint_result.py --sequence_folder "$SEQUENCE_FOLDER" --overwrite
 fi
 
 echo ""

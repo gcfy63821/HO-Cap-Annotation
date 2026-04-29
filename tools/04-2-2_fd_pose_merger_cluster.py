@@ -170,7 +170,10 @@ class FoundationPoseMerger:
             log_file=self._log_file,
         )
 
-        self._loader = HOCapLoader(sequence_folder)
+        # Lazy: merger only needs metadata (intrinsics/extrinsics, object_ids,
+        # num_frames). Eager loader would materialise ~100 GB of color+depth+mask
+        # into RAM for nothing (rendering is disabled in run()).
+        self._loader = HOCapLoader(sequence_folder, lazy=True)
         self._num_frames = self._loader.num_frames
         self._rs_serials = self._loader.rs_serials
         self._num_cameras = len(self._rs_serials)
@@ -196,7 +199,19 @@ class FoundationPoseMerger:
         return color_images
 
     def _complete_fd_poses(self, poses):
+        # poses[:, -1] is the z-translation. Invalid (-1 placeholder) rows have
+        # all -1, so this filter is a clean valid-vs-invalid split.
         valid_indices = np.where(poses[:, -1] > 0)[0]
+        if len(valid_indices) < 2:
+            # Not enough valid frames to slerp/cubic-spline. Return the raw
+            # placeholder array; downstream pose_jitter_smooth will still run
+            # but produce -1s, and the user can see in the log that this
+            # object was effectively un-tracked.
+            self._logger.warning(
+                f"_complete_fd_poses: only {len(valid_indices)} valid frame(s); "
+                f"cannot interpolate, returning raw poses[:, :7] unchanged."
+            )
+            return poses[:, :7].astype(np.float32)
         rots = complete_rotations_by_slerp(poses[:, :4], valid_indices)
         trans = complete_positions_by_cubic_spline(poses[:, 4:7], valid_indices)
         return np.concatenate([rots, trans], axis=1).astype(np.float32)
@@ -244,14 +259,25 @@ class FoundationPoseMerger:
         interp_file = self._fd_pose_folder / f"fd_poses_merged_interp.npy"
         fixed_file = self._fd_pose_folder / f"fd_poses_merged_fixed.npy"
 
-        # Generate raw poses
+        # Generate raw poses. Missing per-frame txts are tolerated and turned
+        # into -1 placeholders — _complete_fd_poses below uses
+        # `np.where(poses[:, -1] > 0)` to pick valid frames and interpolates
+        # over the rest. Crashing here on a single missing chunk frame
+        # (FileNotFoundError) loses an otherwise-recoverable run.
+        def _read_or_placeholder(path):
+            try:
+                return read_pose_from_txt(path)
+            except FileNotFoundError:
+                return np.full(7, -1.0, dtype=np.float32)
+
         self._logger.info("Generating raw poses...")
         fd_poses_raw = [[None] * self._num_frames for _ in range(self._num_objects)]
+        missing_per_obj = [0] * self._num_objects
         tqbar = tqdm(total=self._num_frames * self._num_objects, ncols=100)
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = {
                 executor.submit(
-                    read_pose_from_txt,
+                    _read_or_placeholder,
                     self._fd_pose_folder
                     / obj_id
                     / "ob_in_world"
@@ -262,10 +288,20 @@ class FoundationPoseMerger:
             }
             for future in concurrent.futures.as_completed(futures):
                 obj_idx, frame_id = futures[future]
-                fd_poses_raw[obj_idx][frame_id] = future.result()
+                pose = future.result()
+                fd_poses_raw[obj_idx][frame_id] = pose
+                if np.all(pose == -1):
+                    missing_per_obj[obj_idx] += 1
                 tqbar.update()
             futures.clear()
         tqbar.close()
+        for obj_idx, obj_id in enumerate(self._object_ids):
+            n_miss = missing_per_obj[obj_idx]
+            if n_miss > 0:
+                self._logger.warning(
+                    f"{obj_id}: {n_miss}/{self._num_frames} frames missing or invalid; "
+                    f"will be interpolated/extrapolated by _complete_fd_poses."
+                )
 
         fd_poses_raw = np.stack(fd_poses_raw, axis=0).astype(np.float32)
         self._logger.info(f"fd_poses_raw: {fd_poses_raw.shape}")

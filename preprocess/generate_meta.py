@@ -366,9 +366,9 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
             print(f"[WARNING] Discovered {len(discovered_serials)} camera folder(s) but h5 has {num_cams}. Fallback to calibration serials: {cam_serials}")
         else:
             print(f"[WARNING] No camera folders discovered under masks. Using calibration serials: {cam_serials}")
-    # Assume width/height from imgs
-    width = imgs.shape[3]
-    height = imgs.shape[2]
+    # Width/height already pulled from imgs_shape above (img_W / img_H).
+    width = img_W
+    height = img_H
 
     # Output folder
     output_folder = Path(output_root)
