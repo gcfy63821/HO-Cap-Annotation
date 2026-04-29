@@ -292,7 +292,56 @@ def load_object_names_from_yaml(mask_root_dir):
     return None
 
 
-def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_root, subject_id="subject_5", tool_name="blue_scooper", models_folder="models", object_mask_dir=None, start_frame=0, thresholds=None):
+def slice_masks_h5(source_path, dest_path, start_frame, num_frames, num_cams, expected_H, expected_W, dataset_name="masks"):
+    """Slice [start_frame, start_frame+num_frames) out of an existing full
+    masks.h5 (or whatever is at `source_path`) and write it to `dest_path`.
+
+    Bypasses the per-frame npz-streaming path of stream_masks_folder_to_h5 —
+    use this when the npz files have been deleted (or never existed) but a
+    full masks.h5 covering the absolute frame range is on hand.
+
+    The source dataset's last 3 dims must match (num_cams, H, W); the leading
+    axis is sliced. If source != dest, a fresh chunked+compressed h5 is
+    written. If source == dest and start_frame == 0 + num_frames == full
+    length, this is a no-op (we leave the file alone).
+    """
+    source_path = Path(source_path)
+    dest_path = Path(dest_path)
+    if not source_path.exists():
+        raise FileNotFoundError(f"masks_h5_source does not exist: {source_path}")
+    with h5py.File(source_path, "r") as fin:
+        ds_in = fin[dataset_name]
+        src_N, src_C = ds_in.shape[0], ds_in.shape[1]
+        src_H, src_W = ds_in.shape[2], ds_in.shape[3]
+        end = start_frame + num_frames
+        if end > src_N:
+            raise ValueError(
+                f"masks_h5_source has {src_N} frames; cannot slice [{start_frame}, {end})"
+            )
+        if src_C != num_cams:
+            print(f"[WARN] masks_h5_source has {src_C} cams but h5 has {num_cams}; "
+                  f"taking the first {num_cams}")
+        if (src_H, src_W) != (expected_H, expected_W):
+            print(f"[WARN] masks_h5_source shape ({src_H}, {src_W}) != expected "
+                  f"({expected_H}, {expected_W}); will keep source shape")
+        # No-op short-circuit when source IS the destination and slice covers everything.
+        if source_path.resolve() == dest_path.resolve() and start_frame == 0 and num_frames == src_N:
+            print(f"[INFO] masks_h5_source == dest and slice == full; leaving {dest_path} untouched")
+            return
+        # Read the slice (chunked dataset reads cheaply per-frame).
+        sliced = ds_in[start_frame:end, :num_cams]
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(dest_path, "w") as fout:
+        fout.create_dataset(
+            dataset_name,
+            data=sliced,
+            chunks=(1, 1, sliced.shape[2], sliced.shape[3]),
+            compression="gzip",
+        )
+    print(f"[INFO] Sliced masks {start_frame}..{end} from {source_path} -> {dest_path}  shape={sliced.shape}")
+
+
+def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_root, subject_id="subject_5", tool_name="blue_scooper", models_folder="models", object_mask_dir=None, start_frame=0, thresholds=None, masks_h5_source=None):
     """
     Generate meta.yaml for a HO-Cap dataset sequence. Also saves masks as h5 files in their respective directories.
     Auto-detects number of objects from mask labels and reads objects.yaml for tool names.
@@ -305,6 +354,10 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
         tool_name (str): Name of the tool/object (used as fallback if objects.yaml not found).
         models_folder (str): Path to the models folder.
         object_mask_dir (str or None): Path to object_masks folder (optional).
+        masks_h5_source (str or None): If given, slice that pre-existing masks.h5
+            instead of streaming from per-frame npz under mask_root_dir. Skips
+            the npz read entirely (lets the pipeline run when the only mask
+            artifact on disk is a full masks.h5).
     """
     # Read H5 metadata (shape only — never load imgs into RAM, that's ~40+ GB
     # for long videos at 720p×8 cams).
@@ -313,12 +366,24 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
     num_frames, num_cams = imgs_shape[0], imgs_shape[1]
     img_H, img_W = imgs_shape[2], imgs_shape[3]
 
-    # Stream per-frame masks straight into masks.h5 instead of building a
-    # giant in-RAM (N, n_cams, H, W) array (~14 GB for 1923 frames @720p×8).
     masks_h5_path = Path(mask_root_dir) / "masks.h5"
-    stream_masks_folder_to_h5(
-        mask_root_dir, masks_h5_path, num_frames, num_cams,
-        expected_H=img_H, expected_W=img_W, start_frame=start_frame)
+    if masks_h5_source:
+        # Slice from the supplied full masks.h5 — no npz reads.
+        slice_masks_h5(
+            source_path=masks_h5_source,
+            dest_path=masks_h5_path,
+            start_frame=start_frame,
+            num_frames=num_frames,
+            num_cams=num_cams,
+            expected_H=img_H,
+            expected_W=img_W,
+        )
+    else:
+        # Stream per-frame masks straight into masks.h5 instead of building a
+        # giant in-RAM (N, n_cams, H, W) array (~14 GB for 1923 frames @720p×8).
+        stream_masks_folder_to_h5(
+            mask_root_dir, masks_h5_path, num_frames, num_cams,
+            expected_H=img_H, expected_W=img_W, start_frame=start_frame)
 
     # Save object masks if provided
     if object_mask_dir is not None:
@@ -429,6 +494,12 @@ if __name__ == "__main__":
     parser.add_argument('--y_max', type=float, default=0.4, help='Threshold y max (default: 0.4)')
     parser.add_argument('--z_min', type=float, default=-0.3, help='Threshold z min (default: -0.3)')
     parser.add_argument('--z_max', type=float, default=0.4, help='Threshold z max (default: 0.4)')
+    parser.add_argument('--masks_h5_source', type=str, default=None,
+        help='If given, slice [start_frame, start_frame+num_frames) out of '
+             'this pre-existing masks.h5 instead of streaming from per-frame '
+             'npz under tool_masks/cam*_rgb/. Lets the pipeline reuse a full '
+             'masks.h5 from a previous DINO run (or external source) without '
+             'requiring the npz checkpoint files.')
     args = parser.parse_args()
 
     # Infer folder_name, task_name, and sequence_name from h5_path
@@ -467,4 +538,5 @@ if __name__ == "__main__":
         object_mask_dir=str(object_mask_dir) if object_mask_dir is not None else None,
         start_frame=args.start_frame,
         thresholds=[args.x_min, args.x_max, args.y_min, args.y_max, args.z_min, args.z_max],
+        masks_h5_source=args.masks_h5_source,
     )

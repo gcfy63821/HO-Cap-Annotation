@@ -294,14 +294,15 @@ fi
 
 # ---------- Auto-recover from interrupted chunked Stage 4/6 ----------
 # A backup file means a prior run died mid-chunk and didn't restore the full
-# h5/meta. The on-disk h5/meta are then chunk-only (e.g. 400 frames out of
-# 1864), which silently corrupts downstream stages: lazy merger sees
-# num_frames=400, reads 400 ob_in_world txts, mostly missing, writes an
-# all-(-1) fd_poses_merged_fixed.npy, and the viewer shows nothing.
-# Restoring before the run pre-empts that whole class of bugs.
+# h5/meta/masks.h5. The on-disk artifacts are then chunk-only (e.g. 400
+# frames out of 1864), which silently corrupts downstream stages: lazy
+# merger sees num_frames=400, reads 400 ob_in_world txts, mostly missing,
+# writes an all-(-1) fd_poses_merged_fixed.npy, and the viewer shows
+# nothing. Restoring before the run pre-empts that whole class of bugs.
 for _bk_kind in obj hand; do
     _bk_h5="${H5_REAL_PATH}.full_backup_${_bk_kind}"
-    _bk_meta="${META_YAML_PATH:-$SEQUENCE_FOLDER/meta.yaml}.full_backup_${_bk_kind}"
+    _bk_meta="${SEQUENCE_FOLDER}/meta.yaml.full_backup_${_bk_kind}"
+    _bk_masks="${TOOL_MASKS_DIR}/masks.h5.full_backup_${_bk_kind}"
     if [[ -f "$_bk_h5" ]]; then
         echo "[recover] found ${_bk_kind} h5 backup ($_bk_h5); restoring (prior run was interrupted)"
         mv -f "$_bk_h5" "$H5_REAL_PATH"
@@ -310,8 +311,11 @@ for _bk_kind in obj hand; do
         echo "[recover] found ${_bk_kind} meta backup; restoring"
         mv -f "$_bk_meta" "${SEQUENCE_FOLDER}/meta.yaml"
     fi
+    if [[ -f "$_bk_masks" ]]; then
+        echo "[recover] found ${_bk_kind} masks.h5 backup; restoring"
+        mv -f "$_bk_masks" "${TOOL_MASKS_DIR}/masks.h5"
+    fi
 done
-# META_YAML_PATH is set later (Stage 3 block); use SEQUENCE_FOLDER/meta.yaml here directly.
 
 # ---------- Stage 1: videos -> h5 ----------
 if { [[ "$SKIP_H5" == "1" ]] || [[ "$RESUME" == "1" ]]; } && [[ -f "$H5_PATH" ]]; then
@@ -364,7 +368,12 @@ echo "  camera serials: $CAM_SERIALS"
 
 if { [[ "$SKIP_MASKS" == "1" ]] || [[ "$RESUME" == "1" ]]; } && \
    ( ls "$TOOL_MASKS_DIR"/cam*_rgb/0000.npz >/dev/null 2>&1 \
-     || ls "$TOOL_MASKS_DIR"/cam*_rgb/0000.npy >/dev/null 2>&1 ); then
+     || ls "$TOOL_MASKS_DIR"/cam*_rgb/0000.npy >/dev/null 2>&1 \
+     || [[ -f "$TOOL_MASKS_DIR/masks.h5" ]] ); then
+    # Skip DINO if either per-frame npz checkpoints exist OR a full masks.h5
+    # is already on disk (e.g. synced from another machine; npz deleted to
+    # save space). Stage 4's chunked path can slice the full masks.h5 via
+    # generate_meta.py --masks_h5_source instead of re-streaming from npz.
     echo "[2/7] [skip] tool_masks already populated"
 else
     echo "[2/7] running DINOv2 + SAM2 auto segmentation ..."
@@ -508,8 +517,9 @@ if [[ "$SKIP_TRACKING" != "1" ]]; then
         fi
 
         if [[ $use_chunked -eq 1 ]]; then
-            # Back up the full h5 and meta so per-chunk regeneration doesn't
-            # destroy them. mv for h5 (multi-GB; avoid copy).
+            # Back up the full h5, meta, and (if it exists) the full masks.h5
+            # so per-chunk regeneration doesn't destroy them. mv for h5
+            # (multi-GB; avoid copy); cp for the small files.
             #
             # IMPORTANT: regenerate the full meta against the *current* h5 +
             # local --models_folder BEFORE backing it up. Sequences synced
@@ -518,17 +528,44 @@ if [[ "$SKIP_TRACKING" != "1" ]]; then
             # we just `cp` that as the backup, the post-Stage-4 restore
             # silently brings back the cluster path and downstream stages
             # (and the viewer) can't find object meshes. A fresh meta is
-            # cheap (streams masks) and authoritative for the rest of the
-            # pipeline.
+            # authoritative for the rest of the pipeline.
             H5_FULL_BACKUP_OBJ="${H5_REAL_PATH}.full_backup_obj"
             META_FULL_BACKUP_OBJ="${META_YAML_PATH}.full_backup_obj"
+            MASKS_FULL_BACKUP_OBJ="${TOOL_MASKS_DIR}/masks.h5.full_backup_obj"
+
+            # Decide whether to source the full masks.h5 from disk for this
+            # whole Stage 4 run. If it's already at $TOOL_MASKS_DIR/masks.h5
+            # we copy it aside as a stable source (per-chunk generate_meta
+            # would otherwise overwrite it with the chunk slice). When npz
+            # are also missing, this is the ONLY way generate_meta can build
+            # a chunk masks.h5 — npz streaming would silently produce zeros.
+            FULL_MASKS_SOURCE_ARG=()
+            if [[ -f "${TOOL_MASKS_DIR}/masks.h5" ]]; then
+                cp -f "${TOOL_MASKS_DIR}/masks.h5" "$MASKS_FULL_BACKUP_OBJ"
+                FULL_MASKS_SOURCE_ARG=(--masks_h5_source "$MASKS_FULL_BACKUP_OBJ")
+                echo "[4/7] using existing full masks.h5 as slice source: $MASKS_FULL_BACKUP_OBJ"
+            else
+                echo "[4/7] no full masks.h5 found; chunks will stream from per-frame npz"
+            fi
+
+            # Pre-Stage-4 full-meta refresh (with the local models_folder).
             python preprocess/generate_meta.py \
                 --h5_path "$H5_PATH" \
                 --calibration_yaml_path "$CALIBRATION_YAML" \
                 --models_folder "$MODELS_FOLDER" \
                 --tool_name "$TOOL_NAME" \
                 --start_frame "$START_FRAME" \
-                --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4
+                --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4 \
+                "${FULL_MASKS_SOURCE_ARG[@]}"
+
+            # If we didn't have a backup yet (npz-only case), the
+            # generate_meta call above just *built* masks.h5 from npz; back
+            # it up now so per-chunk slicing has a stable source.
+            if [[ ! -f "$MASKS_FULL_BACKUP_OBJ" && -f "${TOOL_MASKS_DIR}/masks.h5" ]]; then
+                cp -f "${TOOL_MASKS_DIR}/masks.h5" "$MASKS_FULL_BACKUP_OBJ"
+                FULL_MASKS_SOURCE_ARG=(--masks_h5_source "$MASKS_FULL_BACKUP_OBJ")
+            fi
+
             mv -f "$H5_REAL_PATH" "$H5_FULL_BACKUP_OBJ"
             cp -f "$META_YAML_PATH" "$META_FULL_BACKUP_OBJ"
             mkdir -p "${ANNOTATED_PATH}/masks"
@@ -556,14 +593,16 @@ if [[ "$SKIP_TRACKING" != "1" ]]; then
                         --input_dir "$SEQUENCE_FOLDER" \
                         --output_file "$H5_REAL_PATH" \
                         --start_frame "$s" --end_frame "$e"
-                    # 2) chunk-only meta.yaml (start_frame=s; generate_meta streams a chunk-sized masks.h5)
+                    # 2) chunk-only meta.yaml + chunk masks.h5 (slice from
+                    #    full backup if available, else stream from npz).
                     python preprocess/generate_meta.py \
                         --h5_path "$H5_PATH" \
                         --calibration_yaml_path "$CALIBRATION_YAML" \
                         --models_folder "$MODELS_FOLDER" \
                         --tool_name "$TOOL_NAME" \
                         --start_frame "$s" \
-                        --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4
+                        --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4 \
+                        "${FULL_MASKS_SOURCE_ARG[@]}"
                     # 3) fd_pose_solver: in-h5 idx [0, chunk_len), txts named by abs id (offset=$s)
                     python -u tools/04-1-4_fd_pose_solver_kalman.py \
                         --no_masked_depth \
@@ -578,9 +617,13 @@ if [[ "$SKIP_TRACKING" != "1" ]]; then
                 done
             done
 
-            # Restore full h5 + meta so Stage 5 merger (and any later stages) see the original sequence.
+            # Restore full h5 + meta + masks.h5 so Stage 5 merger (and any
+            # later stages) see the original sequence.
             mv -f "$H5_FULL_BACKUP_OBJ" "$H5_REAL_PATH"
             mv -f "$META_FULL_BACKUP_OBJ" "$META_YAML_PATH"
+            if [[ -f "$MASKS_FULL_BACKUP_OBJ" ]]; then
+                mv -f "$MASKS_FULL_BACKUP_OBJ" "${TOOL_MASKS_DIR}/masks.h5"
+            fi
         else
             for OBJ_IDX in $(seq 1 $NUM_OBJECTS); do
                 OBJ_ID="${OBJECT_IDS[$((OBJ_IDX-1))]}"
