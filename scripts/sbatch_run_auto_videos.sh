@@ -44,10 +44,31 @@
 #   The yaml is produced by:
 #     python scripts/frame0_visibility_inspector.py --videos_root <videos_root>
 #
-# Tool name resolution per exp (priority high → low):
+# Tool / mesh resolution per exp (priority high → low):
 #   1. --force_tool NAME                         (overrides everything)
-#   2. tool_keyword_mapping.yaml keyword hit     (manual 词表; see below)
-#   3. heuristic auto-match (scripts/match_tool_name.py token overlap)
+#   2. --mesh_map_json PATH                      (JSON with {key: mesh_path};
+#                                                 longest key that's a
+#                                                 case-insensitive substring
+#                                                 of "<task>/<exp>" wins)
+#   3. tool_keyword_mapping.yaml keyword hit     (manual 词表; see below)
+#   4. heuristic auto-match (scripts/match_tool_name.py token overlap)
+#
+# JSON mesh map (--mesh_map_json):
+#   File format (default path: $MESH_MAP_JSON_DEFAULT, currently
+#                /viscam/u/kehanli/temp_scripts/dino_mesh_map_tool_mesh_full.json):
+#     {
+#       "largeplate_mallet_flatten_crush_largedough":
+#           "/viscam/projects/robotool/data/tool_mesh_full/rubber_mallet/rubber_mallet.obj",
+#       ...
+#     }
+#   Pass `--mesh_map_json` (no value) to use the default path, or
+#   `--mesh_map_json /abs/path.json` to override.
+#   Each key is matched as a case-insensitive substring of "<task>/<exp>".
+#   The mesh path is used directly as --tool_mesh; the tool_name is derived
+#   from the mesh's parent folder basename (so downstream paths stay stable
+#   per tool, e.g. processed/fd_pose_solver/rubber_mallet/...).
+#   Add --mesh_map_only to skip exps with no JSON match (instead of falling
+#   back to mapping_yaml / heuristic).
 #
 # Mapping yaml (optional, recommended for clusters with curated vocab):
 #   Default location: <videos_root>/tool_keyword_mapping.yaml
@@ -96,6 +117,13 @@
 #     [--force_tool NAME]          (override per-exp tool matching)
 #     [--mapping_yaml PATH]        (词表 yaml; auto-detected at <videos_root>/tool_keyword_mapping.yaml)
 #     [--mapping_only]             (only run exps whose name matches a词表 keyword)
+#     [--mesh_map_json [PATH]]     (JSON mapping {key: mesh_path}; key matched
+#                                   as substring of "<task>/<exp>". Bare flag
+#                                   uses $MESH_MAP_JSON_DEFAULT — by default
+#                                   /viscam/u/kehanli/temp_scripts/dino_mesh_map_tool_mesh_full.json;
+#                                   override by exporting MESH_MAP_JSON_DEFAULT
+#                                   or passing an explicit path.)
+#     [--mesh_map_only]            (only run exps that match a JSON key)
 #     [--start_frame 0] [--end_frame N]
 #     [--object_chunk_overlap N]   (overlap between obj chunks; legacy)
 #     [--hand_chunk_size N]        (hand chunked path window)
@@ -155,6 +183,13 @@ FRAME0_MODE="auto"        # auto | visible_only | visible_unsure | all
 FORCE_TOOL=""
 MAPPING_YAML=""           # path to tool_keyword_mapping.yaml; auto = <videos_root>/tool_keyword_mapping.yaml if present
 MAPPING_ONLY=0            # if 1, --require_mapping (skip exps without keyword hit)
+# Default JSON for --mesh_map_json with no path (i.e. just bare flag):
+#   sbatch ... --mesh_map_json
+# uses this. Override either by passing a path, or via the
+# MESH_MAP_JSON_DEFAULT env var.
+MESH_MAP_JSON_DEFAULT="${MESH_MAP_JSON_DEFAULT:-/viscam/u/kehanli/temp_scripts/dino_mesh_map_tool_mesh_full.json}"
+MESH_MAP_JSON=""          # resolved at parse time; "" = no JSON map active
+MESH_MAP_ONLY=0           # if 1, skip exps that don't match any JSON key
 START_FRAME=0
 END_FRAME=""
 ROT_THRESH=15
@@ -185,6 +220,16 @@ while [[ "$#" -gt 0 ]]; do
         --force_tool)         FORCE_TOOL="$2"; shift 2;;
         --mapping_yaml)       MAPPING_YAML="$2"; shift 2;;
         --mapping_only)       MAPPING_ONLY=1; shift;;
+        --mesh_map_json)
+            # Optional value: use $2 if it looks like a path (doesn't start
+            # with --), else fall back to MESH_MAP_JSON_DEFAULT.
+            if [[ -n "${2:-}" && "${2:0:2}" != "--" ]]; then
+                MESH_MAP_JSON="$2"; shift 2
+            else
+                MESH_MAP_JSON="$MESH_MAP_JSON_DEFAULT"; shift
+            fi
+            ;;
+        --mesh_map_only)      MESH_MAP_ONLY=1; shift;;
         --models_folder)      export MODELS_FOLDER="$2"; shift 2;;
         --start_frame)        START_FRAME="$2"; shift 2;;
         --end_frame)          END_FRAME="$2"; shift 2;;
@@ -280,6 +325,16 @@ elif [[ -n "$MAPPING_YAML" ]]; then
     echo "Error: --mapping_yaml file not found: $MAPPING_YAML"; exit 1
 else
     echo "mapping    : <none — auto-match heuristic only>"
+fi
+if [[ -n "$MESH_MAP_JSON" ]]; then
+    if [[ ! -f "$MESH_MAP_JSON" ]]; then
+        echo "Error: --mesh_map_json file not found: $MESH_MAP_JSON"; exit 1
+    fi
+    # Quick sanity: JSON parseable + count keys.
+    n_keys=$(MM="$MESH_MAP_JSON" python3 -c "import json,os; print(len(json.load(open(os.environ['MM']))))" 2>/dev/null) || {
+        echo "Error: --mesh_map_json is not valid JSON: $MESH_MAP_JSON"; exit 1
+    }
+    echo "mesh_map   : $MESH_MAP_JSON  (${n_keys} entries, mesh_map_only=$MESH_MAP_ONLY)"
 fi
 echo "=========================================="
 
@@ -435,45 +490,94 @@ for TASK_DIR in "${TASKS[@]}"; do
             SKIP=$((SKIP+1)); continue
         fi
 
-        # ---- resolve tool name ----
-        # Priority: --force_tool > mapping_yaml keyword hit > auto-match heuristic
-        if [[ -n "$FORCE_TOOL" ]]; then
-            TOOL="$FORCE_TOOL"
-        elif [[ -f "$MATCH_SCRIPT" ]]; then
-            MATCH_ARGS=(
-                --models_folder "$MODELS_FOLDER"
-                --task_name "$TASK_NAME"
-                --exp_name "$EXP_NAME"
+        # ---- resolve tool name + mesh ----
+        # Priority: --force_tool ≻ --mesh_map_json hit ≻ mapping_yaml keyword hit ≻ heuristic
+        TOOL=""
+        MESH=""
+        MAPPED_VIA=""
+
+        # 1) JSON mesh map (if provided): pick the LONGEST key that's a
+        #    case-insensitive substring of "$TASK_NAME/$EXP_NAME". Tool name
+        #    is derived from the mesh's parent dir basename, so downstream
+        #    folders keep a stable identifier (e.g. .../rubber_mallet/...).
+        if [[ -n "$MESH_MAP_JSON" ]]; then
+            MAPPED=$(MESH_MAP_JSON="$MESH_MAP_JSON" \
+                     TASK_NAME="$TASK_NAME" \
+                     EXP_NAME="$EXP_NAME" python3 - <<'PY'
+import json, os, sys
+mp = json.load(open(os.environ["MESH_MAP_JSON"]))
+hay = f"{os.environ['TASK_NAME']}/{os.environ['EXP_NAME']}".lower()
+hits = [(k, v) for k, v in mp.items() if k.lower() in hay]
+if not hits:
+    sys.exit(0)
+# longest key wins (most specific)
+hits.sort(key=lambda kv: -len(kv[0]))
+print(f"{hits[0][0]}\t{hits[0][1]}")
+PY
             )
-            [[ -n "$MAPPING_YAML" && -f "$MAPPING_YAML" ]] && MATCH_ARGS+=(--mapping_yaml "$MAPPING_YAML")
-            [[ "$MAPPING_ONLY" == "1" ]] && MATCH_ARGS+=(--require_mapping)
-            TOOL=$(python "$MATCH_SCRIPT" "${MATCH_ARGS[@]}" 2>/tmp/match_err.$$ || true)
-            MATCH_RC=$?
-            MATCH_ERR="$(cat /tmp/match_err.$$ 2>/dev/null)"; rm -f /tmp/match_err.$$
-            if [[ $MATCH_RC -eq 3 ]]; then
-                # exit code 3 == --require_mapping but no keyword hit
-                echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [skip: no mapping keyword (--mapping_only)]"
+            if [[ -n "$MAPPED" ]]; then
+                KEY="${MAPPED%%$'\t'*}"
+                MESH_PATH="${MAPPED##*$'\t'}"
+                if [[ -f "$MESH_PATH" ]]; then
+                    MESH="$MESH_PATH"
+                    TOOL="$(basename "$(dirname "$MESH_PATH")")"
+                    MAPPED_VIA="json:$KEY"
+                else
+                    echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [WARN] json hit '$KEY' but mesh missing: $MESH_PATH"
+                    if [[ "$MESH_MAP_ONLY" == "1" ]]; then
+                        echo "  [skip: mesh_map_only and mesh missing]"
+                        SKIP=$((SKIP+1)); continue
+                    fi
+                fi
+            elif [[ "$MESH_MAP_ONLY" == "1" ]]; then
+                echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [skip: no mesh_map JSON match (--mesh_map_only)]"
                 SKIP=$((SKIP+1)); continue
             fi
-            if [[ -z "$TOOL" ]]; then
-                echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [FAIL: tool matcher returned empty -- $MATCH_ERR]"
-                FAIL=$((FAIL+1)); FAILED+=("$TASK_NAME/$EXP_NAME:no_match"); continue
-            fi
-        else
-            echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [FAIL: no --force_tool and no $MATCH_SCRIPT]"
-            FAIL=$((FAIL+1)); FAILED+=("$TASK_NAME/$EXP_NAME:no_matcher"); continue
         fi
 
-        # ---- mesh sanity ----
-        MESH=""
-        for cand in textured_mesh.obj cleaned_mesh_10000.obj mesh.obj; do
-            if [[ -f "$MODELS_FOLDER/$TOOL/$cand" ]]; then
-                MESH="$MODELS_FOLDER/$TOOL/$cand"; break
+        # 2) --force_tool / 3) match_tool_name.py heuristic — only if JSON
+        #    didn't already fill TOOL+MESH.
+        if [[ -z "$TOOL" || -z "$MESH" ]]; then
+            if [[ -n "$FORCE_TOOL" ]]; then
+                TOOL="$FORCE_TOOL"
+                MAPPED_VIA="force_tool"
+            elif [[ -f "$MATCH_SCRIPT" ]]; then
+                MATCH_ARGS=(
+                    --models_folder "$MODELS_FOLDER"
+                    --task_name "$TASK_NAME"
+                    --exp_name "$EXP_NAME"
+                )
+                [[ -n "$MAPPING_YAML" && -f "$MAPPING_YAML" ]] && MATCH_ARGS+=(--mapping_yaml "$MAPPING_YAML")
+                [[ "$MAPPING_ONLY" == "1" ]] && MATCH_ARGS+=(--require_mapping)
+                TOOL=$(python "$MATCH_SCRIPT" "${MATCH_ARGS[@]}" 2>/tmp/match_err.$$ || true)
+                MATCH_RC=$?
+                MATCH_ERR="$(cat /tmp/match_err.$$ 2>/dev/null)"; rm -f /tmp/match_err.$$
+                if [[ $MATCH_RC -eq 3 ]]; then
+                    echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [skip: no mapping keyword (--mapping_only)]"
+                    SKIP=$((SKIP+1)); continue
+                fi
+                if [[ -z "$TOOL" ]]; then
+                    echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [FAIL: tool matcher returned empty -- $MATCH_ERR]"
+                    FAIL=$((FAIL+1)); FAILED+=("$TASK_NAME/$EXP_NAME:no_match"); continue
+                fi
+                MAPPED_VIA="heuristic"
+            else
+                echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [FAIL: no --force_tool / --mesh_map_json / $MATCH_SCRIPT]"
+                FAIL=$((FAIL+1)); FAILED+=("$TASK_NAME/$EXP_NAME:no_matcher"); continue
             fi
-        done
-        if [[ -z "$MESH" ]]; then
-            echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [FAIL: no mesh in $MODELS_FOLDER/$TOOL/]"
-            FAIL=$((FAIL+1)); FAILED+=("$TASK_NAME/$EXP_NAME:no_mesh"); continue
+
+            # Mesh fallback: scan $MODELS_FOLDER/$TOOL/ for a known filename.
+            if [[ -z "$MESH" ]]; then
+                for cand in textured_mesh.obj cleaned_mesh_10000.obj mesh.obj; do
+                    if [[ -f "$MODELS_FOLDER/$TOOL/$cand" ]]; then
+                        MESH="$MODELS_FOLDER/$TOOL/$cand"; break
+                    fi
+                done
+            fi
+            if [[ -z "$MESH" ]]; then
+                echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [FAIL: no mesh in $MODELS_FOLDER/$TOOL/]"
+                FAIL=$((FAIL+1)); FAILED+=("$TASK_NAME/$EXP_NAME:no_mesh"); continue
+            fi
         fi
 
         echo ""
@@ -481,6 +585,7 @@ for TASK_DIR in "${TASKS[@]}"; do
         echo "[$TOTAL] $TASK_NAME / $EXP_NAME"
         echo "  tool : $TOOL"
         echo "  mesh : $MESH"
+        echo "  via  : $MAPPED_VIA"
         echo "------------------------------------------"
 
         if [[ "$DRY_RUN" == "1" ]]; then
