@@ -70,12 +70,19 @@
 #     --object_chunk_size $OBJECT_CHUNK_SIZE
 #     [--hand 1] [--fake_optimize] [--resume] ...
 #
-# Resume:
-#   --resume is forwarded to run_auto_annotator.sh, which itself does
-#   per-stage skip when outputs exist (h5, DINO npz, fd_poses_merged_fixed.npy,
-#   result_hand_optimized.pkl, ...). For coarser exp-level skipping pass
-#   --skip_existing — that bypasses an exp entirely if its final marker is on
-#   disk (saves the seconds-per-stage gate scans across many exps).
+# Resume / force:
+#   run_auto_annotator.sh now auto-resumes by default (every stage skips if
+#   its primary output exists on disk: h5, DINO npz/masks.h5, meta.yaml,
+#   fd_poses_merged_fixed.npy, result_hand_optimized.pkl, joint poses_o/m).
+#   Re-running this sbatch is therefore safe and fast.
+#
+#     --force / --no_resume  →  forwarded as run_auto_annotator's --force,
+#                                redo every stage from scratch.
+#     --skip_existing        →  exp-level coarse skip (same as before): if
+#                                the final done marker is present we skip the
+#                                whole exp without invoking run_auto_annotator
+#                                at all (saves python startup × N exps).
+#     --resume               →  no-op now (kept for back-compat).
 #
 # Usage:
 #   sbatch scripts/sbatch_run_auto_videos.sh \
@@ -83,7 +90,7 @@
 #     [--object_chunk_size 600]    (default 600)
 #     [--fake_optimize]            (recommended on long videos)
 #     [--hand 1]                   (0 disables hand)
-#     [--resume]                   (per-stage resume in run_auto_annotator)
+#     [--force | --no_resume]      (redo every stage in run_auto_annotator)
 #     [--skip_existing]            (exp-level skip: pre-check done marker)
 #     [--frame0_mode visible_only|visible_unsure|all]  (auto by default)
 #     [--force_tool NAME]          (override per-exp tool matching)
@@ -140,7 +147,9 @@ VIDEOS_ROOT=""
 CALIBRATION_YAML=""
 HAND=""
 FAKE_OPTIMIZE=0
-RESUME=0
+# RESUME is now ON by default in run_auto_annotator.sh — every stage auto-
+# skips when its output exists. Set FORCE=1 (--force) to redo all stages.
+FORCE=0
 SKIP_EXISTING=0
 FRAME0_MODE="auto"        # auto | visible_only | visible_unsure | all
 FORCE_TOOL=""
@@ -169,7 +178,8 @@ while [[ "$#" -gt 0 ]]; do
         --calibration_yaml)   CALIBRATION_YAML="$2"; shift 2;;
         --hand)               HAND="$2"; shift 2;;
         --fake_optimize)      FAKE_OPTIMIZE=1; shift;;
-        --resume)             RESUME=1; shift;;
+        --resume)             shift;;          # ← no-op now (auto-resume is default)
+        --force|--no_resume)  FORCE=1; shift;;
         --skip_existing)      SKIP_EXISTING=1; shift;;
         --frame0_mode)        FRAME0_MODE="$2"; shift 2;;
         --force_tool)         FORCE_TOOL="$2"; shift 2;;
@@ -502,7 +512,7 @@ for TASK_DIR in "${TASKS[@]}"; do
         [[ -n "$DINO_SEED_MIN_AREA" ]]       && RUN_ARGS+=(--seed_min_area    "$DINO_SEED_MIN_AREA")
         [[ -n "$DINO_SEED_MAX_AREA" ]]       && RUN_ARGS+=(--seed_max_area    "$DINO_SEED_MAX_AREA")
         [[ -n "$DINO_SEED_MIN_SIM" ]]        && RUN_ARGS+=(--seed_min_sim     "$DINO_SEED_MIN_SIM")
-        [[ "$RESUME" == "1" ]]               && RUN_ARGS+=(--resume)
+        [[ "$FORCE" == "1" ]]                && RUN_ARGS+=(--force)
         [[ "$FAKE_OPTIMIZE" == "1" ]]        && RUN_ARGS+=(--fake_optimize)
 
         if bash "$RUN_SCRIPT" "${RUN_ARGS[@]}"; then

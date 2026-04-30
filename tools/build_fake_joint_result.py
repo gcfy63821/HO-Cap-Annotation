@@ -102,8 +102,6 @@ def main():
 
     if not fd_merged.exists():
         raise FileNotFoundError(f"missing fd merge: {fd_merged}")
-    if not hand_pkl.exists():
-        raise FileNotFoundError(f"missing hand pkl: {hand_pkl}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     poses_o_out = out_dir / "poses_o.npy"
@@ -111,7 +109,7 @@ def main():
     pkl_out = out_dir / "result_hand_optimized.pkl"
     meta_out = out_dir / "fake_joint_meta.json"
 
-    if not args.overwrite and poses_o_out.exists() and poses_m_out.exists() and pkl_out.exists():
+    if not args.overwrite and poses_o_out.exists() and poses_m_out.exists():
         print(f"[fake-joint] outputs already exist in {out_dir}; pass --overwrite to rebuild")
         return
 
@@ -125,10 +123,21 @@ def main():
             raise IndexError(f"--object_idx {args.object_idx} out of range for {poses_o.shape[0]} objects")
         poses_o = poses_o[args.object_idx : args.object_idx + 1]
 
-    with open(hand_pkl, "rb") as f:
-        hand_data_full = pickle.load(f)
-    hand_data = hand_data_full.get("hand_pose", {})
-    poses_m = _build_poses_m(hand_data, poses_o.shape[1])
+    if hand_pkl.exists():
+        with open(hand_pkl, "rb") as f:
+            hand_data_full = pickle.load(f)
+        hand_data = hand_data_full.get("hand_pose", {})
+        try:
+            poses_m = _build_poses_m(hand_data, poses_o.shape[1])
+        except ValueError as e:
+            print(f"[fake-joint] WARN: hand pkl exists but is incomplete ({e}); using all-(-1) poses_m")
+            poses_m = np.full((2, poses_o.shape[1], 51), -1.0, dtype=np.float32)
+    else:
+        # No hand reconstruction was run for this exp (e.g. --hand 0).
+        # Emit a placeholder poses_m so downstream rendering / holo align /
+        # viewer still get a well-shaped input — they'll just see no hand.
+        print(f"[fake-joint] no hand pkl at {hand_pkl}; writing all-(-1) poses_m")
+        poses_m = np.full((2, poses_o.shape[1], 51), -1.0, dtype=np.float32)
 
     # Frame-count alignment: if hand was shorter, also truncate poses_o.
     if poses_m.shape[1] != poses_o.shape[1]:
@@ -138,20 +147,27 @@ def main():
 
     np.save(poses_o_out, poses_o)
     np.save(poses_m_out, poses_m)
-    shutil.copy2(hand_pkl, pkl_out)
+    if hand_pkl.exists():
+        shutil.copy2(hand_pkl, pkl_out)
+    else:
+        # Drop a tiny stub so downstream callers that expect this filename
+        # don't FileNotFoundError. Keeps the same dict shape as a real pkl.
+        with open(pkl_out, "wb") as f:
+            pickle.dump({"hand_pose": {}, "is_fake_no_hand": True}, f)
 
     meta = {
         "is_fake": True,
         "note": "joint_pose_solver SKIPPED — outputs assembled from fd merge + optimized hand",
         "sources": {
             "poses_o_from": str(fd_merged),
-            "hand_pkl_from": str(hand_pkl),
+            "hand_pkl_from": str(hand_pkl) if hand_pkl.exists() else None,
         },
         "shapes": {
             "poses_o": list(poses_o.shape),
             "poses_m": list(poses_m.shape),
         },
         "object_idx_kept": args.object_idx,
+        "hand_pkl_present": hand_pkl.exists(),
     }
     with open(meta_out, "w") as f:
         json.dump(meta, f, indent=2)
