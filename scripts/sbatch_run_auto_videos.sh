@@ -523,6 +523,16 @@ for TASK_DIR in "${TASKS[@]}"; do
             FAIL=$((FAIL+1)); FAILED+=("$TASK_NAME/$EXP_NAME:rc=$RC")
             echo "[$TOTAL] $TASK_NAME / $EXP_NAME  [FAIL: run_auto_annotator rc=$RC]"
         fi
+
+        # /dev/shm defensive sweep: each exp's h5 is up to ~30 GB on long
+        # videos. run_auto_annotator's own EXIT trap cleans up its h5 on
+        # graceful exit, but SIGKILL (rc=137 from cgroup OOM) does NOT
+        # invoke shell traps — the h5 persists and the next exp's h5 build
+        # piles on top until tmpfs blows up. Wipe everything in
+        # $H5_SCRATCH between exps so each invocation starts clean.
+        if [[ -n "$H5_SCRATCH" && -d "$H5_SCRATCH" ]]; then
+            rm -f "$H5_SCRATCH"/*.h5 "$H5_SCRATCH"/*.h5.full_backup_* 2>/dev/null || true
+        fi
     done
 done
 

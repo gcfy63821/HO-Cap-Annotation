@@ -314,12 +314,25 @@ def load_camera_transforms(meta_path: Path):
     return [serial_to_T[s] for s in serials if s in serial_to_T]
 
 
-def flip_z(v):
-    """Match visualize_hand_viser / viser_viewer convention so Z points down."""
-    v = v.copy()
-    v[..., 1] *= -1
-    v[..., 2] *= -1
+# Coordinate-frame transforms applied to every rendered mesh. The default
+# `yz_flip` (rotate 180° around X) matches visualize_hand_viser and
+# viser_viewer — turns the data's "Z down" world into Viser's "Z up". You
+# can toggle at runtime via the GUI dropdown.
+def _identity(v):
     return v
+def _flip_yz(v):
+    v = v.copy(); v[..., 1] *= -1; v[..., 2] *= -1; return v
+def _flip_z(v):
+    v = v.copy(); v[..., 2] *= -1; return v
+def _flip_y(v):
+    v = v.copy(); v[..., 1] *= -1; return v
+
+WORLD_TRANSFORMS = {
+    "yz_flip (default)": _flip_yz,
+    "raw world":         _identity,
+    "z_flip only":       _flip_z,
+    "y_flip only":       _flip_y,
+}
 
 
 # ============================================================
@@ -341,6 +354,12 @@ def main():
                     choices=[None, "joint_pose_solver", "object_pose_solver", "fd_pose_solver"],
                     help="Force a specific object pose source. Default: best available.")
     ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--world_transform", type=str, default="yz_flip (default)",
+                    choices=list(WORLD_TRANSFORMS.keys()),
+                    help="Coordinate transform applied to every mesh before rendering. "
+                         "Default flips Y+Z (180° rot around X) to match the older "
+                         "viewers. Pick 'raw world' to disable; pick 'z_flip only' if "
+                         "you only want Z reversed.")
     args = ap.parse_args()
 
     task_folder = _TASK_FOLDER
@@ -442,13 +461,46 @@ def main():
     state = load_experiment(exp_names[0])
     print(f"[INFO] exp={state['exp_name']}  pkl={state['pkl_path']}  hand_frames={state['num_frames_hand']}")
     print(f"[INFO] obj meshes: {[m[0] for m in state['obj_meshes']]}")
-    print(f"[INFO] obj pose sources: {[s[0] for s in state['obj_pose_sources']]}")
 
-    # Initial obj source + poses
-    initial_src = state["obj_pose_sources"][0][0] if state["obj_pose_sources"] else None
+    # Probe every source's frame count up-front so the user sees inconsistency
+    # at a glance (e.g. fake_optim residue from a chunk-broken run vs a clean
+    # fd merge). Default pick = source with the MOST frames — chunk residue is
+    # usually shorter than the full fd merge, so this picks the more
+    # trustworthy source by default.
+    src_frames = {}     # name -> int
+    for src_name, src_path in state["obj_pose_sources"]:
+        try:
+            arr = np.load(src_path, mmap_mode='r')
+            if arr.ndim == 2:
+                arr = arr[None]
+            src_frames[src_name] = int(arr.shape[1])
+        except Exception as e:
+            print(f"[WARN] couldn't probe {src_path}: {e}")
+            src_frames[src_name] = 0
+
+    print(f"[INFO] obj pose sources:")
+    for src_name, src_path in state["obj_pose_sources"]:
+        marker = "" if src_frames[src_name] == state["num_frames_hand"] else "  *"
+        print(f"  - {src_name:22s}  frames={src_frames[src_name]:>6d}{marker}  ({src_path.name})")
+    if src_frames and len(set(src_frames.values())) > 1:
+        print(f"[WARN] sources disagree on frame count — likely a stale/chunk-residual run "
+              f"(see worklog about cleaning up before re-running the pipeline)")
+    if src_frames and state["num_frames_hand"] not in (0,) | set(src_frames.values()):
+        print(f"[WARN] hand pkl frame count ({state['num_frames_hand']}) doesn't match "
+              f"any object source — your hand and object outputs are out of sync")
+
+    # Pick default source = the one with the most frames.
+    if state["obj_pose_sources"]:
+        ordered = sorted(state["obj_pose_sources"], key=lambda s: -src_frames.get(s[0], 0))
+        initial_src = ordered[0][0]
+        # Re-order the source list so the dropdown shows longest first.
+        state["obj_pose_sources"] = ordered
+    else:
+        initial_src = None
     obj_poses = load_obj_poses_for(state, initial_src) if initial_src else None
     num_frames_obj = obj_poses.shape[1] if obj_poses is not None else 0
     num_frames = max(state["num_frames_hand"], num_frames_obj)
+    print(f"[INFO] picked initial source: {initial_src}  ({num_frames_obj} frames)")
     print(f"[INFO] num_frames (max of hand/obj) = {num_frames}")
 
     # ---- Viser server ----
@@ -466,9 +518,22 @@ def main():
             exp_status = server.gui.add_markdown(f"**1 / {len(exp_names)}**")
     server.gui.add_markdown("---")
 
-    info_md = server.gui.add_markdown(
-        f"`{state['label']}`  \nhand frames: {state['num_frames_hand']}  obj frames: {num_frames_obj}"
-    )
+    def _info_md_text():
+        """Compact GUI status: pkl name, hand-frame count, every source + count."""
+        lines = [f"`{state['label']}`"]
+        lines.append(f"**hand**: {state['num_frames_hand']} frames")
+        if state["obj_pose_sources"]:
+            lines.append(f"**obj** (×{len(state['obj_pose_sources'])}):")
+            for sn, _ in state["obj_pose_sources"]:
+                star = "  ←" if sn == src_dropdown.value else ""
+                lines.append(f"&nbsp;&nbsp;`{sn}`: {src_frames.get(sn, '?')} frames{star}")
+        else:
+            lines.append(f"**obj**: <no source>")
+        if src_frames and len(set(src_frames.values())) > 1:
+            lines.append(":warning: sources disagree on frame count")
+        return "  \n".join(lines)
+    # We'll set this once the dropdown is created (info_md needs src_dropdown).
+    info_md = server.gui.add_markdown("(loading...)")
 
     frame_slider = server.gui.add_slider("Frame", min=0, max=max(0, num_frames - 1),
                                           step=1, initial_value=0)
@@ -478,12 +543,37 @@ def main():
     show_cams = server.gui.add_checkbox("Show Cameras", initial_value=False)
     show_axes = server.gui.add_checkbox("Show World Axes", initial_value=True)
 
-    # Object pose source dropdown (only if we have any sources)
-    src_options = [s[0] for s in state["obj_pose_sources"]] if state["obj_pose_sources"] else ["<none>"]
+    # Object pose source dropdown (only if we have any sources). Show frame
+    # count alongside the name so the user can see at a glance which source
+    # is the longest / most trustworthy. The dropdown's `value` is still the
+    # plain source name — we keep a label↔name map for round-tripping.
+    if state["obj_pose_sources"]:
+        src_label_to_name = {
+            f"{sn} ({src_frames.get(sn, '?')} frames)": sn
+            for (sn, _) in state["obj_pose_sources"]
+        }
+        src_options_lab = list(src_label_to_name.keys())
+        # initial label = entry whose name == initial_src
+        initial_label = next(lab for lab, nm in src_label_to_name.items() if nm == initial_src)
+    else:
+        src_label_to_name = {"<none>": None}
+        src_options_lab = ["<none>"]
+        initial_label = "<none>"
     src_dropdown = server.gui.add_dropdown(
-        "Obj pose source", options=src_options,
-        initial_value=src_options[0],
+        "Obj pose source", options=src_options_lab,
+        initial_value=initial_label,
     )
+    info_md.content = _info_md_text()
+
+    # Coordinate-frame transform dropdown. Toggling re-renders the current
+    # frame so the world flips immediately.
+    world_xform_dd = server.gui.add_dropdown(
+        "World transform",
+        options=list(WORLD_TRANSFORMS.keys()),
+        initial_value=args.world_transform,
+    )
+    def world_xform(v):
+        return WORLD_TRANSFORMS[world_xform_dd.value](v)
 
     playing = server.gui.add_checkbox("Play", initial_value=False)
     fps_slider = server.gui.add_slider("FPS", min=1, max=60, step=1, initial_value=15)
@@ -543,7 +633,7 @@ def main():
             if lv is not None:
                 handles["left"] = server.scene.add_mesh_simple(
                     "/left_hand",
-                    vertices=flip_z(lv).astype(np.float32),
+                    vertices=world_xform(lv).astype(np.float32),
                     faces=faces_left,
                     color=left_color,
                 )
@@ -556,7 +646,7 @@ def main():
             if rv is not None:
                 handles["right"] = server.scene.add_mesh_simple(
                     "/right_hand",
-                    vertices=flip_z(rv).astype(np.float32),
+                    vertices=world_xform(rv).astype(np.float32),
                     faces=faces_right,
                     color=right_color,
                 )
@@ -581,7 +671,7 @@ def main():
                         obj_handles[oi] = None
                     continue
                 world_v = transform_object_vertices(V, pose)
-                world_v = flip_z(world_v).astype(np.float32)
+                world_v = world_xform(world_v).astype(np.float32)
                 color = obj_palette[oi % len(obj_palette)]
                 if oi in obj_handles and obj_handles[oi] is not None:
                     obj_handles[oi].remove()
@@ -594,21 +684,21 @@ def main():
         else:
             remove_all_obj_handles()
 
-    def switch_source(src_name):
+    def switch_source(label_or_name):
+        """label_or_name may be the dropdown's display label (with frame
+        count) OR the bare source name — accept either."""
         nonlocal obj_poses, num_frames_obj, num_frames
+        src_name = src_label_to_name.get(label_or_name, label_or_name)
         new_poses = load_obj_poses_for(state, src_name) if src_name in [s[0] for s in state["obj_pose_sources"]] else None
         obj_poses = new_poses
         num_frames_obj = obj_poses.shape[1] if obj_poses is not None else 0
         num_frames = max(state["num_frames_hand"], num_frames_obj)
         frame_slider.max = max(0, num_frames - 1)
-        info_md.content = (
-            f"`{state['label']}`  \nhand frames: {state['num_frames_hand']}  "
-            f"obj frames: {num_frames_obj}  src: `{src_name}`"
-        )
+        info_md.content = _info_md_text()
         render_frame(int(frame_slider.value))
 
     def switch_experiment(name):
-        nonlocal state, obj_poses, num_frames_obj, num_frames
+        nonlocal state, obj_poses, num_frames_obj, num_frames, src_label_to_name, src_frames
         try:
             state = load_experiment(name)
         except Exception as e:
@@ -620,20 +710,41 @@ def main():
             remove_handle(k)
         remove_all_obj_handles()
 
-        # Refresh obj source dropdown options
-        new_src_options = [s[0] for s in state["obj_pose_sources"]] if state["obj_pose_sources"] else ["<none>"]
-        src_dropdown.options = new_src_options
-        src_dropdown.value = new_src_options[0]
-        obj_poses = load_obj_poses_for(state, new_src_options[0]) if state["obj_pose_sources"] else None
+        # Re-probe each source's frame count for the new exp.
+        new_src_frames = {}
+        for sn, sp in state["obj_pose_sources"]:
+            try:
+                arr = np.load(sp, mmap_mode='r')
+                if arr.ndim == 2: arr = arr[None]
+                new_src_frames[sn] = int(arr.shape[1])
+            except Exception:
+                new_src_frames[sn] = 0
+        # Pick longest as default; reorder.
+        if state["obj_pose_sources"]:
+            ordered = sorted(state["obj_pose_sources"], key=lambda s: -new_src_frames.get(s[0], 0))
+            state["obj_pose_sources"] = ordered
+            src_label_to_name = {
+                f"{sn} ({new_src_frames.get(sn, '?')} frames)": sn
+                for (sn, _) in ordered
+            }
+            new_options = list(src_label_to_name.keys())
+            src_dropdown.options = new_options
+            src_dropdown.value = new_options[0]
+            initial_src = ordered[0][0]
+        else:
+            src_label_to_name = {"<none>": None}
+            src_dropdown.options = ["<none>"]
+            src_dropdown.value = "<none>"
+            initial_src = None
+        src_frames = new_src_frames
+
+        obj_poses = load_obj_poses_for(state, initial_src) if initial_src else None
         num_frames_obj = obj_poses.shape[1] if obj_poses is not None else 0
         num_frames = max(state["num_frames_hand"], num_frames_obj)
 
         frame_slider.max = max(0, num_frames - 1)
         frame_slider.value = 0
-        info_md.content = (
-            f"`{state['label']}`  \nhand frames: {state['num_frames_hand']}  "
-            f"obj frames: {num_frames_obj}  src: `{src_dropdown.value}`"
-        )
+        info_md.content = _info_md_text()
         setup_cameras(state["cam_transforms"])
         if multi_exp:
             idx = exp_names.index(name)
@@ -690,6 +801,10 @@ def main():
     @src_dropdown.on_update
     def _(event):  # noqa: F841
         switch_source(src_dropdown.value)
+
+    @world_xform_dd.on_update
+    def _(event):  # noqa: F841
+        render_frame(int(frame_slider.value))
 
     try:
         while True:

@@ -277,6 +277,29 @@ if [[ -n "$H5_SCRATCH_DIR" ]]; then
     mkdir -p "$H5_SCRATCH_DIR"
     # Name unique to this sequence so concurrent jobs don't collide.
     H5_REAL_PATH="${H5_SCRATCH_DIR}/$(echo "${VIDEOS_FOLDER_NAME}_${TASK_NAME}_${EXP_NAME}" | tr / _)_data00000000.h5"
+
+    # /dev/shm cleanup: remove this exp's scratch h5 (+ symlink + Stage 4/6
+    # backup files) on script exit. Prevents tmpfs accumulation when sbatch
+    # runs many exps in one job — without this, /dev/shm fills up after a
+    # few exps and the next one OOM-kills (rc=137) during h5 build or SAM2
+    # load. Trap fires on success AND error/signal so failed exps don't
+    # leave 25 GB lying in /dev/shm either.
+    _cleanup_scratch_h5() {
+        local rc=$?
+        if [[ -n "${H5_REAL_PATH:-}" && "${H5_REAL_PATH}" != "${H5_PATH:-}" ]]; then
+            rm -f "$H5_REAL_PATH" \
+                  "$H5_REAL_PATH".full_backup_obj \
+                  "$H5_REAL_PATH".full_backup_hand 2>/dev/null || true
+        fi
+        # Drop the dangling symlink in the sequence folder so RESUME on a
+        # later sbatch re-detects "no h5" and rebuilds (the /dev/shm target
+        # is gone the moment the slurm job ends anyway).
+        if [[ -L "${H5_PATH:-}" ]]; then
+            rm -f "$H5_PATH" 2>/dev/null || true
+        fi
+        return $rc
+    }
+    trap _cleanup_scratch_h5 EXIT INT TERM HUP
 else
     H5_REAL_PATH="$H5_PATH"
 fi
