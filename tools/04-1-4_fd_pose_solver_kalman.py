@@ -236,9 +236,11 @@ def run_tracking_with_kalman_and_integration(
     """
     sequence_folder = Path(sequence_folder)
     object_idx_0 = object_idx - 1  # Convert to 0-based index
-    
-    # Load data
-    data_loader = HOCapLoader(sequence_folder)
+
+    # Load data (lazy: keep h5 + masks.h5 handles open and read one frame at
+    # a time. Eager mode would materialise ~35 GB for a 600-frame × 8-cam
+    # chunk and trigger the OOM killer on a typical workstation).
+    data_loader = HOCapLoader(sequence_folder, lazy=True)
     num_frames = data_loader.num_frames
     object_id = data_loader.object_ids[object_idx_0]
     valid_serials = data_loader.get_valid_seg_serials()
