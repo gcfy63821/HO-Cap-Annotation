@@ -21,6 +21,12 @@
 #       → DINO debug output dir (internal masks.h5, viz/, seed_info.json).
 #         Drop once tool_masks/masks.h5 is in place; pass --keep_dino_auto
 #         to retain for debugging.
+#   dino_auto/tmp_jpegs/  (and dino_auto/tmp_*)
+#       → temp JPEG dumps that SAM2's video predictor reads during Stage 2.
+#         Useless once Stage 2 produced *any* mask artifact (masks.h5 or
+#         npz). Always cleaned, INDEPENDENT of fd merger done — even on
+#         partially-done exps the tmp jpegs go (they easily reach hundreds
+#         of MB / 10k+ files per exp). Not gated by --keep_dino_auto.
 #   result_{S}_{E}.pkl, result_hand_optimized_{S}_{E}.pkl, poses_m_{S}_{E}.npy
 #       → hand chunked-run intermediates. Already auto-cleaned by
 #         run_auto_annotator.sh unless --hand_keep_chunk_files; this script
@@ -134,14 +140,46 @@ for EXP_DIR in "${TARGETS[@]}"; do
     [[ -d "$EXP_DIR" ]] || continue
     EXP_LABEL="$(basename "$(dirname "$EXP_DIR")")/$(basename "$EXP_DIR")"
 
-    MERGED="${EXP_DIR}/processed/fd_pose_solver/fd_poses_merged_fixed.npy"
-    if [[ ! -f "$MERGED" ]]; then
-        TOTAL_NOT_DONE=$((TOTAL_NOT_DONE + 1))
-        [[ "$QUIET" == "1" ]] || echo "[skip not-done] $EXP_LABEL"
-        continue
+    EXP_BYTES=0; EXP_FILES=0
+
+    # ---- DINO scratch (runs even when fd merger not yet done) ----
+    # dino_auto/tmp_*/ are temp JPEG dumps that SAM2 reads during Stage 2.
+    # Once DINO has produced any mask artifact (canonical masks.h5 OR per-frame
+    # npz, OR even just dino_auto/masks.h5 left over from an older run), the
+    # temp jpegs serve no further purpose and can be hundreds of MB / tens of
+    # thousands of files per exp. Always clean them.
+    DINO_STAGE2_DONE=0
+    [[ -f "${EXP_DIR}/tool_masks/masks.h5" ]] && DINO_STAGE2_DONE=1
+    [[ "$DINO_STAGE2_DONE" == "0" ]] && ls "${EXP_DIR}"/tool_masks/cam*_rgb/0000.npz >/dev/null 2>&1 && DINO_STAGE2_DONE=1
+    [[ "$DINO_STAGE2_DONE" == "0" && -f "${EXP_DIR}/dino_auto/masks.h5" ]] && DINO_STAGE2_DONE=1
+    if [[ "$DINO_STAGE2_DONE" == "1" ]]; then
+        shopt -s nullglob
+        for TMP in "${EXP_DIR}"/dino_auto/tmp_* "${EXP_DIR}"/dino_auto/tmp; do
+            [[ -e "$TMP" ]] || continue
+            read b f < <(_du_count "$TMP")
+            EXP_BYTES=$((EXP_BYTES + b)); EXP_FILES=$((EXP_FILES + f))
+            _remove "$TMP"
+        done
+        shopt -u nullglob
     fi
 
-    EXP_BYTES=0; EXP_FILES=0
+    MERGED="${EXP_DIR}/processed/fd_pose_solver/fd_poses_merged_fixed.npy"
+    if [[ ! -f "$MERGED" ]]; then
+        # Not fully done — only tmp_jpegs above were cleaned. Report
+        # whatever was freed for this exp so it shows up in the summary.
+        TOTAL_NOT_DONE=$((TOTAL_NOT_DONE + 1))
+        TOTAL_BYTES=$((TOTAL_BYTES + EXP_BYTES))
+        TOTAL_FILES=$((TOTAL_FILES + EXP_FILES))
+        if [[ "$QUIET" != "1" ]]; then
+            if [[ "$EXP_BYTES" -gt 0 ]]; then
+                printf "[skip not-done; cleaned tmp] %-72s freed=%-10s files=%d\n" \
+                    "$EXP_LABEL" "$(_human_bytes $EXP_BYTES)" "$EXP_FILES"
+            else
+                echo "[skip not-done] $EXP_LABEL"
+            fi
+        fi
+        continue
+    fi
 
     # -- 1) per-cam tracking txts (always safe once merger is done) --
     for OBJ_DIR in "$EXP_DIR"/processed/fd_pose_solver/*/ob_in_cam; do
