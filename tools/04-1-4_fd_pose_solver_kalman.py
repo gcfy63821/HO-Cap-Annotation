@@ -209,6 +209,7 @@ def run_tracking_with_kalman_and_integration(
     depth_validation: bool = False,
     depth_error_thresh: float = 0.02,
     frame_id_offset: int = 0,
+    tool_mesh_path: str = "",
 ):
     """
     Run FoundationPose++ tracking with Kalman filter for each camera, then integrate to world frame.
@@ -233,6 +234,10 @@ def run_tracking_with_kalman_and_integration(
         frame_id_offset: Added to in-h5 frame index to compute the absolute frame id
             used for output filenames + log messages. Set to chunk start when running
             on a chunked h5 so outputs from multiple chunks accumulate at absolute ids.
+        tool_mesh_path: Explicit override for the mesh file. When set, loaded
+            instead of `data_loader.object_cleaned_files[object_idx-1]`. Use
+            this when the mesh lives outside `meta.yaml.models_folder`
+            (e.g. resolved via a JSON map by the sbatch wrapper).
     """
     sequence_folder = Path(sequence_folder)
     object_idx_0 = object_idx - 1  # Convert to 0-based index
@@ -255,8 +260,22 @@ def run_tracking_with_kalman_and_integration(
     z_threshold = data_loader._thresholds[4:]
     print(f"[INFO] Thresholds - X: {x_threshold}, Y: {y_threshold}, Z: {z_threshold}")
     
-    # Load and prepare mesh
-    mesh = trimesh.load(data_loader.object_cleaned_files[object_idx_0], process=True)
+    # Load and prepare mesh. Prefer the CLI override (e.g. JSON-mapped path
+    # from the sbatch wrapper) over the loader's auto-derived path, which
+    # only knows about $models_folder/$obj_id/cleaned_mesh_10000.obj.
+    if tool_mesh_path:
+        mesh_path = tool_mesh_path
+        print(f"[INFO] Mesh: using --tool_mesh override: {mesh_path}")
+    else:
+        mesh_path = str(data_loader.object_cleaned_files[object_idx_0])
+        print(f"[INFO] Mesh: using loader-derived path: {mesh_path}")
+    if not Path(mesh_path).exists():
+        raise FileNotFoundError(
+            f"mesh file not found: {mesh_path}\n"
+            f"  pass --tool_mesh PATH to override, or place the mesh at "
+            f"$models_folder/{object_id}/cleaned_mesh_10000.obj"
+        )
+    mesh = trimesh.load(mesh_path, process=True)
     if len(mesh.vertices) > 200000:
         mesh = mesh.simplify_quadric_decimation(0.8)
         print("[INFO] Mesh decimated due to high vertex count.")
@@ -802,6 +821,15 @@ if __name__ == "__main__":
              "output filenames. Set to chunk start when running on a chunked h5 so "
              "outputs from multiple chunks accumulate at absolute frame ids."
     )
+    parser.add_argument(
+        "--tool_mesh",
+        type=str,
+        default="",
+        help="Override the mesh file path. When unset, the loader auto-derives "
+             "$models_folder/$obj_id/cleaned_mesh_10000.obj from meta.yaml. Use "
+             "this when the mesh lives elsewhere (e.g. resolved via "
+             "sbatch_run_auto_videos.sh's --mesh_map_json)."
+    )
 
     args = parser.parse_args()
     
@@ -828,6 +856,7 @@ if __name__ == "__main__":
         depth_validation=args.depth_validation,
         depth_error_thresh=args.depth_error_thresh,
         frame_id_offset=args.frame_id_offset,
+        tool_mesh_path=args.tool_mesh,
     )
     
     print(f"\n[INFO] Total time: {time.time() - t_start:.2f}s")

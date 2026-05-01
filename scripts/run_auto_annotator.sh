@@ -531,7 +531,8 @@ _run_fd_pose_solver_unchunked() {
         --activate_2d_tracker --activate_kalman_filter \
         --object_idx "$obj_idx" \
         --track_refine_iter "$TRACK_REFINE_ITER" \
-        --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" 2>&1
+        --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" \
+        --tool_mesh "$TOOL_MESH" 2>&1
 }
 
 FD_POSE_FOLDER="${ANNOTATED_PATH}/processed/fd_pose_solver"
@@ -660,7 +661,8 @@ if [[ "$SKIP_TRACKING" != "1" ]]; then
                         --start_frame 0 --end_frame "$chunk_len" \
                         --frame_id_offset "$s" \
                         --track_refine_iter "$TRACK_REFINE_ITER" \
-                        --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" 2>&1
+                        --rot_thresh "$ROT_THRESH" --trans_thresh "$TRANS_THRESH" \
+                        --tool_mesh "$TOOL_MESH" 2>&1
                     s=$e
                 done
             done
