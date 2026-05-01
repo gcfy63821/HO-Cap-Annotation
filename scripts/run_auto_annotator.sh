@@ -131,6 +131,11 @@ RESUME=1
 # dino_tool_segment.py and the per-stage debug outputs add I/O / time but
 # are rarely needed in batch jobs. Default OFF; pass --with_viz to opt in.
 WITH_VIZ=0
+# Pipeline mask export format from Stage 2 DINO. Choices: 'h5' (default;
+# single masks.h5 — saves ~15k inodes per exp on /viscam), 'npz' (legacy
+# per-frame compressed), 'npy' (legacy uncompressed). All Stage-3+ paths
+# now read masks.h5 directly via generate_meta.py --masks_h5_source.
+PIPELINE_MASK_FORMAT="${PIPELINE_MASK_FORMAT:-h5}"
 # If set, build h5 in this dir and symlink it into the sequence folder so
 # downstream tools (cluster_reconstruct, generate_meta, …) still find it at
 # $SEQUENCE_FOLDER/data00000000.h5. Typical: /dev/shm/$USER/$SLURM_JOB_ID .
@@ -203,6 +208,7 @@ while [[ "$#" -gt 0 ]]; do
         --resume)              RESUME=1; shift;;
         --no_resume|--force)   RESUME=0; shift;;
         --with_viz)            WITH_VIZ=1; shift;;
+        --pipeline_mask_format) PIPELINE_MASK_FORMAT="$2"; shift 2;;
         --sam2_ckpt)           SAM2_CKPT="$2"; shift 2;;
         --sam2_video_cfg)      SAM2_VIDEO_CFG="$2"; shift 2;;
         --sam2_image_cfg)      SAM2_IMAGE_CFG="$2"; shift 2;;
@@ -377,7 +383,16 @@ else
     python "$HOCAP_ROOT/tools/00_convert_videos_to_h5.py" "${H5_ARGS[@]}"
     # Expose the real file at the logical path so downstream reads transparently.
     if [[ "$H5_REAL_PATH" != "$H5_PATH" ]]; then
-        ln -sf "$H5_REAL_PATH" "$H5_PATH"
+        if ! ln -sf "$H5_REAL_PATH" "$H5_PATH" 2>&1; then
+            echo "Error: failed to create symlink $H5_PATH -> $H5_REAL_PATH"
+            echo "       This is almost always a /viscam quota issue (the symlink"
+            echo "       file lives on /viscam, even though the target is in /dev/shm)."
+            echo "       Run 'quota -s -u \$USER' on a login node and free space"
+            echo "       (try: deleting old slurm_outs/, conda clean -ay,"
+            echo "       removing processed/fd_pose_solver/<obj>/ob_in_cam after"
+            echo "       fd_poses_merged_fixed.npy is generated)."
+            exit 1
+        fi
     fi
 fi
 
@@ -438,6 +453,7 @@ else
         --sam2_video_cfg   "$SAM2_VIDEO_CFG"
         --sam2_image_cfg   "$SAM2_IMAGE_CFG"
         --pipeline_tool_masks_dir "$TOOL_MASKS_DIR"
+        --pipeline_mask_format    "${PIPELINE_MASK_FORMAT:-h5}"
         --tool_name "$TOOL_NAME"
         --no_video
     )
@@ -503,13 +519,26 @@ if [[ "$RESUME" == "1" && "$META_STALE" == "0" && -f "$META_YAML_PATH" && -f "$M
     echo "[3/7] [skip] meta.yaml + masks.h5 exist"
 else
     echo "[3/7] generate_meta ..."
-    python preprocess/generate_meta.py \
-        --h5_path "$H5_PATH" \
-        --calibration_yaml_path "$CALIBRATION_YAML" \
-        --models_folder "$MODELS_FOLDER" \
-        --tool_name "$TOOL_NAME" \
-        --start_frame "$START_FRAME" \
+    GEN_META_ARGS=(
+        --h5_path "$H5_PATH"
+        --calibration_yaml_path "$CALIBRATION_YAML"
+        --models_folder "$MODELS_FOLDER"
+        --tool_name "$TOOL_NAME"
+        --start_frame "$START_FRAME"
         --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4
+    )
+    # If masks.h5 already exists (DINO ran with --pipeline_mask_format h5,
+    # or a prior run, or it was synced from elsewhere), tell generate_meta
+    # to slice/copy from that h5 instead of streaming non-existent npz.
+    # Source = a temp copy so we can write to the dest in place; if user
+    # has only masks.h5 and no per-frame files, this is the only viable path.
+    if [[ -f "$META_MASKS_H5" ]]; then
+        TMP_MASKS_SRC="${META_MASKS_H5}.gen_meta_src"
+        cp -f "$META_MASKS_H5" "$TMP_MASKS_SRC"
+        GEN_META_ARGS+=(--masks_h5_source "$TMP_MASKS_SRC")
+    fi
+    python preprocess/generate_meta.py "${GEN_META_ARGS[@]}"
+    [[ -n "${TMP_MASKS_SRC:-}" && -f "${TMP_MASKS_SRC:-}" ]] && rm -f "$TMP_MASKS_SRC"
 fi
 
 # Detect object count (auto-picks 1 for single-object DINO output)

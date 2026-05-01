@@ -1053,10 +1053,14 @@ def main():
         help='Ordered list of camera serials (e.g. "00 01 02 03 04 05 06 07"). '
              'Used to name camera subfolders as cam{serial}_rgb/ . If omitted, '
              'falls back to integer index "cam{i}_rgb".')
-    parser.add_argument('--pipeline_mask_format', choices=['npz', 'npy'], default='npz',
-        help='Format for per-frame pipeline masks. Default npz (compressed, '
-             '~20-100x smaller than npy for binary masks). generate_meta.py '
-             'reads both — switch to npy only for legacy compatibility.')
+    parser.add_argument('--pipeline_mask_format', choices=['npz', 'npy', 'h5'], default='npz',
+        help='Layout for the pipeline-format mask export. '
+             "'npz' (default) writes per-frame compressed .npz under "
+             "cam*_rgb/ folders. 'npy' is the legacy uncompressed variant. "
+             "'h5' writes a single binary masks.h5 and skips per-frame files "
+             "entirely — saves ~15k inodes per exp on /viscam, and downstream "
+             "stages slice masks.h5 directly via generate_meta.py "
+             "--masks_h5_source.")
     args = parser.parse_args()
 
     t_start = time.time()
@@ -1679,21 +1683,50 @@ def main():
 
 def export_pipeline_masks(masks_path, out_dir, tool_name, cam_serials, n_cams, n_frames,
                            fmt='npz'):
-    """Export a binary masks.h5 into the per-frame + objects.yaml layout that
+    """Export a binary masks.h5 into the layout that
     HO-Cap-Annotation/preprocess/generate_meta.py consumes.
 
-    For each frame and camera, writes <out_dir>/cam{id}_rgb/{frame:04d}.{ext}
-    with value 0 (bg) or 1 (tool). Also writes <out_dir>/objects.yaml.
-
-    fmt: 'npz' (default) -> np.savez_compressed, typically 20-100x smaller
-              than .npy for binary masks; generate_meta.py supports both.
-         'npy' -> legacy uncompressed.
+    fmt:
+      'npz' (default) -> np.savez_compressed per-frame files, typically
+              20-100x smaller than .npy for binary masks. generate_meta.py
+              streams these into masks.h5.
+      'npy' -> legacy uncompressed per-frame files.
+      'h5'  -> NO per-frame files. Just place a single canonical
+              <out_dir>/masks.h5 (a binarised copy of the input masks_path)
+              + <out_dir>/objects.yaml. Massively cuts inode usage on the
+              shared filesystem (1864 frames × 8 cams = 15k npz per exp →
+              just 2 files), and downstream stages already accept masks.h5
+              directly via generate_meta.py --masks_h5_source.
 
     Single-object only — dino_tool_segment.py produces one-tool binary masks.
     """
-    assert fmt in ('npz', 'npy'), f"fmt must be 'npz' or 'npy', got {fmt}"
+    assert fmt in ('npz', 'npy', 'h5'), f"fmt must be 'npz', 'npy', or 'h5', got {fmt}"
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- 'h5' fast path: copy + binarise masks.h5, skip per-frame writes ----
+    if fmt == 'h5':
+        dest = out_dir / 'masks.h5'
+        # Stream-copy with binarisation (label 1 for the tool object so that
+        # downstream `mask == (object_idx + 1)` lookups match object_idx 0).
+        with h5py.File(masks_path, 'r') as fin, h5py.File(dest, 'w') as fout:
+            ds_in = fin['masks']
+            ds_out = fout.create_dataset(
+                'masks', shape=ds_in.shape, dtype=np.uint8,
+                chunks=(1, 1, ds_in.shape[2], ds_in.shape[3]),
+                compression='gzip',
+            )
+            CHUNK = 16   # copy in 16-frame chunks to keep RAM bounded
+            for i in range(0, ds_in.shape[0], CHUNK):
+                j = min(i + CHUNK, ds_in.shape[0])
+                ds_out[i:j] = (ds_in[i:j] > 0).astype(np.uint8)
+        print(f'  masks.h5: {dest}  shape={ds_in.shape}  (h5_only, no per-frame files)')
+
+        with open(out_dir / 'objects.yaml', 'w') as fp:
+            yaml.safe_dump({'objects': [tool_name]}, fp)
+        print(f'  objects.yaml: [{tool_name}]')
+        print(f'  pipeline masks ready at {out_dir}')
+        return
 
     # Camera subfolder naming: prefer serial (e.g., '00'), else integer index.
     def _cam_folder_name(i):

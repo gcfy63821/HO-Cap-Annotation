@@ -257,7 +257,11 @@ def stream_masks_folder_to_h5(mask_root_dir, h5_path, num_frames, num_cams,
 
 def detect_num_objects_from_masks(mask_root_dir, num_cams, start_frame=0):
     """
-    Auto-detect number of objects by scanning mask .npy files for the max label value.
+    Auto-detect number of objects by scanning the first few mask frames for
+    the max label value. Tries per-frame npy/npz under cam*_rgb/ first; if
+    none found, falls back to a quick read of `masks.h5` in the same folder
+    (this lets the npz-less, h5-only export path still report a sensible
+    object count).
     Returns the number of distinct objects (max label value).
     """
     mask_root_dir = Path(mask_root_dir)
@@ -265,15 +269,30 @@ def detect_num_objects_from_masks(mask_root_dir, num_cams, start_frame=0):
 
     discovered = discover_camera_folders(mask_root_dir)
     camera_folders = [folder for _, folder in discovered[:num_cams]] if discovered else []
+    found_any_per_frame = False
     for cam_folder in camera_folders:
-        # Check first few frames to detect max label
         for frame_offset in range(min(5, 9999)):
             frame_idx = start_frame + frame_offset
             p = _find_mask_file(cam_folder, frame_idx)
             if p is not None:
                 mask = _load_mask_file(p)
                 max_label = max(max_label, int(mask.max()))
+                found_any_per_frame = True
 
+    # h5 fallback when no per-frame files exist (h5-only export path).
+    if not found_any_per_frame:
+        masks_h5 = mask_root_dir / "masks.h5"
+        if masks_h5.exists():
+            try:
+                with h5py.File(masks_h5, "r") as f:
+                    ds = f.get("masks")
+                    if ds is not None and ds.shape[0] > 0:
+                        # Read first 5 frames (one slice; cheap with chunked storage)
+                        n = min(5, ds.shape[0])
+                        sample = ds[:n]
+                        max_label = max(max_label, int(sample.max()))
+            except Exception as e:
+                print(f"[WARNING] failed to read {masks_h5} for object detection: {e}")
     return max_label
 
 

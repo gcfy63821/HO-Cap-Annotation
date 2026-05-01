@@ -275,7 +275,31 @@ def run_tracking_with_kalman_and_integration(
             f"  pass --tool_mesh PATH to override, or place the mesh at "
             f"$models_folder/{object_id}/cleaned_mesh_10000.obj"
         )
-    mesh = trimesh.load(mesh_path, process=True)
+    # `force="mesh"` collapses any sub-meshes (multi-group OBJ → Scene) into a
+    # single Trimesh. Without it, OBJs with `g` / `o` groups (very common in
+    # tool_mesh_full/) load as a Scene whose `.faces` is empty, and
+    # nvdiffrast later raises `tri must have shape [>0, 3]` deep inside
+    # FoundationPose's register() — opaque from the user's side.
+    mesh = trimesh.load(mesh_path, process=True, force="mesh")
+    # If the loader still didn't return a Trimesh (rare), try one more
+    # concat pass before giving up.
+    if not isinstance(mesh, trimesh.Trimesh):
+        if hasattr(mesh, "dump"):
+            try:
+                mesh = trimesh.util.concatenate(mesh.dump())
+            except Exception as e:
+                raise RuntimeError(f"failed to coerce {mesh_path} to a single Trimesh: {e}") from e
+        else:
+            raise RuntimeError(
+                f"trimesh.load returned {type(mesh).__name__} (not Trimesh) for {mesh_path}"
+            )
+    if len(getattr(mesh, "faces", [])) == 0:
+        raise RuntimeError(
+            f"mesh has 0 faces after loading: {mesh_path}\n"
+            f"  vertices={len(getattr(mesh, 'vertices', []))}; this usually "
+            f"means the OBJ uses point-cloud / line / sub-mesh layout that "
+            f"trimesh couldn't parse — try a different mesh file."
+        )
     if len(mesh.vertices) > 200000:
         mesh = mesh.simplify_quadric_decimation(0.8)
         print("[INFO] Mesh decimated due to high vertex count.")
