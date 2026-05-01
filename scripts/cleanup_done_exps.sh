@@ -49,7 +49,16 @@
 #   [--dry_run]                only print what would be deleted, don't touch disk
 #   [--keep_ob_in_world]       keep per-frame world txts (for re-run merger)
 #   [--keep_dino_auto]         keep dino_auto/ debug dirs
+#   [--jobs N]                 parallel rm concurrency (default 4). NFS on
+#                              /viscam is metadata-bound; concurrent unlinks
+#                              scale near-linearly up to ~8-16. Set 1 for
+#                              sequential output when debugging.
 #   [--quiet]                  suppress per-exp lines (only print summary)
+#
+# Performance note: real (non-dry) runs can take several minutes per exp
+# because removing 15k+ small files over NFS is bottlenecked by metadata
+# server round-trips. Each big dir prints "rm-ing <path> ..." and an
+# elapsed-time line so you know it's making progress, not stuck.
 
 set -u
 
@@ -57,6 +66,9 @@ DRY_RUN=0
 KEEP_OB_IN_WORLD=0
 KEEP_DINO_AUTO=0
 QUIET=0
+PARALLEL_JOBS=4   # bulk dir deletion concurrency. 4 is a sweet spot on /viscam;
+                  # crank up to 8-16 if NFS server is fast, drop to 1 if you
+                  # want sequential output for debugging.
 ANNROOT=""
 TASK_FOLDER=""
 EXP_DIRS=()
@@ -69,6 +81,7 @@ while [[ "$#" -gt 0 ]]; do
         --dry_run)          DRY_RUN=1; shift;;
         --keep_ob_in_world) KEEP_OB_IN_WORLD=1; shift;;
         --keep_dino_auto)   KEEP_DINO_AUTO=1; shift;;
+        --jobs)             PARALLEL_JOBS="$2"; shift 2;;
         --quiet)            QUIET=1; shift;;
         -h|--help)          sed -n '2,55p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
@@ -130,7 +143,55 @@ _remove() {
     if [[ "$DRY_RUN" == "1" ]]; then
         return 0
     fi
-    rm -rf "$target"
+    # NFS metadata is slow (10–50 unlinks/sec on /viscam typical), so a
+    # 15k-file dir takes minutes. Print progress + elapsed time so it
+    # doesn't look frozen, and use `find -delete` which avoids a fork per
+    # file and is measurably faster than `rm -rf` on big trees.
+    local t0 t1 elapsed
+    t0=$SECONDS
+    if [[ -d "$target" ]]; then
+        # echo a marker BEFORE deletion so the user sees we're not stuck
+        printf "    rm-ing %s ..." "$target"
+        # -depth -delete: bottom-up unlink. Slightly faster than rm -rf on
+        # NFS because it batches stat+unlink with one syscall per entry.
+        find "$target" -depth -delete 2>/dev/null
+        # In case find left an empty parent dir (it shouldn't), make sure.
+        [[ -e "$target" ]] && rm -rf "$target"
+    else
+        rm -f "$target"
+    fi
+    t1=$SECONDS; elapsed=$((t1 - t0))
+    if [[ -d "$target" || -f "$target" ]]; then
+        echo "  FAILED (${elapsed}s)"
+        return 1
+    fi
+    if [[ -d "$(dirname "$target")" ]]; then
+        echo "  done (${elapsed}s)"
+    fi
+}
+
+# Run multiple removals in parallel. Useful because NFS server can handle
+# many concurrent unlink ops far better than one sequential stream.
+# $1 = max parallelism (e.g. 4); rest = paths.
+_remove_parallel() {
+    local jobs="$1"; shift
+    if [[ "$DRY_RUN" == "1" || "$#" -eq 0 ]]; then
+        for p in "$@"; do _remove "$p"; done
+        return 0
+    fi
+    local pids=()
+    local running=0
+    for target in "$@"; do
+        [[ -e "$target" ]] || continue
+        _remove "$target" &
+        pids+=($!)
+        running=$((running + 1))
+        if [[ $running -ge $jobs ]]; then
+            wait -n 2>/dev/null || wait
+            running=$((running - 1))
+        fi
+    done
+    wait
 }
 
 # ---------- per-exp cleanup ----------
@@ -181,12 +242,17 @@ for EXP_DIR in "${TARGETS[@]}"; do
         continue
     fi
 
+    # Collect bulk targets (per-cam dirs) and delete in parallel — single
+    # rm sequence on NFS is metadata-bound; concurrent unlinks scale much
+    # better. PARALLEL_JOBS=4 is a sweet spot for /viscam in our tests.
+    BULK_TARGETS=()
+
     # -- 1) per-cam tracking txts (always safe once merger is done) --
     for OBJ_DIR in "$EXP_DIR"/processed/fd_pose_solver/*/ob_in_cam; do
         [[ -d "$OBJ_DIR" ]] || continue
         read b f < <(_du_count "$OBJ_DIR")
         EXP_BYTES=$((EXP_BYTES + b)); EXP_FILES=$((EXP_FILES + f))
-        _remove "$OBJ_DIR"
+        BULK_TARGETS+=("$OBJ_DIR")
     done
 
     # -- 2) per-frame world-frame txts (optional via --keep_ob_in_world) --
@@ -195,7 +261,7 @@ for EXP_DIR in "${TARGETS[@]}"; do
             [[ -d "$OBJ_DIR" ]] || continue
             read b f < <(_du_count "$OBJ_DIR")
             EXP_BYTES=$((EXP_BYTES + b)); EXP_FILES=$((EXP_FILES + f))
-            _remove "$OBJ_DIR"
+            BULK_TARGETS+=("$OBJ_DIR")
         done
     fi
 
@@ -206,15 +272,20 @@ for EXP_DIR in "${TARGETS[@]}"; do
             [[ -d "$CAM_DIR" ]] || continue
             read b f < <(_du_count "$CAM_DIR")
             EXP_BYTES=$((EXP_BYTES + b)); EXP_FILES=$((EXP_FILES + f))
-            _remove "$CAM_DIR"
+            BULK_TARGETS+=("$CAM_DIR")
         done
+    fi
 
-        # -- 4) dino_auto/ debug dir (only when canonical masks.h5 is in place) --
-        if [[ "$KEEP_DINO_AUTO" != "1" && -d "${EXP_DIR}/dino_auto" ]]; then
-            read b f < <(_du_count "${EXP_DIR}/dino_auto")
-            EXP_BYTES=$((EXP_BYTES + b)); EXP_FILES=$((EXP_FILES + f))
-            _remove "${EXP_DIR}/dino_auto"
-        fi
+    # Kick off bulk parallel removal for all of (1)+(2)+(3) at once.
+    if [[ "${#BULK_TARGETS[@]}" -gt 0 ]]; then
+        _remove_parallel "${PARALLEL_JOBS:-4}" "${BULK_TARGETS[@]}"
+    fi
+
+    # -- 4) dino_auto/ debug dir (only when canonical masks.h5 is in place) --
+    if [[ -f "$MASKS_H5" ]] && [[ "$KEEP_DINO_AUTO" != "1" && -d "${EXP_DIR}/dino_auto" ]]; then
+        read b f < <(_du_count "${EXP_DIR}/dino_auto")
+        EXP_BYTES=$((EXP_BYTES + b)); EXP_FILES=$((EXP_FILES + f))
+        _remove "${EXP_DIR}/dino_auto"
     fi
 
     # -- 5) hand chunked residuals (only when canonical pkl is in place) --
