@@ -24,9 +24,23 @@ Usage:
     python scripts/visualize_hand_object_viser.py \
         --task_folder data/videos_0101/mallet_crush_nuts
 
+    # Browse every DONE experiment under one annotated_root (one videos_X
+    # date), labeled '<task>/<exp>' in the GUI dropdown:
+    python scripts/visualize_hand_object_viser.py \
+        --annotated_root data/videos_0101_annotated
+
+    # Browse every DONE experiment across ALL videos_*_annotated under a
+    # data root, labeled '<videos_X_annotated>/<task>/<exp>':
+    python scripts/visualize_hand_object_viser.py \
+        --scan_root /viscam/projects/robotool/data \
+        [--require_hand]
+
     # Force a particular object pose source:
     python scripts/visualize_hand_object_viser.py \
         --data_folder ... --pose_source fd_pose_solver
+
+DONE = processed/fd_pose_solver/fd_poses_merged_fixed.npy exists. With
+--require_hand, also requires result_hand_optimized.pkl.
 """
 
 import sys
@@ -48,10 +62,14 @@ _pre = argparse.ArgumentParser(add_help=False)
 _pre.add_argument("--data_folder", type=str, default="")
 _pre.add_argument("--task_folder", type=str, default="")
 _pre.add_argument("--pkl_path", type=str, default="")
+_pre.add_argument("--annotated_root", type=str, default="")
+_pre.add_argument("--scan_root", type=str, default="")
 _pre_args, _ = _pre.parse_known_args()
 _DATA_FOLDER = Path(_pre_args.data_folder).resolve() if _pre_args.data_folder else None
 _TASK_FOLDER = Path(_pre_args.task_folder).resolve() if _pre_args.task_folder else None
 _PKL_PATH = Path(_pre_args.pkl_path).resolve() if _pre_args.pkl_path else None
+_ANNOTATED_ROOT = Path(_pre_args.annotated_root).resolve() if _pre_args.annotated_root else None
+_SCAN_ROOT = Path(_pre_args.scan_root).resolve() if _pre_args.scan_root else None
 
 HOCAP_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HOCAP_ROOT))
@@ -296,6 +314,72 @@ def discover_experiments(task_folder: Path):
     return exps
 
 
+def is_exp_done(annotated: Path, require_hand: bool = False) -> bool:
+    """Return True iff this annotated/<task>/<exp> dir has the canonical
+    "annotation finished" sentinels.
+
+    Minimum: processed/fd_pose_solver/fd_poses_merged_fixed.npy exists
+             (Stage 5 merger ran).
+    With require_hand=True: also require result_hand_optimized.pkl.
+    """
+    if not (annotated / "processed" / "fd_pose_solver" / "fd_poses_merged_fixed.npy").exists():
+        return False
+    if require_hand and not (annotated / "result_hand_optimized.pkl").exists():
+        return False
+    return True
+
+
+def scan_done_under_annotated_root(annotated_root: Path, require_hand: bool = False):
+    """Walk one annotated_root (= .../<videos_X>_annotated) for done exps.
+
+    Returns a list of dicts: [{label, data_folder, annotated, task, exp}, ...]
+    label is "<task>/<exp>" — what shows in the GUI dropdown.
+    """
+    out = []
+    if not annotated_root.is_dir():
+        return out
+    for task_dir in sorted(annotated_root.iterdir()):
+        if not task_dir.is_dir():
+            continue
+        for exp_dir in sorted(task_dir.iterdir()):
+            if not exp_dir.is_dir():
+                continue
+            if not is_exp_done(exp_dir, require_hand=require_hand):
+                continue
+            data_folder = data_folder_for(exp_dir)
+            out.append({
+                "label":     f"{task_dir.name}/{exp_dir.name}",
+                "data_folder": data_folder,
+                "annotated":  exp_dir,
+                "task":       task_dir.name,
+                "exp":        exp_dir.name,
+            })
+    return out
+
+
+def scan_done_under_scan_root(scan_root: Path, require_hand: bool = False):
+    """Walk a higher-level data root (which contains many videos_*_annotated
+    siblings) and aggregate done exps from all of them.
+
+    Returns the same list-of-dicts format as scan_done_under_annotated_root,
+    but the label is prefixed with "<videos_X>/" so distinct annotated roots
+    don't collide.
+    """
+    out = []
+    if not scan_root.is_dir():
+        return out
+    for sub in sorted(scan_root.iterdir()):
+        if not sub.is_dir():
+            continue
+        if not sub.name.endswith("_annotated"):
+            continue
+        for entry in scan_done_under_annotated_root(sub, require_hand=require_hand):
+            entry = dict(entry)
+            entry["label"] = f"{sub.name}/{entry['label']}"
+            out.append(entry)
+    return out
+
+
 def load_camera_transforms(meta_path: Path):
     if not meta_path.exists():
         return []
@@ -347,6 +431,20 @@ def main():
                     help="Visualize a specific hand pkl directly. The viewer will "
                          "still try to find object poses + meshes via the inferred "
                          "annotated/data folders.")
+    ap.add_argument("--annotated_root", type=str, default="",
+                    help="Auto-discover every DONE experiment under "
+                         "<root>/<task>/<exp>/ (root = a videos_X_annotated dir). "
+                         "DONE = processed/fd_pose_solver/fd_poses_merged_fixed.npy "
+                         "exists. Use --require_hand to also gate on hand pkl. "
+                         "GUI dropdown labels exps as '<task>/<exp>'.")
+    ap.add_argument("--scan_root", type=str, default="",
+                    help="Auto-discover every DONE experiment under EVERY "
+                         "videos_*_annotated sibling beneath <scan_root>. "
+                         "Labels exps as '<videos_X_annotated>/<task>/<exp>'. "
+                         "Use this to browse all your finished annotations at once.")
+    ap.add_argument("--require_hand", action="store_true",
+                    help="In annotated_root / scan_root mode, only list exps that "
+                         "also have result_hand_optimized.pkl on disk.")
     ap.add_argument("--prefer", type=str, default="optimized",
                     choices=["optimized", "reconstruct"],
                     help="Prefer result_hand_optimized.pkl (default) or result.pkl.")
@@ -365,34 +463,88 @@ def main():
     task_folder = _TASK_FOLDER
     data_folder = _DATA_FOLDER
     pkl_path = _PKL_PATH
+    annotated_root = _ANNOTATED_ROOT
+    scan_root = _SCAN_ROOT
 
-    if not (task_folder or data_folder or pkl_path):
-        ap.error("Must specify one of --data_folder / --task_folder / --pkl_path")
+    if not (task_folder or data_folder or pkl_path or annotated_root or scan_root):
+        ap.error("Must specify one of --data_folder / --task_folder / --pkl_path / "
+                 "--annotated_root / --scan_root")
 
-    # Build experiment list (same logic as visualize_hand_viser.py).
-    if pkl_path is not None:
-        # Best-effort: derive sequence folder from the pkl's annotated path so
-        # we can still pull object meshes + poses.
+    # `EXP_INFO[label] = {"data_folder": Path, "annotated": Path, ...}` is the
+    # source of truth across every entry mode below. exp_names is just the
+    # ordered list of labels shown in the GUI dropdown.
+    EXP_INFO = {}
+    exp_names = []
+
+    # Build experiment list per mode. Highest-priority mode wins; all five
+    # are mutually exclusive in practice but we accept combinations gracefully.
+    if scan_root is not None:
+        # Walk every videos_*_annotated under scan_root and pick all DONE exps.
+        entries = scan_done_under_scan_root(scan_root, require_hand=args.require_hand)
+        if not entries:
+            print(f"[ERROR] no DONE experiments under {scan_root} "
+                  f"(looked for processed/fd_pose_solver/fd_poses_merged_fixed.npy)")
+            return
+        for e in entries:
+            EXP_INFO[e["label"]] = e
+            exp_names.append(e["label"])
+        print(f"[INFO] scan_root      = {scan_root}")
+        print(f"[INFO] DONE experiments: {len(exp_names)} "
+              f"(require_hand={args.require_hand})")
+    elif annotated_root is not None:
+        entries = scan_done_under_annotated_root(annotated_root, require_hand=args.require_hand)
+        if not entries:
+            print(f"[ERROR] no DONE experiments under {annotated_root}")
+            return
+        for e in entries:
+            EXP_INFO[e["label"]] = e
+            exp_names.append(e["label"])
+        print(f"[INFO] annotated_root = {annotated_root}")
+        print(f"[INFO] DONE experiments: {len(exp_names)} "
+              f"(require_hand={args.require_hand})")
+    elif pkl_path is not None:
+        # Single pkl mode (pre-existing)
         annotated_guess = pkl_path.parent
         derived_data_folder = data_folder_for(annotated_guess)
-        exp_names = [annotated_guess.name]
-        task_folder = None
-        data_folder = derived_data_folder if derived_data_folder.exists() else None
+        label = annotated_guess.name
+        EXP_INFO[label] = {
+            "label": label,
+            "data_folder": derived_data_folder if derived_data_folder.exists() else annotated_guess,
+            "annotated": annotated_guess,
+            "pkl_override": pkl_path,
+        }
+        exp_names.append(label)
     elif task_folder is not None:
-        exp_names = discover_experiments(task_folder)
-        if not exp_names:
+        # Pre-existing single-task mode.
+        names = discover_experiments(task_folder)
+        if not names:
             print(f"[ERROR] no experiments under {task_folder}")
             return
         print(f"[INFO] task_folder = {task_folder}")
-        print(f"[INFO] found {len(exp_names)} experiments")
-        initial_idx = 0
-        if data_folder is not None and data_folder.parent == task_folder:
-            if data_folder.name in exp_names:
-                initial_idx = exp_names.index(data_folder.name)
-        data_folder = task_folder / exp_names[initial_idx]
+        print(f"[INFO] found {len(names)} experiments")
+        for n in names:
+            ef = task_folder / n
+            EXP_INFO[n] = {
+                "label": n,
+                "data_folder": ef,
+                "annotated": annotated_folder_for(ef),
+            }
+            exp_names.append(n)
+        # Honor a simultaneously-passed --data_folder by starting on it.
+        if data_folder is not None and data_folder.parent == task_folder \
+                and data_folder.name in EXP_INFO:
+            # reorder so this exp is first (so the dropdown opens here)
+            n0 = data_folder.name
+            exp_names = [n0] + [n for n in exp_names if n != n0]
     else:
-        exp_names = [data_folder.name]
-        task_folder = data_folder.parent
+        # Single data_folder mode.
+        label = data_folder.name
+        EXP_INFO[label] = {
+            "label": label,
+            "data_folder": data_folder,
+            "annotated": annotated_folder_for(data_folder),
+        }
+        exp_names.append(label)
 
     multi_exp = len(exp_names) > 1
 
@@ -408,13 +560,12 @@ def main():
 
     # ---- Per-experiment loader ----
     def load_experiment(exp_name):
-        if pkl_path is not None and exp_name == pkl_path.parent.name:
-            pkl = pkl_path
-            annotated = pkl.parent
-            exp_folder = data_folder if data_folder is not None else annotated
+        info = EXP_INFO[exp_name]
+        annotated = info["annotated"]
+        exp_folder = info["data_folder"]   # may not exist when only annotated/ is around
+        if "pkl_override" in info and info["pkl_override"] is not None:
+            pkl = info["pkl_override"]
         else:
-            exp_folder = task_folder / exp_name
-            annotated = annotated_folder_for(exp_folder)
             pkl = pick_hand_pkl(annotated, prefer=args.prefer)
             if pkl is None:
                 raise FileNotFoundError(f"no result*.pkl in {annotated}")
