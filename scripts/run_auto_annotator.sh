@@ -589,12 +589,36 @@ if [[ "$SKIP_TRACKING" != "1" ]]; then
         # per-chunk resume check; matches fd_pose_solver's output layout).
         OBJECT_IDS=( $(python3 -c "import yaml; m=yaml.safe_load(open('$SEQUENCE_FOLDER/meta.yaml')); print(' '.join(m['object_ids']))") )
 
+        # Pre-scan: if every abs ob_in_world txt is on disk for every object,
+        # there's nothing for Stage 4 to do — the previous tracking finished
+        # but the merger crashed / was interrupted. Skip the whole chunked
+        # backup-restore dance and jump straight to Stage 5. Saves the
+        # 10-30s of meta/masks regeneration that otherwise runs even when
+        # every chunk's _chunk_already_done immediately returns true.
+        all_tracking_done=1
+        if [[ "$RESUME" == "1" ]]; then
+            for OBJ_IDX in $(seq 1 $NUM_OBJECTS); do
+                OBJ_ID="${OBJECT_IDS[$((OBJ_IDX-1))]}"
+                if ! _chunk_already_done "$OBJ_ID" 0 "$N_FRAMES"; then
+                    all_tracking_done=0
+                    break
+                fi
+            done
+        else
+            all_tracking_done=0
+        fi
+        if [[ "$all_tracking_done" == "1" ]]; then
+            echo "[4/7] [skip] all ob_in_world/{abs:06d}.txt present for $NUM_OBJECTS object(s); going straight to merger"
+        fi
+
         use_chunked=0
-        if [[ "$OBJECT_CHUNK_SIZE" -gt 0 && "$N_FRAMES" -gt "$OBJECT_CHUNK_SIZE" ]]; then
+        if [[ "$all_tracking_done" == "0" && "$OBJECT_CHUNK_SIZE" -gt 0 && "$N_FRAMES" -gt "$OBJECT_CHUNK_SIZE" ]]; then
             use_chunked=1
         fi
 
-        if [[ $use_chunked -eq 1 ]]; then
+        if [[ "$all_tracking_done" == "1" ]]; then
+            : # nothing to do for Stage 4 — fall through to Stage 5
+        elif [[ $use_chunked -eq 1 ]]; then
             # Back up the full h5, meta, and (if it exists) the full masks.h5
             # so per-chunk regeneration doesn't destroy them. mv for h5
             # (multi-GB; avoid copy); cp for the small files.

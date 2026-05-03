@@ -33,7 +33,7 @@ sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure'
 # Add ho-cap root to path for hocap_annotation imports (tools/ lives one level below the root)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-H, W = 480, 640  # default fallback; overridden from H5 imgs shape at runtime
+H, W = 480, 640
 CHUNK_SIZE = 100  # frames per SAM2 video chunk
 MAX_ITERS = 3
 DRIFT_THRESHOLD = 0.35  # re-seed if area drops below 35% of rolling reference
@@ -203,41 +203,19 @@ def build_rich_reference(dino, data_h5, masks_ds, ref_cam, sample_every=10):
 # ═══════════════════════════════════════════════════════════════════════
 
 def mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor,
-                   scan_every=10, top_k=5,
-                   min_area=100, max_area=15000, min_sim=0.20,
-                   first_hit=False, frames=None):
+                   scan_every=10, top_k=5):
     """Seed a camera using mesh DINOv2 reference.
 
     Scans frames, clicks SAM2 at top-matching DINOv2 patches, validates
     masks by comparing their DINOv2 features back to the mesh reference.
     No spatial prior or object-specific heuristics.
 
-    Args:
-        scan_every: stride over frames. Smaller = denser = more likely to
-            catch a frame where the object is well-visible, at a linear
-            compute cost.
-        min_area: reject SAM2 masks with fewer pixels than this. Lower this
-            (e.g. 20) to accept small / partially-visible objects.
-        max_area: upper bound; masks bigger than this are rejected as
-            likely over-segmenting (tool + arm + table).
-        min_sim: minimum DINOv2 patch-to-mesh similarity to bother clicking.
-            Lower this (e.g. 0.12) if partial views are getting rejected.
-        first_hit: if True, return as soon as ONE frame produces a valid seed
-            (frame 0, then frame `scan_every`, then `2*scan_every`, ...).
-            This is much faster than the default exhaustive search which
-            scores every scanned frame and keeps the best. Use this when the
-            tool is visible for most of the sequence and you don't need the
-            absolute best-score seed.
-
-    Returns best (or first-hit) seed dict, or None.
+    Returns best seed dict or None.
     """
     N = data_h5['imgs'].shape[0]
     best = None
-    # Explicit frame list (used by frame0_only's --seed_frames) takes
-    # precedence over the scan_every stride.
-    frame_iter = list(frames) if frames is not None else range(0, N, scan_every)
 
-    for fr in frame_iter:
+    for fr in range(0, N, scan_every):
         rgb = data_h5['imgs'][fr, cam]
         fm, ph, pw, fh, fw = get_dino_features(dino, rgb)
         flat = fm.reshape(-1, fm.shape[-1])
@@ -247,7 +225,7 @@ def mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor,
         top_idx = np.argsort(sims)[::-1][:top_k]
         for idx in top_idx:
             sim = float(sims[idx])
-            if sim < min_sim:
+            if sim < 0.20:
                 break
 
             py_p, px_p = idx // pw, idx % pw
@@ -263,7 +241,7 @@ def mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor,
             for mi in range(masks.shape[0]):
                 m = masks[mi].astype(bool)
                 a = int(m.sum())
-                if a < min_area or a > max_area:
+                if a < 100 or a > 15000:
                     continue
 
                 # DINOv2 mask-level validation against mesh reference
@@ -275,7 +253,7 @@ def mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor,
                 mask_feat /= (np.linalg.norm(mask_feat) + 1e-8)
                 mask_sim = float(mask_feat @ mesh_ref)
 
-                if mask_sim < min_sim:
+                if mask_sim < 0.20:
                     continue
 
                 # Score: higher DINOv2 similarity = better
@@ -288,15 +266,12 @@ def mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor,
                 }
                 if best is None or score > best['score']:
                     best = result
-                    if first_hit:
-                        return best
 
     return best
 
 
 def dense_dino_seed(dino, data_h5, cam, global_ref, ref_feats, image_predictor,
-                    scan_every=5, top_k=3, ref_median_area=None,
-                    first_hit=False):
+                    scan_every=5, top_k=3, ref_median_area=None):
     """Seed a camera using dense DINOv2 cross-view matching + temporal refs.
 
     For each scan frame:
@@ -309,9 +284,7 @@ def dense_dino_seed(dino, data_h5, cam, global_ref, ref_feats, image_predictor,
     Args:
         ref_median_area: median mask area from anchor camera. If provided,
             seeds with area < 30% or > 300% of this are rejected.
-        first_hit: if True, return as soon as ONE valid seed is found (fast).
-
-    Returns best (or first-hit) seed dict, or None.
+    Returns best seed dict or None.
     """
     N = data_h5['imgs'].shape[0]
     scan_frames = list(range(0, N, scan_every))
@@ -387,8 +360,6 @@ def dense_dino_seed(dino, data_h5, cam, global_ref, ref_feats, image_predictor,
                 }
                 if best is None or score > best['score']:
                     best = result
-                    if first_hit:
-                        return best
     return best
 
 
@@ -464,17 +435,12 @@ def reseed_at_frame(dino, data_h5, cam, fr, global_ref, image_predictor, ref_are
 
 def propagate_camera(video_predictor, cam_dir, seed_mask, seed_frame, N, masks_ds, cam,
                      dino=None, image_predictor=None, global_ref=None, data_h5=None,
-                     ref_area=None, drift_threshold=None, chunk_size=None,
-                     pbar=None):
+                     ref_area=None, drift_threshold=None, chunk_size=None):
     """Propagate seed mask forward+backward with optional periodic re-seeding.
 
     When dino/image_predictor/global_ref are provided, detects drift at chunk
     boundaries and re-generates fresh seeds using DINOv2+SAM2 to prevent
     partial segmentation from accumulating.
-
-    If `pbar` is given (a tqdm-like object with .update(n)), it gets ticked
-    once per frame written. The caller is responsible for sizing it
-    correctly (typically total = sum_of_per_camera_frame_budgets).
     """
     written = 0
     reseed_count = 0
@@ -502,8 +468,6 @@ def propagate_camera(video_predictor, cam_dir, seed_mask, seed_frame, N, masks_d
                 masks_ds[actual, cam] = m
                 last = m
                 written += 1
-                if pbar is not None:
-                    pbar.update(1)
             del state; torch.cuda.empty_cache(); gc.collect()
             return last
         except Exception as e:
@@ -878,84 +842,16 @@ def validate_camera(dino, data_h5, masks_ds, cam, ref_vec, N,
 #  Visualization
 # ═══════════════════════════════════════════════════════════════════════
 
-def save_per_cam_snapshots(data_h5, masks_path, out_dir, frame_idx=0,
-                            cam_serials=None, suffix=''):
-    """Save one mask-overlay PNG per camera for a single frame.
-
-    Output:
-      <out_dir>/cam{serial}{suffix}.png   (one PNG per camera)
-        — RGB with green mask overlay + yellow contour + frame/area label.
-
-    Useful for spot-checking that the mask landed correctly in each view
-    without sifting through a multi-cam video. Cheap: 8 PNGs ≈ a few MB.
-
-    Args:
-      data_h5     : open h5py file (has 'imgs' (N, n_cams, H, W, 3))
-      masks_path  : path to masks.h5 (has 'masks' (N, n_cams, H, W) uint8)
-      out_dir     : where to drop the PNGs (created if missing)
-      frame_idx   : which frame to render (default 0)
-      cam_serials : list of camera serials e.g. ['00','01',...]; if None,
-                    falls back to integer indices.
-      suffix      : optional name suffix, e.g. '_f0000'.
-    """
-    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
-    mf = h5py.File(masks_path, 'r')
-    N = data_h5['imgs'].shape[0]
-    n_cams = data_h5['imgs'].shape[1]
-    fr = max(0, min(frame_idx, N - 1))
-
-    def _cam_label(c):
-        if cam_serials is not None and c < len(cam_serials):
-            return f'cam{str(cam_serials[c]).zfill(2)}'
-        return f'cam{c:02d}'
-
-    written = 0
-    for c in range(n_cams):
-        rgb  = data_h5['imgs'][fr, c].copy()           # uint8 (H, W, 3) RGB
-        mask = mf['masks'][fr, c]                       # uint8 (H, W)
-        out_img = rgb.copy()
-        if mask.sum() > 0:
-            overlay = rgb.copy(); overlay[mask > 0] = (0, 255, 0)
-            out_img = cv2.addWeighted(rgb, 0.6, overlay, 0.4, 0)
-            # bin mask -> contour
-            cnt, _ = cv2.findContours((mask > 0).astype(np.uint8) * 255,
-                                       cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(out_img, cnt, -1, (255, 255, 0), 2)
-            info = f'frame {fr}  area={int((mask>0).sum())}'
-        else:
-            info = f'frame {fr}  (empty mask)'
-        cv2.putText(out_img, f'{_cam_label(c)}  {info}', (10, 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
-        cv2.putText(out_img, f'{_cam_label(c)}  {info}', (10, 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
-
-        bgr = cv2.cvtColor(out_img, cv2.COLOR_RGB2BGR)
-        png_path = out / f'{_cam_label(c)}{suffix}.png'
-        cv2.imwrite(str(png_path), bgr)
-        written += 1
-    mf.close()
-    print(f'  per-cam viz: wrote {written} PNG(s) to {out}  (frame={fr})')
-
-
 def visualize(data_h5, masks_path, output_dir, make_video=True):
-    """Generate snapshot PNGs + MP4 video of mask overlay for all cameras.
-    Grid is auto-computed from the h5 (works for 1..N cameras)."""
+    """Generate snapshot PNGs + MP4 video of mask overlay for all 8 cameras."""
     out = Path(output_dir); out.mkdir(parents=True, exist_ok=True)
     mf = h5py.File(masks_path, 'r')
     N = data_h5['imgs'].shape[0]
-    n_cams = data_h5['imgs'].shape[1]
-    # Use the H5's actual image resolution rather than module-level H,W
-    # constants — those default to 480x640 and only get overridden inside main().
-    H = int(data_h5['imgs'].shape[2])
-    W = int(data_h5['imgs'].shape[3])
-    # canvas grid: up to 4 cols, rows as needed
-    cols = min(n_cams, 4)
-    rows = max(1, (n_cams + cols - 1) // cols)
     snap_frames = [0, 50, 100, 200, 350, 500, 700, min(N-1, 756)]
 
     def _render(fr):
-        canvas = np.zeros((H*rows, W*cols, 3), dtype=np.uint8)
-        for c in range(n_cams):
+        canvas = np.zeros((H*2, W*4, 3), dtype=np.uint8)
+        for c in range(8):
             rgb = data_h5['imgs'][fr, c].copy()
             mask = mf['masks'][fr, c]
             if mask.sum() > 0:
@@ -966,11 +862,11 @@ def visualize(data_h5, masks_path, output_dir, make_video=True):
                 info = f"a={int(mask.sum())}"
             else:
                 info = "empty"
-            r, col = c // cols, c % cols
+            r, col = c // 4, c % 4
             canvas[r*H:(r+1)*H, col*W:(col+1)*W] = rgb
             cv2.putText(canvas, f"cam{c} {info}", (col*W+5, r*H+25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 2)
-        cv2.putText(canvas, f"frame {fr}/{N-1}", (W*cols-200, H*rows-15),
+        cv2.putText(canvas, f"frame {fr}/{N-1}", (W*4-200, H*2-15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
         return canvas
 
@@ -981,7 +877,7 @@ def visualize(data_h5, masks_path, output_dir, make_video=True):
 
     if make_video:
         vid = out / 'masks_video.mp4'
-        wr = cv2.VideoWriter(str(vid), cv2.VideoWriter_fourcc(*'mp4v'), 30, (W*cols, H*rows))
+        wr = cv2.VideoWriter(str(vid), cv2.VideoWriter_fourcc(*'mp4v'), 30, (W*4, H*2))
         for fr in range(N):
             wr.write(cv2.cvtColor(_render(fr), cv2.COLOR_RGB2BGR))
             if fr % 100 == 0: print(f'  video: frame {fr}/{N}')
@@ -1003,12 +899,9 @@ def main():
     parser.add_argument('--tool_mesh', required=False, default=None,
         help='Path to textured OBJ mesh of the tool (not required for --phase7_only)')
     parser.add_argument('--output_dir', required=True)
-    # Defaults match the actual robotool layout (previously pointed at a
-    # non-existent 'ho-cap' subfolder). Override via flags if needed.
-    _hocap_root = Path(__file__).resolve().parent.parent      # HO-Cap-Annotation/
-    _robotool_root = _hocap_root.parent                       # robotool/
+    _hocap_root = Path(__file__).resolve().parent.parent / 'ho-cap'
     parser.add_argument('--sam2_ckpt',
-        default=str(_robotool_root / 'mesh_reconstruction/sam2/checkpoints/sam2.1_hiera_large.pt'))
+        default=str(_hocap_root / 'config/checkpoints/sam2/sam2.1_hiera_large.pt'))
     parser.add_argument('--sam2_image_cfg',
         default='configs/sam2.1/sam2.1_hiera_l.yaml')
     parser.add_argument('--sam2_video_cfg',
@@ -1017,33 +910,6 @@ def main():
         help='Number of viewpoints for mesh rendering')
     parser.add_argument('--anchor_cams', type=int, nargs='+', default=None,
         help='Force these cameras as anchors (skip mesh-based search)')
-    # ---- Seed-finding controls (for difficult first-frame / partial-view cases) ----
-    parser.add_argument('--mesh_scan_every', type=int, default=10,
-        help='Frame stride when scanning each cam for the mesh-DINO anchor '
-             'seed. Smaller = denser scan = better chance of catching a frame '
-             'where the object is clearly visible (at linear compute cost). '
-             'Try 5 or 3 for videos where frame 0 of many cams misses the tool.')
-    parser.add_argument('--dense_scan_every', type=int, default=5,
-        help='Frame stride for the dense cross-view seeding pass (non-anchor '
-             'cameras). Smaller = denser.')
-    parser.add_argument('--seed_min_area', type=int, default=100,
-        help='Minimum SAM2 mask area (pixels) during seeding. Lower this '
-             '(e.g. 30) to accept small / partially-visible objects at the '
-             'start of the sequence.')
-    parser.add_argument('--seed_max_area', type=int, default=15000,
-        help='Maximum SAM2 mask area during seeding. Raise for large tools.')
-    parser.add_argument('--seed_min_sim', type=float, default=0.20,
-        help='Minimum DINOv2 patch-to-mesh similarity to consider a seed. '
-             'Lower (e.g. 0.12) to accept partial-view seeds.')
-    parser.add_argument('--seed_fast', action='store_true',
-        help='Fast seeding mode: for each camera try frame 0 first, then '
-             'frame `mesh_scan_every` (default 10 or whatever you set), then '
-             '2*stride, ... and STOP at the first frame that yields any valid '
-             'seed. Skips the default "score all frames, pick best" sweep. '
-             'Makes the anchor-search phase roughly `scan_every`x faster '
-             'when the object is visible in most frames. Pair with '
-             '--mesh_scan_every 20 for the "frame 0, else frame 20, 40, ..." '
-             'behaviour.')
     parser.add_argument('--min_area', type=int, default=200,
         help='Minimum median mask area to pass validation')
     parser.add_argument('--max_area', type=int, default=8000,
@@ -1069,39 +935,6 @@ def main():
     parser.add_argument('--cvr_mesh_gate_frac', type=float, default=0.70,
         help='Require this fraction of added patches above mesh-gate threshold')
     parser.add_argument('--no_video', action='store_true')
-    parser.add_argument('--no_viz', action='store_true',
-        help='Skip the entire visualize() step (no snapshot PNGs, no video). '
-             'Saves time and disk in batch jobs where masks.h5 + the pipeline-'
-             'format export are the only outputs that matter. NOTE: this also '
-             'disables per-camera viz; pass --no_per_cam_viz only to disable '
-             'JUST the per-camera PNGs and keep the multi-cam mosaic+video.')
-    parser.add_argument('--no_per_cam_viz', action='store_true',
-        help='Skip the per-camera single-frame PNG export (one PNG per camera '
-             'with mask overlay + contour). On by default in batch runs since '
-             'it costs only ~1s + a few MB and is the easiest way to spot-check '
-             'whether DINO seeded correctly in every view.')
-    parser.add_argument('--per_cam_viz_frame', type=int, default=0,
-        help='Frame index to render for the per-camera PNG export (default 0).')
-    parser.add_argument('--frame0_only', action='store_true',
-        help='Simple/fast mode: for every camera, run DINOv2+SAM2 seeding ONLY '
-             'on frame 0, then SAM2-propagate forward/backward with no drift '
-             're-seeding and no iterative validation. Skips Phase 3/3b/4/5/5b/'
-             '6/7. Use this when DINO on the cluster is too slow and you are '
-             'OK with per-camera mask quality being determined by frame 0. '
-             'Cameras whose frame-0 seed fails are left with empty masks.')
-    parser.add_argument('--seed_frames', type=int, nargs='+', default=None,
-        help='Override the candidate frame indices used by --frame0_only. '
-             'For each camera the seeder tries every frame in this list and '
-             'keeps the highest mesh-similarity hit. Use this when the tool '
-             'is occluded / off-frame at frame 0 — e.g. "--seed_frames 0 60 '
-             '200 500". Default = just [0].')
-    parser.add_argument('--seed_min_mesh_sim', type=float, default=None,
-        help='Hard minimum on mesh_sim for a seed to be accepted in '
-             '--frame0_only mode. Tightening this (e.g. 0.40) rejects '
-             'low-confidence seeds that would otherwise lock onto the wrong '
-             'object — better to have an empty camera than a wrong-object '
-             'mask propagated through the whole sequence. Defaults to '
-             '--seed_min_sim if omitted.')
     parser.add_argument('--cameras', type=int, nargs='+', default=None,
         help='Only process these cameras (reuses existing masks.h5 for others)')
     parser.add_argument('--existing_masks', type=str, default=None,
@@ -1109,26 +942,6 @@ def main():
     parser.add_argument('--phase7_only', type=str, default=None,
         help='Standalone mode: path to existing masks.h5. Skip all propagation, '
              'only run Phase 7 cross-view refinement, save to output_dir/masks.h5.')
-    # ---- pipeline-format export (for run_mydata/run_task_folder integration) ----
-    parser.add_argument('--pipeline_tool_masks_dir', type=str, default=None,
-        help='If set, also export per-frame label-mask .npy files and '
-             'objects.yaml into this dir in the format the HO-Cap-Annotation '
-             'pipeline expects (tool_masks/cam{i}_rgb/{frame:04d}.npy). '
-             'generate_meta.py reads masks from here.')
-    parser.add_argument('--tool_name', type=str, default='tool',
-        help='Tool/object name, written into objects.yaml (single-object mode).')
-    parser.add_argument('--cam_serials', type=str, nargs='+', default=None,
-        help='Ordered list of camera serials (e.g. "00 01 02 03 04 05 06 07"). '
-             'Used to name camera subfolders as cam{serial}_rgb/ . If omitted, '
-             'falls back to integer index "cam{i}_rgb".')
-    parser.add_argument('--pipeline_mask_format', choices=['npz', 'npy', 'h5'], default='npz',
-        help='Layout for the pipeline-format mask export. '
-             "'npz' (default) writes per-frame compressed .npz under "
-             "cam*_rgb/ folders. 'npy' is the legacy uncompressed variant. "
-             "'h5' writes a single binary masks.h5 and skips per-frame files "
-             "entirely — saves ~15k inodes per exp on /viscam, and downstream "
-             "stages slice masks.h5 directly via generate_meta.py "
-             "--masks_h5_source.")
     args = parser.parse_args()
 
     t_start = time.time()
@@ -1147,13 +960,7 @@ def main():
     data_h5 = h5py.File(args.data_h5, 'r')
     N = data_h5['imgs'].shape[0]
     n_cams = data_h5['imgs'].shape[1]
-    # Override module-level H,W to match the actual H5 image resolution so
-    # masks_ds has the right shape (older defaults assumed 480x640, but cluster
-    # recordings are typically 720x1280).
-    global H, W
-    H = int(data_h5['imgs'].shape[2])
-    W = int(data_h5['imgs'].shape[3])
-    print(f'[INFO] {N} frames, {n_cams} cameras, image {H}x{W}')
+    print(f'[INFO] {N} frames, {n_cams} cameras')
 
     def _elapsed():
         return f'[{time.time() - t_start:.0f}s]'
@@ -1217,21 +1024,9 @@ def main():
         masks_h5.close()
         del dino, image_predictor; torch.cuda.empty_cache(); gc.collect()
 
-        (None if args.no_viz else print(f'\n{_elapsed()} === Generating visualizations ==='))
+        print(f'\n{_elapsed()} === Generating visualizations ===')
         viz_dir = output_dir / 'viz'
-        (print("  [skip viz] --no_viz set") if args.no_viz else visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video))
-        # Per-camera single-frame PNG export. Cheap (~1s), great for
-        # eyeballing whether DINO seeded correctly in every view. Goes next
-        # to masks.h5 in the pipeline export folder when given, else under
-        # viz_dir.
-        if not args.no_viz and not args.no_per_cam_viz:
-            _per_cam_dir = (Path(args.pipeline_tool_masks_dir) / 'viz_per_cam'
-                            if args.pipeline_tool_masks_dir is not None
-                            else viz_dir / 'per_cam')
-            save_per_cam_snapshots(
-                data_h5=data_h5, masks_path=masks_path, out_dir=_per_cam_dir,
-                frame_idx=args.per_cam_viz_frame, cam_serials=args.cam_serials,
-            )
+        visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video)
 
         data_h5.close()
         elapsed = time.time() - t_start
@@ -1261,146 +1056,10 @@ def main():
 
     seeds = {}
 
-    # ── Frame-0-only fast mode ───────────────────────────────────────
-    # Seed every camera using only frame 0 via the mesh DINOv2 reference,
-    # then SAM2-propagate with re-seeding disabled. Skips Phase 3–7.
-    if args.frame0_only:
-        # Candidate frames to seed from. Default is just frame 0. Pass
-        # --seed_frames "0 60 200 500" to look at multiple frames per camera
-        # and pick the highest-confidence hit — important when the tool is
-        # not visible at frame 0 in some cameras.
-        candidate_frames = list(args.seed_frames) if args.seed_frames else [0]
-        candidate_frames = sorted({fr for fr in candidate_frames if 0 <= fr < N})
-        # Hard mesh_sim floor — anything below is rejected as likely wrong-object.
-        mesh_sim_floor = args.seed_min_mesh_sim if args.seed_min_mesh_sim is not None else args.seed_min_sim
-        print(f'\n{_elapsed()} === frame0_only: seeding every camera (candidates={candidate_frames}, '
-              f'mesh_sim_floor={mesh_sim_floor:.2f}) ===')
-        for cam in range(n_cams):
-            best = None
-            for fr in candidate_frames:
-                result = mesh_dino_seed(
-                    dino, data_h5, cam, mesh_ref, image_predictor,
-                    frames=[fr],
-                    min_area=args.seed_min_area,
-                    max_area=args.seed_max_area,
-                    min_sim=args.seed_min_sim,
-                    first_hit=True)
-                if result is None:
-                    continue
-                if result['mesh_sim'] < mesh_sim_floor:
-                    print(f'  cam{cam} frame{fr}: rejected '
-                          f'(mesh_sim={result["mesh_sim"]:.3f} < floor {mesh_sim_floor:.2f}) — '
-                          f'avoids locking onto wrong object')
-                    continue
-                if best is None or result['mesh_sim'] > best['mesh_sim']:
-                    best = result
-            if best:
-                seeds[cam] = best
-                print(f'  cam{cam}: seed OK at frame {best["frame"]} '
-                      f'(area={best["area"]}, mesh_sim={best["mesh_sim"]:.3f})')
-            else:
-                print(f'  cam{cam}: seed FAILED on all candidates (mask left empty)')
-
-        if not seeds:
-            print('  ERROR: No camera produced a valid frame-0 seed.')
-            data_h5.close()
-            return
-
-        print(f'\n{_elapsed()} Loading SAM2 video predictor ...')
-        from hocap_annotation.wrappers.sam2 import build_sam2_video_predictor
-        video_predictor = build_sam2_video_predictor(
-            config_file=args.sam2_video_cfg, ckpt_path=args.sam2_ckpt, device='cuda:0')
-
-        masks_path = output_dir / 'masks.h5'
-        seeded_cams = sorted(seeds.keys())
-        extract_jpegs(data_h5, tmp_dir, seeded_cams)
-
-        masks_h5 = h5py.File(masks_path, 'w')
-        masks_ds = masks_h5.create_dataset(
-            'masks', shape=(N, n_cams, H, W),
-            dtype=np.uint8, chunks=(1, 1, H, W), compression='gzip')
-
-        print(f'\n{_elapsed()} === frame0_only: propagating (no re-seeding) ===')
-        # One global tqdm bar across every camera × every frame so progress
-        # shows up as a single line instead of one per chunk. Total budget =
-        # forward + backward frames per camera; for seed_frame=0 backward is 0.
-        from tqdm import tqdm
-        total_budget = sum(
-            (N - s['frame']) + max(0, s['frame']) for s in seeds.values()
-        )
-        with tqdm(total=total_budget, desc='SAM2 propagate',
-                  unit='fr', dynamic_ncols=True, mininterval=1.0) as pbar:
-            for cam in seeded_cams:
-                s = seeds[cam]
-                cam_dir = tmp_dir / f'cam{cam:02d}'
-                pbar.set_description(f'SAM2 propagate cam{cam}')
-                # drift_threshold=0.0 makes the drift check `area >= 0 * ref`
-                # always true, so propagate_camera never triggers a DINO re-seed.
-                written, reseeds = propagate_camera(
-                    video_predictor, cam_dir, s['mask'], s['frame'], N,
-                    masks_ds, cam,
-                    dino=None, image_predictor=None, global_ref=None, data_h5=None,
-                    ref_area=float(s['mask'].sum()),
-                    drift_threshold=0.0, chunk_size=args.chunk_size,
-                    pbar=pbar)
-                masks_h5.flush()
-                pbar.write(f'  cam{cam}: wrote {written} frames')
-
-        del dino, image_predictor, video_predictor
-        torch.cuda.empty_cache(); gc.collect()
-
-        meta = {f'cam{c}': {k: v for k, v in s.items() if k != 'mask'}
-                for c, s in seeds.items()}
-        with open(output_dir / 'seed_info.json', 'w') as fp:
-            json.dump(meta, fp, indent=2, default=str)
-        masks_h5.close()
-
-        if args.pipeline_tool_masks_dir is not None:
-            print(f'\n{_elapsed()} === Exporting to pipeline format ===')
-            export_pipeline_masks(
-                masks_path=masks_path,
-                out_dir=Path(args.pipeline_tool_masks_dir),
-                tool_name=args.tool_name,
-                cam_serials=args.cam_serials,
-                n_cams=n_cams,
-                n_frames=N,
-                fmt=args.pipeline_mask_format,
-            )
-
-        (None if args.no_viz else print(f'\n{_elapsed()} === Generating visualizations ==='))
-        viz_dir = output_dir / 'viz'
-        try:
-            (print("  [skip viz] --no_viz set") if args.no_viz else visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video))
-            # Per-camera single-frame PNG export. Cheap (~1s), great for
-            # eyeballing whether DINO seeded correctly in every view. Goes next
-            # to masks.h5 in the pipeline export folder when given, else under
-            # viz_dir.
-            if not args.no_viz and not args.no_per_cam_viz:
-                _per_cam_dir = (Path(args.pipeline_tool_masks_dir) / 'viz_per_cam'
-                                if args.pipeline_tool_masks_dir is not None
-                                else viz_dir / 'per_cam')
-                save_per_cam_snapshots(
-                    data_h5=data_h5, masks_path=masks_path, out_dir=_per_cam_dir,
-                    frame_idx=args.per_cam_viz_frame, cam_serials=args.cam_serials,
-                )
-        except Exception as e:
-            print(f'  [WARN] visualize failed: {e}')
-            print('         masks.h5 and pipeline-format masks are still valid.')
-
-        data_h5.close()
-        elapsed = time.time() - t_start
-        print(f'\n[DONE] frame0_only: {elapsed/60:.1f} min ({elapsed:.0f} sec)')
-        return
-
     if args.anchor_cams:
         print(f'  Forced anchors: {args.anchor_cams}')
         for cam in args.anchor_cams:
-            result = mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor,
-                                      scan_every=args.mesh_scan_every,
-                                      min_area=args.seed_min_area,
-                                      max_area=args.seed_max_area,
-                                      min_sim=args.seed_min_sim,
-                                      first_hit=args.seed_fast)
+            result = mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor)
             if result:
                 seeds[cam] = result
                 print(f'  cam{cam}: seed OK (frame={result["frame"]}, area={result["area"]}, '
@@ -1412,12 +1071,7 @@ def main():
         all_results = {}
         for cam in range(n_cams):
             print(f'  {_elapsed()} cam{cam}: scanning frames...')
-            result = mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor,
-                                      scan_every=args.mesh_scan_every,
-                                      min_area=args.seed_min_area,
-                                      max_area=args.seed_max_area,
-                                      min_sim=args.seed_min_sim,
-                                      first_hit=args.seed_fast)
+            result = mesh_dino_seed(dino, data_h5, cam, mesh_ref, image_predictor)
             if result:
                 all_results[cam] = result
                 print(f'    cam{cam}: score={result["score"]:.4f} frame={result["frame"]} '
@@ -1577,9 +1231,7 @@ def main():
         print(f'\n  {_elapsed()} [Phase 4] Seeding {len(cams_to_process)} cameras via dense DINOv2 scan...')
         for cam in cams_to_process:
             result = dense_dino_seed(dino, data_h5, cam, global_ref, ref_feats,
-                                      image_predictor, ref_median_area=ref_median_area,
-                                      scan_every=args.dense_scan_every,
-                                      first_hit=args.seed_fast)
+                                      image_predictor, ref_median_area=ref_median_area)
             if result:
                 seeds[cam] = result
                 print(f'    cam{cam}: seed at frame {result["frame"]} '
@@ -1747,131 +1399,13 @@ def main():
         print('  Check visualizations and consider adjusting --min_area/--max_area/--min_sim')
 
     # ── Visualize ────────────────────────────────────────────────────
-    # ── Pipeline-format export (runs BEFORE viz so a viz failure doesn't skip it) ──
-    if args.pipeline_tool_masks_dir is not None:
-        print(f'\n{_elapsed()} === Exporting to pipeline format ===')
-        export_pipeline_masks(
-            masks_path=masks_path,
-            out_dir=Path(args.pipeline_tool_masks_dir),
-            tool_name=args.tool_name,
-            cam_serials=args.cam_serials,
-            n_cams=n_cams,
-            n_frames=N,
-            fmt=args.pipeline_mask_format,
-        )
-
-    (None if args.no_viz else print(f'\n{_elapsed()} === Generating visualizations ==='))
+    print(f'\n{_elapsed()} === Generating visualizations ===')
     viz_dir = output_dir / 'viz'
-    try:
-        (print("  [skip viz] --no_viz set") if args.no_viz else visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video))
-        # Per-camera single-frame PNG export. Cheap (~1s), great for
-        # eyeballing whether DINO seeded correctly in every view. Goes next
-        # to masks.h5 in the pipeline export folder when given, else under
-        # viz_dir.
-        if not args.no_viz and not args.no_per_cam_viz:
-            _per_cam_dir = (Path(args.pipeline_tool_masks_dir) / 'viz_per_cam'
-                            if args.pipeline_tool_masks_dir is not None
-                            else viz_dir / 'per_cam')
-            save_per_cam_snapshots(
-                data_h5=data_h5, masks_path=masks_path, out_dir=_per_cam_dir,
-                frame_idx=args.per_cam_viz_frame, cam_serials=args.cam_serials,
-            )
-    except Exception as e:
-        print(f'  [WARN] visualize failed: {e}')
-        print('         masks.h5 and pipeline-format masks are still valid.')
+    visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video)
 
     data_h5.close()
     elapsed = time.time() - t_start
     print(f'\n[DONE] Total time: {elapsed/60:.1f} min ({elapsed:.0f} sec)')
-
-
-def export_pipeline_masks(masks_path, out_dir, tool_name, cam_serials, n_cams, n_frames,
-                           fmt='npz'):
-    """Export a binary masks.h5 into the layout that
-    HO-Cap-Annotation/preprocess/generate_meta.py consumes.
-
-    fmt:
-      'npz' (default) -> np.savez_compressed per-frame files, typically
-              20-100x smaller than .npy for binary masks. generate_meta.py
-              streams these into masks.h5.
-      'npy' -> legacy uncompressed per-frame files.
-      'h5'  -> NO per-frame files. Just place a single canonical
-              <out_dir>/masks.h5 (a binarised copy of the input masks_path)
-              + <out_dir>/objects.yaml. Massively cuts inode usage on the
-              shared filesystem (1864 frames × 8 cams = 15k npz per exp →
-              just 2 files), and downstream stages already accept masks.h5
-              directly via generate_meta.py --masks_h5_source.
-
-    Single-object only — dino_tool_segment.py produces one-tool binary masks.
-    """
-    assert fmt in ('npz', 'npy', 'h5'), f"fmt must be 'npz', 'npy', or 'h5', got {fmt}"
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # ---- 'h5' fast path: copy + binarise masks.h5, skip per-frame writes ----
-    if fmt == 'h5':
-        dest = out_dir / 'masks.h5'
-        # Stream-copy with binarisation (label 1 for the tool object so that
-        # downstream `mask == (object_idx + 1)` lookups match object_idx 0).
-        with h5py.File(masks_path, 'r') as fin, h5py.File(dest, 'w') as fout:
-            ds_in = fin['masks']
-            ds_out = fout.create_dataset(
-                'masks', shape=ds_in.shape, dtype=np.uint8,
-                chunks=(1, 1, ds_in.shape[2], ds_in.shape[3]),
-                compression='gzip',
-            )
-            CHUNK = 16   # copy in 16-frame chunks to keep RAM bounded
-            for i in range(0, ds_in.shape[0], CHUNK):
-                j = min(i + CHUNK, ds_in.shape[0])
-                ds_out[i:j] = (ds_in[i:j] > 0).astype(np.uint8)
-        print(f'  masks.h5: {dest}  shape={ds_in.shape}  (h5_only, no per-frame files)')
-
-        with open(out_dir / 'objects.yaml', 'w') as fp:
-            yaml.safe_dump({'objects': [tool_name]}, fp)
-        print(f'  objects.yaml: [{tool_name}]')
-        print(f'  pipeline masks ready at {out_dir}')
-        return
-
-    # Camera subfolder naming: prefer serial (e.g., '00'), else integer index.
-    def _cam_folder_name(i):
-        if cam_serials is not None and i < len(cam_serials):
-            s = str(cam_serials[i]).zfill(2)
-            return f'cam{s}_rgb'
-        return f'cam{i}_rgb'
-
-    with h5py.File(masks_path, 'r') as mf:
-        masks = mf['masks']     # (N, n_cams, H, W) uint8, 0 or 1
-        for cam in range(n_cams):
-            cam_dir = out_dir / _cam_folder_name(cam)
-            cam_dir.mkdir(parents=True, exist_ok=True)
-            # Clean up stale files from the OTHER format so generate_meta
-            # doesn't accidentally read a mismatched one.
-            other_ext = 'npy' if fmt == 'npz' else 'npz'
-            for old in cam_dir.glob(f'*.{other_ext}'):
-                old.unlink()
-            written = 0
-            total_bytes = 0
-            for fr in range(n_frames):
-                m = masks[fr, cam]
-                # Ensure binary with value 1 for the single tool object so that
-                # `mask == (object_idx + 1)` lookups work (object_idx 0 -> 1).
-                m = (m > 0).astype(np.uint8)
-                if fmt == 'npz':
-                    out = cam_dir / f'{fr:04d}.npz'
-                    np.savez_compressed(out, mask=m)
-                else:
-                    out = cam_dir / f'{fr:04d}.npy'
-                    np.save(out, m)
-                total_bytes += out.stat().st_size
-                written += 1
-            avg_kb = total_bytes / max(written, 1) / 1024.0
-            print(f'  cam{cam}: {written} frames ({fmt}, avg {avg_kb:.1f} KB/frame) '
-                  f'-> {cam_dir.name}/')
-
-    with open(out_dir / 'objects.yaml', 'w') as fp:
-        yaml.safe_dump({'objects': [tool_name]}, fp)
-    print(f'  objects.yaml: [{tool_name}]')
-    print(f'  pipeline masks ready at {out_dir}')
 
 
 def repair_masks():
@@ -2087,18 +1621,9 @@ def repair_masks():
     torch.cuda.empty_cache(); gc.collect()
 
     # Visualize
-    (None if args.no_viz else print(f'\n{_elapsed()} === Generating visualizations ==='))
+    print(f'\n{_elapsed()} === Generating visualizations ===')
     viz_dir = Path(args.output_dir) / 'viz'
-    (print("  [skip viz] --no_viz set") if args.no_viz else visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video))
-    # Per-camera single-frame PNGs (uses getattr for back-compat with the
-    # standalone repair_masks subcommand whose parser may predate these flags).
-    if not args.no_viz and not getattr(args, 'no_per_cam_viz', False):
-        save_per_cam_snapshots(
-            data_h5=data_h5, masks_path=masks_path,
-            out_dir=viz_dir / 'per_cam',
-            frame_idx=getattr(args, 'per_cam_viz_frame', 0),
-            cam_serials=getattr(args, 'cam_serials', None),
-        )
+    visualize(data_h5, masks_path, viz_dir, make_video=not args.no_video)
 
     masks_h5.close()
     data_h5.close()
