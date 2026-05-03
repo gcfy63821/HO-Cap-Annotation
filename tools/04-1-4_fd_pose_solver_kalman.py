@@ -300,6 +300,26 @@ def run_tracking_with_kalman_and_integration(
             f"means the OBJ uses point-cloud / line / sub-mesh layout that "
             f"trimesh couldn't parse — try a different mesh file."
         )
+    # Sanity: face indices in-bounds + no NaN/Inf vertices. nvdiffrast
+    # silently triggers `CUDA error 700: illegal memory access` deep inside
+    # the rasterize kernel when these invariants are broken — far better to
+    # die here with a readable message than to debug rc=1 across slurm logs.
+    _V = np.asarray(mesh.vertices)
+    _F = np.asarray(mesh.faces)
+    if _F.size and (_F.max() >= len(_V) or _F.min() < 0):
+        raise RuntimeError(
+            f"mesh has out-of-bounds face indices: max={_F.max()}, "
+            f"min={_F.min()}, but only {len(_V)} vertices. "
+            f"File: {mesh_path}\n"
+            f"  Run trimesh.load(path).remove_unreferenced_vertices() and "
+            f"re-export, or pick a different mesh file."
+        )
+    if np.isnan(_V).any() or np.isinf(_V).any():
+        raise RuntimeError(
+            f"mesh has NaN/Inf in vertices: {mesh_path}\n"
+            f"  This will crash nvdiffrast — clean the mesh in Blender / "
+            f"trimesh and re-export."
+        )
     if len(mesh.vertices) > 200000:
         mesh = mesh.simplify_quadric_decimation(0.8)
         print("[INFO] Mesh decimated due to high vertex count.")
