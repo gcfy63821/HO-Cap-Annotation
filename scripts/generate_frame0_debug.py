@@ -46,8 +46,14 @@ Common flags:
 """
 
 import argparse
+import atexit
+import getpass
 import multiprocessing as mp
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -55,6 +61,11 @@ from pathlib import Path
 import cv2
 import h5py
 import numpy as np
+
+
+# Resolve once at import time (used by per-exp temp h5 paths)
+HOCAP_ROOT = Path(__file__).resolve().parent.parent
+CONVERT_SCRIPT = HOCAP_ROOT / "tools" / "00_convert_videos_to_h5.py"
 
 
 # ============================================================
@@ -114,6 +125,43 @@ def read_first_rgb_from_mp4(mp4_path: Path):
     if not ok or bgr is None:
         return None
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def build_temp_frame0_h5(exp_dir: Path, scratch_dir: Path) -> Path:
+    """Run tools/00_convert_videos_to_h5.py for frame 0 only, output into
+    scratch_dir (typically /dev/shm). Returns the resulting h5 path, or
+    raises RuntimeError if conversion failed.
+
+    This is exactly the same conversion code path the production pipeline
+    uses (via run_auto_annotator → 00_convert_videos_to_h5.py), so the
+    resulting h5 reflects how downstream stages would see frame 0. If
+    something looks wrong in the debug image (BGR/RGB swap, off-by-one
+    frame, depth all zero) the bug is in the conversion code, not in this
+    debug tool.
+    """
+    if not CONVERT_SCRIPT.exists():
+        raise RuntimeError(f"convert script not found: {CONVERT_SCRIPT}")
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    # Unique filename per exp so concurrent workers don't collide.
+    safe_name = f"{exp_dir.parent.name}__{exp_dir.name}__frame0.h5".replace("/", "_")
+    out_path = scratch_dir / safe_name
+    if out_path.exists():
+        out_path.unlink()
+    cmd = [
+        sys.executable, "-u", str(CONVERT_SCRIPT),
+        "--input_dir", str(exp_dir),
+        "--output_file", str(out_path),
+        "--start_frame", "0",
+        "--end_frame", "0",  # inclusive — gives a 1-frame h5
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0 or not out_path.exists():
+        raise RuntimeError(
+            f"00_convert_videos_to_h5.py failed for {exp_dir}\n"
+            f"  cmd: {' '.join(cmd)}\n"
+            f"  stderr (tail):\n{proc.stderr[-500:] if proc.stderr else '<empty>'}"
+        )
+    return out_path
 
 
 def read_first_rgb_from_h5(data_h5_path: Path, cam_idx: int):
@@ -242,14 +290,22 @@ def label_image(img, text, scale=0.7):
 
 
 def make_exp_mosaic(exp_dir: Path, ann_exp_dir: Path, max_width=2400,
-                     rgb_source="h5"):
+                     rgb_source="h5", scratch_dir: Path = None):
     """Render the n_cams × 2 mosaic for this exp.
 
     rgb_source:
-      'h5'  (default) — read RGB from data00000000.h5 imgs[0]; this is what
-                        downstream tools see, so what you see is what they see.
-                        Falls back to mp4 if data h5 is missing.
+      'h5'  (default) — read RGB from a frame-0 h5; this is what downstream
+                        tools see, so what you see is what they see.
       'mp4'           — read RGB direct from cam*_rgb.mp4 first frame.
+
+    Frame-0 h5 source priority:
+      1. <exp>/data00000000.h5 if it already exists (cheap)
+      2. Build a fresh 1-frame h5 in scratch_dir (default /dev/shm/$USER/...)
+         via tools/00_convert_videos_to_h5.py — this exercises the SAME
+         conversion code the pipeline uses, so the panel reflects the real
+         h5 the tracker sees. The temp h5 is removed after the exp.
+      3. If conversion fails entirely, depth panel falls back to magenta
+         "NO DEPTH" placeholder; RGB falls back to mp4.
 
     Returns RGB uint8 (Ht, Wt, 3) or None on failure.
     """
@@ -257,7 +313,25 @@ def make_exp_mosaic(exp_dir: Path, ann_exp_dir: Path, max_width=2400,
     if not rgb_videos:
         return None
     masks_h5 = ann_exp_dir / "tool_masks" / "masks.h5"
-    data_h5  = exp_dir / "data00000000.h5"
+
+    # Resolve the data h5 for this exp: prefer existing, else build fresh
+    # in scratch (/dev/shm) and clean up at the end.
+    permanent_h5 = exp_dir / "data00000000.h5"
+    data_h5 = None
+    temp_h5_built = False
+    if permanent_h5.exists():
+        data_h5 = permanent_h5
+    elif scratch_dir is not None:
+        try:
+            data_h5 = build_temp_frame0_h5(exp_dir, scratch_dir)
+            temp_h5_built = True
+        except Exception as e:
+            print(f"  [WARN] {exp_dir.name}: temp h5 build failed: {e}")
+            data_h5 = None
+    # data_h5 is now either: existing h5, freshly-built scratch h5, or None
+    if data_h5 is None:
+        # Sentinel: load_*_from_h5 helpers return None when this is missing.
+        data_h5 = permanent_h5
 
     rows = []
     for cam_idx, mp4 in enumerate(rgb_videos):
@@ -284,8 +358,18 @@ def make_exp_mosaic(exp_dir: Path, ann_exp_dir: Path, max_width=2400,
         # depth
         depth = load_depth_frame0(data_h5, cam_idx)
         if depth is None:
-            depth_panel = np.zeros((H, W, 3), dtype=np.uint8)
-            label_image(depth_panel, "no depth (data h5 missing)")
+            # Distinct loud color so it's instantly obvious which panels
+            # don't have data, instead of a black square that the user
+            # might mistake for a depth bug.
+            reason = ("data00000000.h5 missing"
+                      if not data_h5.exists()
+                      else "data h5 has no 'depths' key (or read failed)")
+            depth_panel = np.full((H, W, 3), (60, 0, 60), dtype=np.uint8)
+            # Two-line label
+            label_image(depth_panel, f"NO DEPTH — {reason}", scale=0.7)
+            cv2.putText(depth_panel,
+                        f"({data_h5.name})",
+                        (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,200), 1)
         else:
             depth_panel, (lo_used, hi_used) = colorize_depth(depth)
             valid = depth > 0
@@ -299,10 +383,21 @@ def make_exp_mosaic(exp_dir: Path, ann_exp_dir: Path, max_width=2400,
                             f"colormap {lo_used:.2f}-{hi_used:.2f}m  "
                             f"(magenta=invalid)")
             else:
-                label_image(depth_panel, "depth h5  (all zero!)")
+                # Even all-zero depth → fill with bright color, not black.
+                depth_panel = np.full((H, W, 3), (60, 0, 60), dtype=np.uint8)
+                label_image(depth_panel,
+                            "depth h5 ALL ZERO — sensor/conversion issue?")
         # concatenate side-by-side
         row = np.concatenate([color_panel, depth_panel], axis=1)
         rows.append(row)
+
+    # Clean up the temp h5 we built in /dev/shm (other path: existing
+    # permanent h5 — leave it alone).
+    if temp_h5_built and data_h5 is not None and data_h5.exists():
+        try:
+            data_h5.unlink()
+        except Exception:
+            pass
 
     if not rows:
         return None
@@ -323,22 +418,25 @@ def make_exp_mosaic(exp_dir: Path, ann_exp_dir: Path, max_width=2400,
 # ============================================================
 
 def render_one(args_tuple):
-    task, exp, exp_dir, ann_exp_dir, force, max_width, rgb_source = args_tuple
+    task, exp, exp_dir, ann_exp_dir, force, max_width, rgb_source, scratch_dir = args_tuple
     out_dir = ann_exp_dir / "debug"
     out_path = out_dir / "frame0_debug.png"
     if out_path.exists() and not force:
-        return (task, exp, "skip", str(out_path))
+        return (task, exp, "skip", str(out_path), False)
     try:
         mosaic = make_exp_mosaic(exp_dir, ann_exp_dir, max_width=max_width,
-                                  rgb_source=rgb_source)
+                                  rgb_source=rgb_source,
+                                  scratch_dir=Path(scratch_dir) if scratch_dir else None)
         if mosaic is None:
-            return (task, exp, "fail:no-rgb", "")
+            return (task, exp, "fail:no-rgb", "", False)
         out_dir.mkdir(parents=True, exist_ok=True)
         bgr = cv2.cvtColor(mosaic, cv2.COLOR_RGB2BGR)
         cv2.imwrite(str(out_path), bgr)
-        return (task, exp, "ok", str(out_path))
+        # Side-channel: did this exp have a permanent h5 (vs. needing scratch)?
+        had_permanent_h5 = (exp_dir / "data00000000.h5").exists()
+        return (task, exp, "ok", str(out_path), not had_permanent_h5)
     except Exception as e:
-        return (task, exp, f"fail:{type(e).__name__}: {e}", "")
+        return (task, exp, f"fail:{type(e).__name__}: {e}", "", False)
 
 
 # ============================================================
@@ -373,7 +471,36 @@ def main():
                          "useful for verifying the mp4→h5 conversion is "
                          "correct. 'mp4' reads from cam*_rgb.mp4 directly "
                          "(bypasses h5; useful only if you want a reference).")
+    ap.add_argument("--scratch_dir", type=str, default=None,
+                    help="Directory for ephemeral 1-frame h5s built when an "
+                         "exp doesn't have a permanent data00000000.h5. "
+                         "Default: /dev/shm/$USER/frame0_debug_$$ (tmpfs; "
+                         "fast and auto-freed at script exit). Pass "
+                         "--no_temp_h5 to disable temp-h5 building entirely.")
+    ap.add_argument("--no_temp_h5", action="store_true",
+                    help="Don't auto-build a 1-frame h5 in scratch when the "
+                         "exp lacks one. Then depth panels for those exps "
+                         "show the magenta 'NO DEPTH' placeholder.")
     args = ap.parse_args()
+
+    # ---- Resolve scratch dir + register cleanup ----
+    if args.no_temp_h5:
+        scratch_dir = None
+    else:
+        if args.scratch_dir:
+            scratch_dir = Path(args.scratch_dir).resolve()
+        else:
+            user = getpass.getuser()
+            scratch_dir = Path("/dev/shm") / user / f"frame0_debug_{os.getpid()}"
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+
+        def _cleanup_scratch():
+            try:
+                if scratch_dir and scratch_dir.exists():
+                    shutil.rmtree(scratch_dir, ignore_errors=True)
+            except Exception:
+                pass
+        atexit.register(_cleanup_scratch)
 
     videos_root = Path(args.videos_root).resolve()
     if not videos_root.is_dir():
@@ -400,23 +527,31 @@ def main():
           f"(skipped {n_skip_unfinished} unfinished)" if not args.include_unfinished
           else f"[INFO] all exps         = {len(exps)}   (--include_unfinished)")
     print(f"[INFO] rgb source       = {args.rgb_source}")
+    print(f"[INFO] scratch_dir      = {scratch_dir if scratch_dir else '<disabled (--no_temp_h5)>'}")
     print(f"[INFO] jobs             = {args.jobs}   force={args.force}")
     print()
 
-    work = [(t, e, ed, aed, args.force, args.max_width, args.rgb_source)
+    sd_str = str(scratch_dir) if scratch_dir else None
+    work = [(t, e, ed, aed, args.force, args.max_width, args.rgb_source, sd_str)
             for (t, e, ed, aed) in exps]
     t0 = time.time()
     n_ok = n_skip = n_fail = 0
+    no_depth_exps = []
     if args.jobs <= 1:
         results = (render_one(w) for w in work)
     else:
         pool = mp.Pool(processes=args.jobs)
         results = pool.imap_unordered(render_one, work, chunksize=1)
-    for i, (task, exp, status, path) in enumerate(results, 1):
+    for i, (task, exp, status, path, used_temp_h5) in enumerate(results, 1):
         prefix = f"[{i:>4d}/{len(work)}]"
         if status == "ok":
             n_ok += 1
-            print(f"{prefix} OK    {task}/{exp}  →  {path}")
+            tag = ("  [built 1-frame h5 in scratch]" if (used_temp_h5 and scratch_dir is not None)
+                   else "  [no data h5 → magenta depth panel]" if used_temp_h5
+                   else "")
+            print(f"{prefix} OK    {task}/{exp}  →  {path}{tag}")
+            if used_temp_h5:
+                no_depth_exps.append(f"{task}/{exp}")
         elif status == "skip":
             n_skip += 1
             print(f"{prefix} skip  {task}/{exp}  (already exists)")
@@ -431,7 +566,22 @@ def main():
     print("=" * 60)
     print(f"Summary: ok={n_ok}  skip={n_skip}  fail={n_fail}   "
           f"elapsed={elapsed:.1f}s ({len(work)/max(elapsed,1e-6):.1f} exps/s)")
-    print(f"Browse with: python scripts/browse_frame0_debug.py --videos_root {videos_root}")
+    if no_depth_exps:
+        if scratch_dir is not None:
+            print(f"\n[!] {len(no_depth_exps)} exp(s) had no permanent data00000000.h5 — "
+                  f"a 1-frame h5 was built in scratch ({scratch_dir}) for the "
+                  f"depth panel and removed after rendering. The depth you see "
+                  f"is exactly what tools/00_convert_videos_to_h5.py produces "
+                  f"so any visual oddity = real conversion bug.")
+        else:
+            print(f"\n[!] {len(no_depth_exps)} exp(s) have NO data00000000.h5 and "
+                  f"--no_temp_h5 was passed; their depth panel is magenta. "
+                  f"Drop --no_temp_h5 to auto-build a frame-0 h5 in /dev/shm.")
+        for e in no_depth_exps[:5]:
+            print(f"      - {e}")
+        if len(no_depth_exps) > 5:
+            print(f"      ... and {len(no_depth_exps) - 5} more")
+    print(f"\nBrowse with: python scripts/browse_frame0_debug.py --videos_root {videos_root}")
     print("=" * 60)
 
 
