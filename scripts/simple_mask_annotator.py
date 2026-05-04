@@ -61,12 +61,7 @@ STATE = {
     "n_cams": 0, "H": 0, "W": 0, "n_frames": 0,
     "rgbs": None,           # (n_cams, H, W, 3) uint8 RGB at frame 0
     "existing_masks": None, # (n_cams, H, W) uint8 or None
-    "seeds": None,          # current per-cam seed (n_cams items, each (H,W) uint8)
     "clicks": None,         # list[ list[{"x":int,"y":int,"label":int}] ] per cam
-    "image_predictor": None,
-    "image_predictor_cam": None,
-    "sam2_checkpoint": None,
-    "sam2_model_cfg": None,
 }
 LOCK = threading.Lock()
 
@@ -256,48 +251,6 @@ def _upsert_redo_log(annotated_root: Path, entry: dict):
 
 
 # ============================================================
-# SAM2 lazy build
-# ============================================================
-
-def _ensure_image_predictor():
-    with LOCK:
-        if STATE["image_predictor"] is not None:
-            return STATE["image_predictor"]
-    print("[sam2] building image predictor ...", flush=True)
-    import torch
-    from sam2.build_sam import build_sam2
-    from sam2.sam2_image_predictor import SAM2ImagePredictor
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = build_sam2(STATE["sam2_model_cfg"], STATE["sam2_checkpoint"], device=device)
-    pred = SAM2ImagePredictor(model)
-    with LOCK:
-        STATE["image_predictor"] = pred
-    return pred
-
-
-def _refine_with_clicks(cam: int):
-    pred = _ensure_image_predictor()
-    with LOCK:
-        rgb = STATE["rgbs"][cam].copy()
-        clicks = list(STATE["clicks"][cam])
-        cur = STATE["image_predictor_cam"]
-    if cur != cam:
-        pred.set_image(rgb)
-        with LOCK:
-            STATE["image_predictor_cam"] = cam
-    if not clicks:
-        return None
-    pts = np.array([[c["x"], c["y"]] for c in clicks], dtype=np.float32)
-    lbls = np.array([c["label"] for c in clicks], dtype=np.int32)
-    masks, _, _ = pred.predict(point_coords=pts, point_labels=lbls,
-                                  multimask_output=False)
-    m = masks[0].astype(np.uint8)
-    with LOCK:
-        STATE["seeds"][cam] = m
-    return m
-
-
-# ============================================================
 # Flask
 # ============================================================
 
@@ -361,9 +314,6 @@ def api_select_exp():
     cap.release()
 
     existing = load_existing_frame0_masks(ann_dir, n_cams)
-    seeds = ([existing[i].copy() for i in range(n_cams)]
-              if existing is not None
-              else [np.zeros((H, W), np.uint8) for _ in range(n_cams)])
 
     # Try to load any previously-saved prompts for this exp so the user
     # can iterate without losing prior clicks.
@@ -385,20 +335,8 @@ def api_select_exp():
             exp_folder=exp_folder, ann_dir=ann_dir,
             n_cams=n_cams, H=H, W=W, n_frames=n_frames,
             rgbs=rgbs, existing_masks=existing,
-            seeds=seeds, clicks=prev_clicks,
-            image_predictor_cam=None,
+            clicks=prev_clicks,
         )
-
-    # Refresh SAM2 mask for any cam with stored clicks (so the UI reflects
-    # what the saved prompts produce, not just the existing h5 mask).
-    refreshed = []
-    for cam in range(n_cams):
-        if prev_clicks[cam]:
-            try:
-                _refine_with_clicks(cam)
-                refreshed.append(cam)
-            except Exception as e:
-                print(f"[WARN] refresh sam2 cam={cam}: {e}")
 
     return jsonify({
         "task": task, "exp": exp_name,
@@ -406,33 +344,35 @@ def api_select_exp():
         "has_existing_masks": existing is not None,
         "has_prompts": prompts_path.exists(),
         "n_clicks_per_cam": [len(c) for c in prev_clicks],
-        "refreshed_cams": refreshed,
     })
 
 
 @app.route("/api/cam/<int:cam>")
 def api_cam(cam):
-    """Render cam's frame 0 with current seed + click markers."""
+    """Render cam's frame 0 with the existing tool_masks/masks.h5 frame-0
+    mask (if any) + the user's click markers. NO SAM2 inference happens
+    here — the interactive tool only records clicks. SAM2 reruns these
+    later in scripts/batch_redo_masks.py."""
     with LOCK:
         if STATE["rgbs"] is None or cam < 0 or cam >= STATE["n_cams"]:
             return "no exp loaded", 400
         rgb = STATE["rgbs"][cam].copy()
-        seed = STATE["seeds"][cam]
         clicks = list(STATE["clicks"][cam])
         existing = STATE["existing_masks"]
-    show_existing = request.args.get("existing", "0") == "1"
-    base_mask = (existing[cam] if (show_existing and existing is not None) else seed)
+    base_mask = existing[cam] if existing is not None else None
     img = overlay(rgb, base_mask)
     draw_clicks(img, clicks)
-    cv2.putText(img, f"cam{cam}  area={int(base_mask.sum())}  clicks={len(clicks)}",
+    area = int(base_mask.sum()) if base_mask is not None else 0
+    cv2.putText(img, f"cam{cam}  existing_area={area}  clicks={len(clicks)}",
                 (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
-    cv2.putText(img, f"cam{cam}  area={int(base_mask.sum())}  clicks={len(clicks)}",
+    cv2.putText(img, f"cam{cam}  existing_area={area}  clicks={len(clicks)}",
                 (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
     return _jpg(img)
 
 
 @app.route("/api/click", methods=["POST"])
 def api_click():
+    """Record a click. No SAM2 — just store the (x, y, label) tuple."""
     payload = request.get_json(silent=True) or {}
     cam = int(payload.get("cam", -1))
     x = int(payload.get("x", -1))
@@ -442,13 +382,8 @@ def api_click():
         if STATE["rgbs"] is None or cam < 0 or cam >= STATE["n_cams"]:
             return jsonify({"error": "bad cam"}), 400
         STATE["clicks"][cam].append({"x": x, "y": y, "label": label})
-    try:
-        _refine_with_clicks(cam)
-    except Exception as e:
-        return jsonify({"error": f"sam2 image predictor failed: {e}"}), 500
-    with LOCK:
-        return jsonify({"ok": True, "n_clicks": len(STATE["clicks"][cam]),
-                          "seed_area": int(STATE["seeds"][cam].sum())})
+        n = len(STATE["clicks"][cam])
+    return jsonify({"ok": True, "n_clicks": n})
 
 
 @app.route("/api/reset_clicks", methods=["POST"])
@@ -459,13 +394,6 @@ def api_reset():
         if cam < 0 or cam >= STATE["n_cams"]:
             return jsonify({"error": "bad cam"}), 400
         STATE["clicks"][cam] = []
-        # Revert seed to existing mask if any, else zeros.
-        if STATE["existing_masks"] is not None:
-            STATE["seeds"][cam] = STATE["existing_masks"][cam].copy()
-        else:
-            STATE["seeds"][cam] = np.zeros((STATE["H"], STATE["W"]), np.uint8)
-        if STATE["image_predictor_cam"] == cam:
-            STATE["image_predictor_cam"] = None
     return jsonify({"ok": True})
 
 
@@ -543,7 +471,6 @@ def api_state():
             "task": STATE["task"], "exp": STATE["exp"],
             "n_cams": STATE["n_cams"], "H": STATE["H"], "W": STATE["W"],
             "n_clicks_per_cam": [len(c) for c in (STATE["clicks"] or [])],
-            "seed_areas": [int(s.sum()) for s in (STATE["seeds"] or [])],
         })
 
 
@@ -585,7 +512,7 @@ INDEX_HTML = r"""<!doctype html>
 <div class="row">
   <input id="vroot" type="text" placeholder="/viscam/.../videos_0102" style="width:480px">
   <button id="btnload">Load videos_root</button>
-  <label><input id="show_existing" type="checkbox"> show existing mask</label>
+  <span style="color:#888;font-size:11px">click left=+ / right=−. tiles show existing tool_masks/masks.h5 frame-0 mask + your click dots; SAM2 will re-run later in batch_redo_masks.py.</span>
 </div>
 <div id="status"></div>
 
@@ -610,7 +537,7 @@ INDEX_HTML = r"""<!doctype html>
 </div>
 
 <script>
-let STATE = { exps: [], cur: null, ncams: 0, showExisting: false };
+let STATE = { exps: [], cur: null, ncams: 0 };
 
 function setStatus(msg) { document.getElementById('status').textContent = msg || ''; }
 
@@ -687,18 +614,12 @@ function buildGrid() {
 
 function refreshTile(cam) {
   const ts = Date.now();
-  const ex = STATE.showExisting ? '1' : '0';
-  document.getElementById(`tile_${cam}`).src = `/api/cam/${cam}?existing=${ex}&t=${ts}`;
+  document.getElementById(`tile_${cam}`).src = `/api/cam/${cam}?t=${ts}`;
 }
 
 function refreshAllTiles() {
   for (let i = 0; i < STATE.ncams; i++) refreshTile(i);
 }
-
-document.getElementById('show_existing').addEventListener('change', e => {
-  STATE.showExisting = e.target.checked;
-  refreshAllTiles();
-});
 
 async function onTileClick(e, cam) {
   if (e.button !== 0 && e.button !== 2) return;
@@ -778,20 +699,7 @@ def main():
                     help="Bind host. 127.0.0.1 = SSH-tunnel only. 0.0.0.0 = LAN.")
     ap.add_argument("--videos_root", default="",
                     help="Optional pre-fill in the form.")
-    ap.add_argument("--sam2_checkpoint", type=str,
-                    default=os.environ.get(
-                        "SAM2_CKPT",
-                        os.environ.get(
-                            "SAM2_ROOT",
-                            "/viscam/u/chenrq/crq_ws/robotool/sam2",
-                        ) + "/checkpoints/sam2.1_hiera_large.pt"
-                    ))
-    ap.add_argument("--sam2_model_cfg", type=str,
-                    default="configs/sam2.1/sam2.1_hiera_l.yaml")
     args = ap.parse_args()
-
-    STATE["sam2_checkpoint"] = args.sam2_checkpoint
-    STATE["sam2_model_cfg"] = args.sam2_model_cfg
 
     if args.videos_root:
         global INDEX_HTML
@@ -801,10 +709,9 @@ def main():
 
     print(f"[simple_mask_annotator] http://{args.host}:{args.port}/")
     print(f"  ssh tunnel: ssh -L {args.port}:localhost:{args.port} <cluster>")
-    print(f"  sam2 ckpt:  {args.sam2_checkpoint}")
-    print(f"  sam2 cfg:   {args.sam2_model_cfg}")
-    print(f"  NOTE: this tool ONLY records prompts. To regenerate masks.h5, "
-          f"run scripts/batch_redo_masks.py --videos_root <root> after.")
+    print(f"  NOTE: this tool ONLY records click prompts. No SAM2 runs here. "
+          f"To actually regenerate masks.h5, run "
+          f"scripts/batch_redo_masks.py --videos_root <root> afterwards.")
     app.run(host=args.host, port=args.port, debug=False, threaded=True)
 
 
