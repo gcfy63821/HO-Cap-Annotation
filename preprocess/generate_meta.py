@@ -398,11 +398,63 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
             expected_W=img_W,
         )
     else:
-        # Stream per-frame masks straight into masks.h5 instead of building a
-        # giant in-RAM (N, n_cams, H, W) array (~14 GB for 1923 frames @720p×8).
-        stream_masks_folder_to_h5(
-            mask_root_dir, masks_h5_path, num_frames, num_cams,
-            expected_H=img_H, expected_W=img_W, start_frame=start_frame)
+        # Auto-fallback: if there are NO per-frame npz/npy under cam*_rgb/
+        # (which is the case when masks.h5 was produced directly by
+        # batch_task_annotator.py / DINO --pipeline_mask_format=h5), but a
+        # masks.h5 already sits at the canonical destination, treat THAT as
+        # the source instead of streaming a folder of zeros over it. Without
+        # this guard, stream_masks_folder_to_h5 silently overwrites a good
+        # masks.h5 with all-zero data and downstream fd_pose_solver sees
+        # empty masks (frame 0 sum=0 → cam skipped → pose all -1).
+        cam_dirs = discover_camera_folders(Path(mask_root_dir))
+        any_per_frame = any(
+            (folder / f"{start_frame:04d}.npz").exists() or
+            (folder / f"{start_frame:04d}.npy").exists() or
+            (folder / f"{start_frame}.npz").exists() or
+            (folder / f"{start_frame}.npy").exists()
+            for _, folder in cam_dirs
+        )
+        if not any_per_frame and masks_h5_path.exists():
+            print(f"[INFO] No per-frame npz/npy under {mask_root_dir}; "
+                  f"keeping existing {masks_h5_path} (no overwrite).")
+            # Verify shape matches the data h5 — if not, warn loudly.
+            try:
+                with h5py.File(masks_h5_path, "r") as f:
+                    ds = f.get("masks")
+                    if ds is None:
+                        print(f"[WARN] {masks_h5_path} exists but has no "
+                              f"'masks' dataset; downstream will probably fail")
+                    elif ds.shape[:2] != (num_frames, num_cams):
+                        print(f"[WARN] existing masks.h5 shape {ds.shape} "
+                              f"!= h5 imgs ({num_frames}, {num_cams}, ...); "
+                              f"frame counts don't match — run with explicit "
+                              f"--masks_h5_source to slice/realign.")
+            except Exception as e:
+                print(f"[WARN] could not verify existing masks.h5: {e}")
+        elif not any_per_frame and not masks_h5_path.exists():
+            # No mask source at all. Refuse to write a (N, n_cams, H, W)
+            # all-zero masks.h5 — that's what bit the user before
+            # (Stage 2 silently produced empty masks → Stage 4 fd_pose_solver
+            # 'Frame 0: Invalid mask' → all -1 poses).
+            raise FileNotFoundError(
+                "No mask source found.\n"
+                f"  mask_root_dir = {mask_root_dir}\n"
+                f"  Looked for per-frame npz/npy under cam*_rgb/ AND for an "
+                f"existing masks.h5 — neither present.\n"
+                "  Fix one of:\n"
+                "    (a) run mesh_reconstruction/sam2/notebooks/batch_task_annotator.py\n"
+                "        on this exp first (writes tool_masks/masks.h5);\n"
+                "    (b) run DINO+SAM2 via run_auto_annotator.sh which auto-\n"
+                "        produces tool_masks/masks.h5;\n"
+                "    (c) pass --masks_h5_source /path/to/existing/masks.h5 to\n"
+                "        slice from another sequence."
+            )
+        else:
+            # Stream per-frame masks straight into masks.h5 instead of building a
+            # giant in-RAM (N, n_cams, H, W) array (~14 GB for 1923 frames @720p×8).
+            stream_masks_folder_to_h5(
+                mask_root_dir, masks_h5_path, num_frames, num_cams,
+                expected_H=img_H, expected_W=img_W, start_frame=start_frame)
 
     # Save object masks if provided
     if object_mask_dir is not None:

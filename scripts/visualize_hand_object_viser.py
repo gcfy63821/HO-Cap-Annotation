@@ -29,6 +29,14 @@ Usage:
     python scripts/visualize_hand_object_viser.py \
         --annotated_root data/videos_0101_annotated
 
+    # Same idea, but pass the RAW videos folder — viewer auto-resolves the
+    # adjacent '_annotated' sibling. Convenient on cluster where you usually
+    # know /viscam/projects/robotool/data/videos_<date> and not the annotated
+    # path:
+    python scripts/visualize_hand_object_viser.py \
+        --videos_root /viscam/projects/robotool/data/videos_0102 \
+        --host 0.0.0.0 --port 8080
+
     # Browse every DONE experiment across ALL videos_*_annotated under a
     # data root, labeled '<videos_X_annotated>/<task>/<exp>':
     python scripts/visualize_hand_object_viser.py \
@@ -57,6 +65,19 @@ import viser
 import yaml
 from scipy.spatial.transform import Rotation as R
 
+
+# Auto-pick device: CUDA when available (workstation), else CPU. The viewer
+# itself does no heavy work, but MANO mesh reconstruction benefits from GPU
+# when present. Cluster login nodes typically have no GPU — falling back to
+# CPU lets the viewer run there for browsing annotations remotely.
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"[INFO] viewer torch device: {DEVICE}")
+
+
+def _to(x):
+    """Move tensor to the picked device."""
+    return x.to(DEVICE)
+
 # Resolve paths before chdir so relative CLI paths still work.
 _pre = argparse.ArgumentParser(add_help=False)
 _pre.add_argument("--data_folder", type=str, default="")
@@ -64,12 +85,14 @@ _pre.add_argument("--task_folder", type=str, default="")
 _pre.add_argument("--pkl_path", type=str, default="")
 _pre.add_argument("--annotated_root", type=str, default="")
 _pre.add_argument("--scan_root", type=str, default="")
+_pre.add_argument("--videos_root", type=str, default="")
 _pre_args, _ = _pre.parse_known_args()
 _DATA_FOLDER = Path(_pre_args.data_folder).resolve() if _pre_args.data_folder else None
 _TASK_FOLDER = Path(_pre_args.task_folder).resolve() if _pre_args.task_folder else None
 _PKL_PATH = Path(_pre_args.pkl_path).resolve() if _pre_args.pkl_path else None
 _ANNOTATED_ROOT = Path(_pre_args.annotated_root).resolve() if _pre_args.annotated_root else None
 _SCAN_ROOT = Path(_pre_args.scan_root).resolve() if _pre_args.scan_root else None
+_VIDEOS_ROOT = Path(_pre_args.videos_root).resolve() if _pre_args.videos_root else None
 
 HOCAP_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HOCAP_ROOT))
@@ -134,21 +157,21 @@ def reconstruct_left_verts(hand, frame_idx, mano_layer_right):
     if pose_arr.ndim < 2 or frame_idx >= pose_arr.shape[0]:
         return None
     try:
-        pose = torch.tensor(pose_arr[frame_idx], dtype=torch.float32).cuda().unsqueeze(0)
+        pose = torch.tensor(pose_arr[frame_idx], dtype=torch.float32).to(DEVICE).unsqueeze(0)
         trans = torch.tensor(hand["left_hand_translation"][frame_idx],
-                              dtype=torch.float32).cuda().unsqueeze(0)
-        beta = torch.tensor(hand["left_hand_beta"], dtype=torch.float32).cuda()
+                              dtype=torch.float32).to(DEVICE).unsqueeze(0)
+        beta = torch.tensor(hand["left_hand_beta"], dtype=torch.float32).to(DEVICE)
         if beta.ndim == 1:
             beta = beta.unsqueeze(0)
 
         base = hand["left_hand_base_rot"]
         if base.ndim == 3 and base.shape[0] > 0:
             ri = min(frame_idx, base.shape[0] - 1)
-            base_rot = torch.tensor(base[ri], dtype=torch.float32).cuda()
+            base_rot = torch.tensor(base[ri], dtype=torch.float32).to(DEVICE)
         elif base.ndim == 2 and base.shape == (3, 3):
-            base_rot = torch.tensor(base, dtype=torch.float32).cuda()
+            base_rot = torch.tensor(base, dtype=torch.float32).to(DEVICE)
         else:
-            base_rot = torch.eye(3, dtype=torch.float32).cuda()
+            base_rot = torch.eye(3, dtype=torch.float32).to(DEVICE)
 
         verts, joints = mano_layer_right(pose, beta)
         verts = verts[0] / 1000.0
@@ -170,10 +193,10 @@ def reconstruct_right_verts(hand, frame_idx, mano_layer_right):
     if pose_arr.ndim < 2 or frame_idx >= pose_arr.shape[0]:
         return None
     try:
-        pose = torch.tensor(pose_arr[frame_idx], dtype=torch.float32).cuda().unsqueeze(0)
+        pose = torch.tensor(pose_arr[frame_idx], dtype=torch.float32).to(DEVICE).unsqueeze(0)
         trans = torch.tensor(hand["right_hand_translation"][frame_idx],
-                              dtype=torch.float32).cuda().unsqueeze(0)
-        beta = torch.tensor(hand["right_hand_beta"], dtype=torch.float32).cuda()
+                              dtype=torch.float32).to(DEVICE).unsqueeze(0)
+        beta = torch.tensor(hand["right_hand_beta"], dtype=torch.float32).to(DEVICE)
         if beta.ndim == 1:
             beta = beta.unsqueeze(0)
 
@@ -442,6 +465,13 @@ def main():
                          "videos_*_annotated sibling beneath <scan_root>. "
                          "Labels exps as '<videos_X_annotated>/<task>/<exp>'. "
                          "Use this to browse all your finished annotations at once.")
+    ap.add_argument("--videos_root", type=str, default="",
+                    help="Convenience: pass the RAW videos folder path "
+                         "(e.g. /viscam/projects/robotool/data/videos_0102) "
+                         "and the viewer auto-resolves "
+                         "<parent>/videos_0102_annotated and walks every "
+                         "<task>/<exp> under it. Equivalent to "
+                         "--annotated_root <auto-derived>.")
     ap.add_argument("--require_hand", action="store_true",
                     help="In annotated_root / scan_root mode, only list exps that "
                          "also have result_hand_optimized.pkl on disk.")
@@ -465,10 +495,24 @@ def main():
     pkl_path = _PKL_PATH
     annotated_root = _ANNOTATED_ROOT
     scan_root = _SCAN_ROOT
+    videos_root = _VIDEOS_ROOT
+
+    # --videos_root is sugar for --annotated_root <parent>/<basename>_annotated.
+    # Resolve before the validation below.
+    if videos_root is not None and annotated_root is None:
+        derived = videos_root.parent / f"{videos_root.name}_annotated"
+        if not derived.is_dir():
+            ap.error(f"--videos_root resolved to {derived}, but that "
+                     f"directory does not exist. Did annotation finish? "
+                     f"(check that you have a sibling '<name>_annotated/' "
+                     f"with task subfolders inside.)")
+        annotated_root = derived
+        print(f"[INFO] videos_root    = {videos_root}")
+        print(f"[INFO] → annotated_root (auto-derived) = {annotated_root}")
 
     if not (task_folder or data_folder or pkl_path or annotated_root or scan_root):
         ap.error("Must specify one of --data_folder / --task_folder / --pkl_path / "
-                 "--annotated_root / --scan_root")
+                 "--annotated_root / --scan_root / --videos_root")
 
     # `EXP_INFO[label] = {"data_folder": Path, "annotated": Path, ...}` is the
     # source of truth across every entry mode below. exp_names is just the
@@ -552,9 +596,9 @@ def main():
     from manopth.manolayer import ManoLayer
     from hocap_annotation.utils import CFG
     mano_layer_right = ManoLayer(side="right", mano_root=CFG.mano.model_path,
-                                  use_pca=False, ncomps=45).cuda()
+                                  use_pca=False, ncomps=45).to(DEVICE)
     mano_layer_left = ManoLayer(side="left", mano_root=CFG.mano.model_path,
-                                 use_pca=False, ncomps=45).cuda()
+                                 use_pca=False, ncomps=45).to(DEVICE)
     faces_left = mano_layer_left.th_faces.detach().cpu().numpy()
     faces_right = mano_layer_right.th_faces.detach().cpu().numpy()
 
@@ -636,7 +680,7 @@ def main():
     if src_frames and len(set(src_frames.values())) > 1:
         print(f"[WARN] sources disagree on frame count — likely a stale/chunk-residual run "
               f"(see worklog about cleaning up before re-running the pipeline)")
-    if src_frames and state["num_frames_hand"] not in (0,) | set(src_frames.values()):
+    if src_frames and state["num_frames_hand"] not in ({0} | set(src_frames.values())):
         print(f"[WARN] hand pkl frame count ({state['num_frames_hand']}) doesn't match "
               f"any object source — your hand and object outputs are out of sync")
 
