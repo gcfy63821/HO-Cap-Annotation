@@ -183,8 +183,12 @@ def read_first_rgb_from_h5(data_h5_path: Path, cam_idx: int):
 
 
 MASK_CANDIDATES_REL = [
-    Path("masks") / "masks.h5",
-    Path("tool_masks") / "masks.h5",
+    Path("tool_masks") / "masks.h5",   # full-sequence (Stage 2 DINO/SAM2 or
+                                       # batch_task_annotator output)
+    Path("masks") / "masks.h5",        # legacy / hand-only chunked fallback;
+                                       # often chunk-aligned (frame 0 of file
+                                       # != absolute frame 0), so only used if
+                                       # tool_masks/masks.h5 is missing.
 ]
 
 
