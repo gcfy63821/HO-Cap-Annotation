@@ -525,7 +525,7 @@ else
         --models_folder "$MODELS_FOLDER"
         --tool_name "$TOOL_NAME"
         --start_frame "$START_FRAME"
-        --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4
+        --x_min -0.7 --x_max 0.6 --y_min -0.7 --y_max 0.6 --z_min -0.5 --z_max 0.4
     )
     # If masks.h5 already exists (DINO ran with --pipeline_mask_format h5,
     # or a prior run, or it was synced from elsewhere), tell generate_meta
