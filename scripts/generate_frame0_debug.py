@@ -182,21 +182,33 @@ def read_first_rgb_from_h5(data_h5_path: Path, cam_idx: int):
         return None
 
 
-def load_mask_frame0(masks_h5_path: Path, cam_idx: int):
-    """Returns (H, W) uint8 mask (binary) or None."""
-    if not masks_h5_path.exists():
-        return None
-    try:
-        with h5py.File(masks_h5_path, 'r') as f:
-            ds = f.get('masks')
-            if ds is None or ds.shape[0] == 0:
-                return None
-            n_cams = ds.shape[1]
-            if cam_idx >= n_cams:
-                return None
-            return (np.asarray(ds[0, cam_idx]) > 0).astype(np.uint8)
-    except Exception:
-        return None
+def load_mask_frame0(ann_exp_dir: Path, cam_idx: int):
+    """Returns (H, W) uint8 mask (binary) or None.
+
+    Looks for the masks.h5 in this priority order:
+      1. <ann_exp>/masks/masks.h5         (preferred — what the rest of the
+                                            pipeline now writes)
+      2. <ann_exp>/tool_masks/masks.h5    (legacy / batch_task_annotator path)
+    """
+    candidates = [
+        ann_exp_dir / "masks" / "masks.h5",
+        ann_exp_dir / "tool_masks" / "masks.h5",
+    ]
+    for p in candidates:
+        if not p.exists():
+            continue
+        try:
+            with h5py.File(p, 'r') as f:
+                ds = f.get('masks')
+                if ds is None or ds.shape[0] == 0:
+                    continue
+                n_cams = ds.shape[1]
+                if cam_idx >= n_cams:
+                    continue
+                return (np.asarray(ds[0, cam_idx]) > 0).astype(np.uint8)
+        except Exception:
+            continue
+    return None
 
 
 def load_depth_frame0(data_h5_path: Path, cam_idx: int):
@@ -312,7 +324,6 @@ def make_exp_mosaic(exp_dir: Path, ann_exp_dir: Path, max_width=2400,
     rgb_videos = sorted(exp_dir.glob("cam*_rgb.mp4"))
     if not rgb_videos:
         return None
-    masks_h5 = ann_exp_dir / "tool_masks" / "masks.h5"
 
     # Resolve the data h5 for this exp: prefer existing, else build fresh
     # in scratch (/dev/shm) and clean up at the end.
@@ -351,7 +362,7 @@ def make_exp_mosaic(exp_dir: Path, ann_exp_dir: Path, max_width=2400,
             continue
         H, W = rgb.shape[:2]
         # color + mask
-        mask = load_mask_frame0(masks_h5, cam_idx)
+        mask = load_mask_frame0(ann_exp_dir, cam_idx)
         color_panel, mask_info = overlay_mask(rgb, mask)
         cam_name = mp4.stem  # "cam0_rgb"
         label_image(color_panel, f"{cam_name}  rgb {rgb_src_label}  ·  {mask_info}")

@@ -76,17 +76,31 @@ HTML_HEAD = """<!doctype html>
   h1 {{ font-size: 18px; margin: 0 0 12px; }}
   .stats {{ font-size: 13px; color: #aaa; margin-bottom: 18px; }}
   .filter {{ margin: 8px 0 16px; }}
-  .filter input {{ padding: 6px 10px; width: 320px; background: #2a2a2a;
+  .filter input {{ padding: 6px 10px; width: 360px; background: #2a2a2a;
                    color: #e0e0e0; border: 1px solid #444; border-radius: 4px; }}
-  .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  /* Wider cards (480 → fewer per row) so long exp names breathe. */
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
            gap: 14px; }}
   .card {{ background: #242424; border-radius: 6px; overflow: hidden;
            border: 1px solid #333; }}
-  .card .label {{ padding: 8px 10px; font-size: 12px; font-family: monospace;
-                  border-bottom: 1px solid #333; line-height: 1.4; }}
-  .card .label .task {{ color: #4af; font-weight: 600; }}
-  .card .label .exp  {{ color: #fff; }}
-  .card .label .badges {{ margin-top: 4px; }}
+  .card .label {{ padding: 10px 12px; font-size: 11px; font-family: monospace;
+                  border-bottom: 1px solid #333; line-height: 1.5;
+                  /* allow long names to break anywhere instead of overflowing */
+                  word-break: break-all;
+                  overflow-wrap: anywhere; }}
+  .card .label .task {{ color: #4af; font-weight: 600; display: block; }}
+  .card .label .exp  {{ color: #fff; font-size: 12px;
+                        /* exp on its own line so it fully visible */
+                        display: block; margin-top: 2px;
+                        /* select-on-click for easy copy */
+                        user-select: all; }}
+  .card .label .copy_btn {{ display: inline-block; margin-left: 6px;
+                            padding: 1px 6px; font-size: 10px;
+                            background: #333; color: #aaa;
+                            border-radius: 3px; cursor: pointer;
+                            border: 1px solid #444; }}
+  .card .label .copy_btn:hover {{ background: #555; color: #fff; }}
+  .card .label .badges {{ margin-top: 6px; }}
   .badge {{ display: inline-block; font-size: 10px; padding: 1px 6px;
             border-radius: 3px; margin-right: 4px; background: #333; color: #888; }}
   .badge.ok {{ background: #1e4d2b; color: #8f8; }}
@@ -96,22 +110,36 @@ HTML_HEAD = """<!doctype html>
                      text-align: center; font-size: 12px; }}
   .lightbox {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.95);
                align-items: center; justify-content: center; z-index: 100;
-               cursor: zoom-out; }}
+               cursor: zoom-out; flex-direction: column; padding: 16px; }}
   .lightbox.visible {{ display: flex; }}
-  .lightbox img {{ max-width: 95vw; max-height: 95vh; }}
+  .lightbox img {{ max-width: 95vw; max-height: 90vh; }}
+  .lightbox .lb_label {{ color: #ccc; font-family: monospace; font-size: 14px;
+                         margin-bottom: 8px; word-break: break-all;
+                         overflow-wrap: anywhere; max-width: 95vw;
+                         text-align: center; user-select: all; }}
 </style>
 </head><body>
 """
 
 HTML_TAIL = """
 <div class="lightbox" id="lb" onclick="this.classList.remove('visible')">
+  <div class="lb_label" id="lblabel"></div>
   <img id="lbimg" src="">
 </div>
 <script>
+  function copyText(btn, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'copied!';
+      setTimeout(() => { btn.textContent = orig; }, 900);
+    }).catch(() => { alert(text); });
+  }
   document.querySelectorAll('.card img').forEach(img => {
     img.addEventListener('click', e => {
       const lb = document.getElementById('lb');
       document.getElementById('lbimg').src = img.src;
+      document.getElementById('lblabel').textContent =
+        img.dataset.label || img.src.split('/').slice(-3, -1).join('/');
       lb.classList.add('visible');
     });
   });
@@ -144,6 +172,7 @@ def write_index(annotated_root: Path, entries, out_path: Path):
 
     for e in entries:
         label = f'{e["task"]}/{e["exp"]}'
+        label_attr = html.escape(label, quote=True)
         badges = []
         badges.append(('masks.h5', 'ok' if e["masks_h5"]    else 'miss'))
         badges.append(('fd merge', 'ok' if e["merger_done"] else 'miss'))
@@ -153,14 +182,25 @@ def write_index(annotated_root: Path, entries, out_path: Path):
             f'<span class="badge {state}">{html.escape(name)}</span>'
             for name, state in badges
         )
-        parts.append(f'<div class="card" data-label="{html.escape(label)}">')
-        parts.append(f'<div class="label">'
-                     f'<div><span class="task">{html.escape(e["task"])}</span>/'
-                     f'<span class="exp">{html.escape(e["exp"])}</span></div>'
-                     f'<div class="badges">{badges_html}</div>'
-                     f'</div>')
+        # title tooltip = full label (browsers show on hover, useful when the
+        # exp name is super long).
+        parts.append(f'<div class="card" data-label="{label_attr}" title="{label_attr}">')
+        # Two lines: task on its own line, exp on its own line, both fully
+        # visible (word-break: break-all in CSS handles long names).
+        parts.append(
+            f'<div class="label">'
+            f'<span class="task">{html.escape(e["task"])}</span>'
+            f'<span class="exp">{html.escape(e["exp"])}'
+            f'<span class="copy_btn" onclick="copyText(this, &quot;{label_attr}&quot;); event.stopPropagation();">copy</span>'
+            f'</span>'
+            f'<div class="badges">{badges_html}</div>'
+            f'</div>'
+        )
         if e["exists"]:
-            parts.append(f'<img src="{html.escape(str(e["rel_path"]))}" loading="lazy">')
+            parts.append(
+                f'<img src="{html.escape(str(e["rel_path"]))}" '
+                f'data-label="{label_attr}" loading="lazy">'
+            )
         else:
             parts.append('<div class="miss_png">no frame0_debug.png yet<br>'
                          '<span style="font-size:10px;opacity:.7">'
