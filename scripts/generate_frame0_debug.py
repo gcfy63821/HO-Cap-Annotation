@@ -182,33 +182,62 @@ def read_first_rgb_from_h5(data_h5_path: Path, cam_idx: int):
         return None
 
 
-def load_mask_frame0(ann_exp_dir: Path, cam_idx: int):
-    """Returns (H, W) uint8 mask (binary) or None.
+MASK_CANDIDATES_REL = [
+    Path("masks") / "masks.h5",
+    Path("tool_masks") / "masks.h5",
+]
 
-    Looks for the masks.h5 in this priority order:
-      1. <ann_exp>/masks/masks.h5         (preferred — what the rest of the
-                                            pipeline now writes)
-      2. <ann_exp>/tool_masks/masks.h5    (legacy / batch_task_annotator path)
+
+def inspect_mask_sources(ann_exp_dir: Path):
+    """Return (chosen_path or None, ds_shape or None, candidates_report).
+
+    candidates_report is a list of (path, exists, shape_or_reason) so the
+    caller can print exactly which paths were tried and why each was skipped.
+    The first candidate that exists, opens, and has a valid 'masks' dataset
+    is chosen.
     """
-    candidates = [
-        ann_exp_dir / "masks" / "masks.h5",
-        ann_exp_dir / "tool_masks" / "masks.h5",
-    ]
-    for p in candidates:
+    report = []
+    chosen = None
+    chosen_shape = None
+    for rel in MASK_CANDIDATES_REL:
+        p = ann_exp_dir / rel
         if not p.exists():
+            report.append((p, False, "missing"))
             continue
         try:
             with h5py.File(p, 'r') as f:
                 ds = f.get('masks')
-                if ds is None or ds.shape[0] == 0:
+                if ds is None:
+                    report.append((p, True, "no 'masks' dataset"))
                     continue
-                n_cams = ds.shape[1]
-                if cam_idx >= n_cams:
-                    continue
-                return (np.asarray(ds[0, cam_idx]) > 0).astype(np.uint8)
-        except Exception:
-            continue
-    return None
+                shape = tuple(ds.shape)
+                report.append((p, True, f"shape={shape}"))
+                if chosen is None and shape[0] > 0:
+                    chosen = p
+                    chosen_shape = shape
+        except Exception as e:
+            report.append((p, True, f"open failed: {type(e).__name__}: {e}"))
+    return chosen, chosen_shape, report
+
+
+def load_mask_frame0(masks_h5_path: Path, cam_idx: int):
+    """Returns (H, W) uint8 binary mask, or None on miss.
+
+    `masks_h5_path` should be the chosen path returned by inspect_mask_sources
+    (so we don't repeat the candidate walk per cam)."""
+    if masks_h5_path is None or not masks_h5_path.exists():
+        return None
+    try:
+        with h5py.File(masks_h5_path, 'r') as f:
+            ds = f.get('masks')
+            if ds is None or ds.shape[0] == 0:
+                return None
+            n_cams = ds.shape[1]
+            if cam_idx >= n_cams:
+                return None
+            return (np.asarray(ds[0, cam_idx]) > 0).astype(np.uint8)
+    except Exception:
+        return None
 
 
 def load_depth_frame0(data_h5_path: Path, cam_idx: int):
@@ -281,18 +310,31 @@ def colorize_depth(depth_m, lo=None, hi=None, invalid_rgb=(80, 0, 80)):
 
 def overlay_mask(rgb, mask):
     """rgb (H,W,3) RGB + mask (H,W) bool → annotated RGB with green overlay
-    + yellow contour. Mutates a copy."""
+    + yellow contour. Mutates a copy.
+
+    Returns (out_rgb, info_text) where info_text always includes the mask
+    H×W (or 'no mask' / 'EMPTY mask <H>x<W>') so you can spot resolution
+    mismatches at a glance.
+    """
     if mask is None:
         return rgb.copy(), "no mask"
+    h, w = mask.shape[:2]
+    rgb_h, rgb_w = rgb.shape[:2]
+    size_label = f"{h}x{w}"
+    if (h, w) != (rgb_h, rgb_w):
+        size_label += f" (RGB {rgb_h}x{rgb_w} — MISMATCH)"
     if mask.sum() == 0:
-        return rgb.copy(), "EMPTY mask"
+        return rgb.copy(), f"EMPTY mask  {size_label}"
+    if (h, w) != (rgb_h, rgb_w):
+        # Resize so we still get a meaningful overlay even when shapes differ.
+        mask = cv2.resize(mask, (rgb_w, rgb_h), interpolation=cv2.INTER_NEAREST)
     out = rgb.copy()
     overlay = rgb.copy(); overlay[mask > 0] = (0, 255, 0)
     out = cv2.addWeighted(rgb, 0.6, overlay, 0.4, 0)
     cnt, _ = cv2.findContours((mask * 255).astype(np.uint8),
                                 cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(out, cnt, -1, (255, 255, 0), 2)
-    return out, f"area={int(mask.sum())}"
+    return out, f"area={int(mask.sum())}  {size_label}"
 
 
 def label_image(img, text, scale=0.7):
@@ -324,6 +366,19 @@ def make_exp_mosaic(exp_dir: Path, ann_exp_dir: Path, max_width=2400,
     rgb_videos = sorted(exp_dir.glob("cam*_rgb.mp4"))
     if not rgb_videos:
         return None
+
+    # ---- mask source diagnostics (printed once per exp) ----
+    chosen_mask_h5, mask_ds_shape, mask_report = inspect_mask_sources(ann_exp_dir)
+    print(f"  [mask] {ann_exp_dir.name}:")
+    for p, exists, info in mask_report:
+        marker = "OK " if exists else "no "
+        print(f"    [{marker}] {p}   ({info})")
+    if chosen_mask_h5 is not None:
+        print(f"    -> using {chosen_mask_h5}  shape={mask_ds_shape}")
+    else:
+        print(f"    -> no usable masks.h5 found")
+    mask_src_short = (f"{chosen_mask_h5.parent.name}/{chosen_mask_h5.name}"
+                      if chosen_mask_h5 is not None else "no mask")
 
     # Resolve the data h5 for this exp: prefer existing, else build fresh
     # in scratch (/dev/shm) and clean up at the end.
@@ -362,10 +417,11 @@ def make_exp_mosaic(exp_dir: Path, ann_exp_dir: Path, max_width=2400,
             continue
         H, W = rgb.shape[:2]
         # color + mask
-        mask = load_mask_frame0(ann_exp_dir, cam_idx)
+        mask = load_mask_frame0(chosen_mask_h5, cam_idx)
         color_panel, mask_info = overlay_mask(rgb, mask)
         cam_name = mp4.stem  # "cam0_rgb"
-        label_image(color_panel, f"{cam_name}  rgb {rgb_src_label}  ·  {mask_info}")
+        label_image(color_panel,
+                    f"{cam_name}  rgb {rgb_src_label}  ·  mask src={mask_src_short}  ·  {mask_info}")
         # depth
         depth = load_depth_frame0(data_h5, cam_idx)
         if depth is None:
