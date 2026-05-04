@@ -163,30 +163,47 @@ def load_existing_frame0_masks(ann_dir: Path, n_cams: int) -> np.ndarray:
     return None
 
 
+SKIP_PREFIXES = ("realsense_calibrate", "ref_pc", "posts")
+SKIP_EXACT = {"first_frame"}
+
+
+def _is_task_dir(task_dir: Path) -> bool:
+    nm = task_dir.name
+    if nm in SKIP_EXACT: return False
+    if any(nm.startswith(pre) for pre in SKIP_PREFIXES): return False
+    return True
+
+
 def discover_visible_exps(videos_root: Path):
-    """Walk <videos_root>/<task>/<exp>/ and return the list of (task, exp,
-    exp_folder, ann_dir, status_flags) where the task's frame0_visibility.yaml
-    has labeled the exp 'visible'. Exps in tasks without a yaml are ALL
-    listed (to mirror sbatch_run_auto_videos.sh's auto behavior)."""
+    """Walk <videos_root>/<task>/<exp>/ and return EVERY exp that has at
+    least one cam*_rgb.mp4. Each row carries a `visibility` field reading
+    from <task>/frame0_visibility.yaml when that file exists.
+    Visibility filtering is done in the UI — the API never silently drops
+    a task. Prints a per-task exp count so you can verify nothing is being
+    missed at the discover step."""
     out = []
     annotated_root = videos_root.parent / f"{videos_root.name}_annotated"
-    for task_dir in sorted(p for p in videos_root.iterdir() if p.is_dir()):
+    all_dirs = sorted(p for p in videos_root.iterdir() if p.is_dir())
+    n_skipped_dirs = 0
+    print(f"[discover] {videos_root}")
+    for task_dir in all_dirs:
         nm = task_dir.name
-        if nm.startswith("realsense_calibrate"): continue
-        if nm.startswith("ref_pc"):              continue
-        if nm.startswith("posts"):               continue
-        if nm == "first_frame":                  continue
+        if not _is_task_dir(task_dir):
+            n_skipped_dirs += 1
+            print(f"  - skip non-task dir: {nm}")
+            continue
         f0_yaml = task_dir / "frame0_visibility.yaml"
-        ann = None
+        ann = {}
         if f0_yaml.exists():
             try:
                 ann = (yaml.safe_load(f0_yaml.read_text()) or {}).get("annotations") or {}
-            except Exception:
+            except Exception as e:
+                print(f"  [WARN] {f0_yaml}: parse failed ({e}); will list "
+                      f"all exps in {nm} as unlabeled")
                 ann = {}
+        n_exps = 0
         for exp_dir in sorted(p for p in task_dir.iterdir() if p.is_dir()):
             if not list(exp_dir.glob("cam*_rgb.mp4")):
-                continue
-            if ann is not None and ann.get(exp_dir.name) != "visible":
                 continue
             ann_dir = annotated_root / nm / exp_dir.name
             tool_h5 = ann_dir / "tool_masks" / "masks.h5"
@@ -196,10 +213,45 @@ def discover_visible_exps(videos_root: Path):
                 "exp": exp_dir.name,
                 "exp_folder": str(exp_dir),
                 "ann_dir": str(ann_dir),
+                "visibility": ann.get(exp_dir.name, ""),
+                "has_visibility_yaml": f0_yaml.exists(),
                 "has_tool_masks_h5": tool_h5.exists(),
                 "has_prompts": prompts.exists(),
             })
+            n_exps += 1
+        print(f"  + task={nm:<40s}  exps={n_exps}  yaml={'yes' if f0_yaml.exists() else 'no '}")
+    print(f"[discover] total tasks={sum(1 for d in all_dirs if _is_task_dir(d))}  "
+          f"non-task dirs skipped={n_skipped_dirs}  exps={len(out)}")
     return annotated_root, out
+
+
+def update_visibility_yaml(videos_root: Path, task: str, exp: str, label: str) -> Path:
+    """Set/clear annotations[exp] = label inside <task>/frame0_visibility.yaml.
+    label='' clears the entry. Creates the yaml if it didn't exist.
+    Returns the yaml path."""
+    if label not in ("", "visible", "not_visible", "unsure"):
+        raise ValueError(f"bad visibility label: {label!r}")
+    yaml_path = videos_root / task / "frame0_visibility.yaml"
+    if yaml_path.exists():
+        try:
+            data = yaml.safe_load(yaml_path.read_text()) or {}
+        except Exception:
+            data = {}
+    else:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    ann = data.get("annotations")
+    if not isinstance(ann, dict):
+        ann = {}
+    if label == "":
+        ann.pop(exp, None)
+    else:
+        ann[exp] = label
+    data["annotations"] = ann
+    yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    yaml_path.write_text(yaml.safe_dump(data, sort_keys=False))
+    return yaml_path
 
 
 # ============================================================
@@ -462,6 +514,28 @@ def api_keep_existing():
     return jsonify({"ok": True, "redo_log_rows": rows})
 
 
+@app.route("/api/set_visibility", methods=["POST"])
+def api_set_visibility():
+    """Update <task>/frame0_visibility.yaml for one exp. Body:
+       {task, exp, label}  where label ∈ {'', 'visible', 'not_visible', 'unsure'}."""
+    payload = request.get_json(silent=True) or {}
+    task = payload.get("task")
+    exp = payload.get("exp")
+    label = payload.get("label", "")
+    with LOCK:
+        vroot = STATE["videos_root"]
+    if vroot is None:
+        return jsonify({"error": "load_root first"}), 400
+    if not task or not exp:
+        return jsonify({"error": "task + exp required"}), 400
+    try:
+        yaml_path = update_visibility_yaml(vroot, task, exp, label)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True, "yaml_path": str(yaml_path),
+                      "task": task, "exp": exp, "label": label})
+
+
 @app.route("/api/state")
 def api_state():
     with LOCK:
@@ -496,6 +570,7 @@ INDEX_HTML = r"""<!doctype html>
   .badge.ok { background:#1e4d2b; color:#8f8; }
   .badge.warn { background:#4d4d1e; color:#ff8; }
   .badge.miss { background:#4d1e1e; color:#f88; }
+  .visel { background:#222;color:#ddd;border:1px solid #444;border-radius:3px;padding:1px 3px;font-size:11px; }
   .grid { display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:8px; }
   .tile { position:relative;background:#000;border:1px solid #222; }
   .tile img { width:100%;height:auto;display:block;cursor:crosshair; }
@@ -512,14 +587,17 @@ INDEX_HTML = r"""<!doctype html>
 <div class="row">
   <input id="vroot" type="text" placeholder="/viscam/.../videos_0102" style="width:480px">
   <button id="btnload">Load videos_root</button>
+  <label><input id="onlyvisible" type="checkbox"> only frame0=visible</label>
+  <input id="taskfilter" type="text" placeholder="filter task..." style="width:200px">
   <span style="color:#888;font-size:11px">click left=+ / right=−. tiles show existing tool_masks/masks.h5 frame-0 mask + your click dots; SAM2 will re-run later in batch_redo_masks.py.</span>
 </div>
 <div id="status"></div>
 
 <div class="exps"><table id="exptbl">
-<thead><tr><th>task</th><th>exp</th><th>masks.h5</th><th>prompts</th><th>redo</th></tr></thead>
+<thead><tr><th>task</th><th>exp</th><th>visibility</th><th>masks.h5</th><th>prompts</th><th>redo</th></tr></thead>
 <tbody></tbody>
 </table></div>
+<div id="counts" style="font-size:11px;color:#888;margin:4px 0"></div>
 
 <div id="annotator" style="display:none">
   <div class="ctrls row">
@@ -546,19 +624,76 @@ function badge(ok, label) {
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
+function visSelect(task, exp, v) {
+  const opts = [
+    ["",            "(unlabeled)"],
+    ["visible",     "visible"],
+    ["unsure",      "unsure"],
+    ["not_visible", "not_visible"],
+  ];
+  const opthtml = opts.map(([val, lbl]) =>
+      `<option value="${val}"${val === (v||'') ? ' selected' : ''}>${lbl}</option>`).join('');
+  // The select has data-* so onchange picks up which exp it's editing,
+  // and stopPropagation avoids triggering the row's selectExp click.
+  return `<select class="visel" data-task="${task}" data-exp="${exp}"
+                 onclick="event.stopPropagation()"
+                 onchange="setVisibility(this)">${opthtml}</select>`;
+}
+
+async function setVisibility(sel) {
+  const task = sel.dataset.task;
+  const exp  = sel.dataset.exp;
+  const label = sel.value;
+  setStatus(`updating visibility ${task}/${exp} → ${label || '(unlabeled)'} ...`);
+  const r = await fetch('/api/set_visibility', { method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({task, exp, label}) });
+  const j = await r.json();
+  if (j.error) { setStatus('ERROR: ' + j.error); return; }
+  // Mirror the change locally so renderExps + filters stay consistent.
+  STATE.exps.forEach(e => {
+    if (e.task === task && e.exp === exp) {
+      e.visibility = label;
+      e.has_visibility_yaml = true;
+    }
+  });
+  setStatus(`saved visibility ${task}/${exp} → ${label || '(unlabeled)'}  [${j.yaml_path}]`);
+  // No re-render needed — the dropdown already shows the new value, and
+  // existing/visibility filters re-evaluate on their next event.
+}
+
 function renderExps() {
   const tb = document.querySelector('#exptbl tbody');
   tb.innerHTML = '';
-  STATE.exps.forEach((e, idx) => {
+  const onlyVis = document.getElementById('onlyvisible').checked;
+  const taskQ = (document.getElementById('taskfilter').value || '').toLowerCase();
+  let prevTask = null;
+  let nShown = 0;
+  const perTask = {};
+  STATE.exps.forEach(e => {
+    if (onlyVis && e.visibility !== 'visible') return;
+    if (taskQ && !e.task.toLowerCase().includes(taskQ)) return;
+    nShown++;
+    perTask[e.task] = (perTask[e.task] || 0) + 1;
+    if (e.task !== prevTask) {
+      const hdr = document.createElement('tr');
+      hdr.innerHTML = `<td colspan="6" style="background:#222;color:#4af;font-weight:bold">${e.task}</td>`;
+      tb.appendChild(hdr);
+      prevTask = e.task;
+    }
     const tr = document.createElement('tr');
     if (STATE.cur && STATE.cur.task === e.task && STATE.cur.exp === e.exp) tr.classList.add('selected');
-    tr.innerHTML = `<td>${e.task}</td><td>${e.exp}</td>
+    tr.innerHTML = `<td style="color:#888">${e.task}</td><td>${e.exp}</td>
+                    <td>${visSelect(e.task, e.exp, e.visibility)}</td>
                     <td>${badge(e.has_tool_masks_h5, e.has_tool_masks_h5 ? 'h5' : 'no h5')}</td>
                     <td>${badge(e.has_prompts, e.has_prompts ? 'json' : 'no json')}</td>
                     <td>${e.redo_status || ''}</td>`;
     tr.onclick = () => selectExp(e.task, e.exp);
     tb.appendChild(tr);
   });
+  const breakdown = Object.entries(perTask).sort().map(([k,v]) => `${k}=${v}`).join('  ');
+  document.getElementById('counts').textContent =
+      `showing ${nShown} / ${STATE.exps.length} exps  ·  by task: ${breakdown}`;
 }
 
 async function loadRoot() {
@@ -642,6 +777,8 @@ async function resetCam(cam) {
 }
 
 document.getElementById('btnload').onclick = loadRoot;
+document.getElementById('onlyvisible').addEventListener('change', renderExps);
+document.getElementById('taskfilter').addEventListener('input', renderExps);
 
 document.getElementById('btnsave').onclick = async () => {
   if (!STATE.cur) { setStatus('select an exp first'); return; }
