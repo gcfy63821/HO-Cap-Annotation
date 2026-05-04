@@ -781,7 +781,10 @@ def main():
     ap.add_argument("--sam2_checkpoint", type=str,
                     default=os.environ.get(
                         "SAM2_CKPT",
-                        str(HOCAP_ROOT.parent / "mesh_reconstruction/sam2/checkpoints/sam2.1_hiera_large.pt")
+                        os.environ.get(
+                            "SAM2_ROOT",
+                            "/viscam/u/chenrq/crq_ws/robotool/sam2",
+                        ) + "/checkpoints/sam2.1_hiera_large.pt"
                     ))
     ap.add_argument("--sam2_model_cfg", type=str,
                     default="configs/sam2.1/sam2.1_hiera_l.yaml")
