@@ -98,10 +98,31 @@ def overlay(rgb, mask, color=(0, 255, 0), alpha=0.45, contour=(255, 255, 0)):
 
 
 def draw_clicks(img, clicks):
-    for c in clicks or []:
-        col = (0, 200, 0) if c["label"] == 1 else (220, 30, 30)
-        cv2.circle(img, (int(c["x"]), int(c["y"])), 6, col, -1)
-        cv2.circle(img, (int(c["x"]), int(c["y"])), 7, (255, 255, 255), 1)
+    if not clicks:
+        return
+    H, W = img.shape[:2]
+    # Scale markers to the source resolution so they're still visible after
+    # the browser shrinks the tile to a few hundred pixels wide. ~1.5% of
+    # the longest side gives ~15 px on a 1920x1080 image.
+    r = max(8, int(round(max(H, W) * 0.012)))
+    border = max(2, r // 4)
+    for idx, c in enumerate(clicks):
+        x, y = int(c["x"]), int(c["y"])
+        col = (0, 220, 0) if c["label"] == 1 else (230, 30, 30)
+        # White border ring → makes the dot pop on any background.
+        cv2.circle(img, (x, y), r + border, (255, 255, 255), -1)
+        cv2.circle(img, (x, y), r, col, -1)
+        cv2.circle(img, (x, y), r, (0, 0, 0), 1)
+        # Order label (1-indexed). White text with black outline.
+        text = str(idx + 1)
+        scale = max(0.4, r / 22.0)
+        thick = max(1, r // 8)
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)
+        tx, ty = x - tw // 2, y + th // 2
+        cv2.putText(img, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, scale,
+                     (0, 0, 0), thick + 2, cv2.LINE_AA)
+        cv2.putText(img, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, scale,
+                     (255, 255, 255), thick, cv2.LINE_AA)
 
 
 def load_frame0_from_videos(exp_folder: Path, n_cams: int = None) -> np.ndarray:
