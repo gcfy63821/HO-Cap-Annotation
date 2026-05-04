@@ -173,19 +173,50 @@ def load_depth_frame0(data_h5_path: Path, cam_idx: int):
 # Rendering
 # ============================================================
 
-def colorize_depth(depth_m, lo=0.2, hi=2.5):
-    """depth_m (H,W) float32 → (H,W,3) RGB uint8 jet, with invalid (≤0) black."""
+# OpenCV's TURBO is perceptually uniform (better than JET for depth) but only
+# shipped since cv2 4.1. Fall back to JET if not available.
+_DEPTH_COLORMAP = getattr(cv2, "COLORMAP_TURBO", cv2.COLORMAP_JET)
+
+
+def colorize_depth(depth_m, lo=None, hi=None, invalid_rgb=(80, 0, 80)):
+    """depth_m (H,W) float32 → (H,W,3) RGB uint8 colored depth.
+
+    lo / hi:
+      None (default) → auto from 2nd–98th percentile of valid pixels.
+                       This adapts to the actual scene depth and keeps the
+                       colormap in the meaningful range (no wasted dynamic
+                       range on a few far-away outliers).
+      explicit values → fixed range (clip outside).
+
+    Invalid (depth <= 0) pixels are painted in `invalid_rgb` instead of the
+    usual black so they're visually obvious — black bleeds into TURBO's blue
+    end and is hard to distinguish.
+
+    Returns (H,W,3) RGB uint8 + (lo_used, hi_used) for the caller to label.
+    """
     H, W = depth_m.shape
-    out = np.zeros((H, W, 3), dtype=np.uint8)
+    out = np.full((H, W, 3), invalid_rgb, dtype=np.uint8)
     valid = depth_m > 0
     if not valid.any():
-        return out
+        return out, (0.0, 0.0)
+    valid_d = depth_m[valid]
+    if lo is None or hi is None:
+        # Use percentiles so a few stray sky / sensor-noise pixels don't
+        # squash the meaningful range.
+        p_lo = float(np.percentile(valid_d, 2))
+        p_hi = float(np.percentile(valid_d, 98))
+        # Guarantee a minimum spread (3 cm) so the colormap doesn't degenerate
+        # when the scene is essentially flat.
+        if p_hi - p_lo < 0.03:
+            p_hi = p_lo + 0.03
+        lo = p_lo if lo is None else lo
+        hi = p_hi if hi is None else hi
     norm = np.clip((depth_m - lo) / max(hi - lo, 1e-6), 0, 1)
     norm_u8 = (norm * 255).astype(np.uint8)
-    cm = cv2.applyColorMap(norm_u8, cv2.COLORMAP_JET)   # BGR
+    cm = cv2.applyColorMap(norm_u8, _DEPTH_COLORMAP)        # BGR
     cm = cv2.cvtColor(cm, cv2.COLOR_BGR2RGB)
     out[valid] = cm[valid]
-    return out
+    return out, (float(lo), float(hi))
 
 
 def overlay_mask(rgb, mask):
@@ -256,12 +287,19 @@ def make_exp_mosaic(exp_dir: Path, ann_exp_dir: Path, max_width=2400,
             depth_panel = np.zeros((H, W, 3), dtype=np.uint8)
             label_image(depth_panel, "no depth (data h5 missing)")
         else:
-            depth_panel = colorize_depth(depth)
-            valid_pct = float((depth > 0).mean()) * 100
-            label_image(depth_panel,
-                        f"depth from h5  (valid {valid_pct:.0f}%, "
-                        f"range {depth[depth>0].min():.2f}-{depth[depth>0].max():.2f}m)"
-                        if (depth > 0).any() else "depth from h5  (all zero!)")
+            depth_panel, (lo_used, hi_used) = colorize_depth(depth)
+            valid = depth > 0
+            valid_pct = float(valid.mean()) * 100
+            if valid.any():
+                d_min = float(depth[valid].min())
+                d_max = float(depth[valid].max())
+                label_image(depth_panel,
+                            f"depth h5  valid {valid_pct:.0f}%  "
+                            f"data {d_min:.2f}-{d_max:.2f}m  "
+                            f"colormap {lo_used:.2f}-{hi_used:.2f}m  "
+                            f"(magenta=invalid)")
+            else:
+                label_image(depth_panel, "depth h5  (all zero!)")
         # concatenate side-by-side
         row = np.concatenate([color_panel, depth_panel], axis=1)
         rows.append(row)
