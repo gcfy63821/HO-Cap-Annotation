@@ -1160,13 +1160,26 @@ def main():
                     ))
     ap.add_argument("--sam2_model_cfg", type=str,
                     default="configs/sam2.1/sam2.1_hiera_l.yaml")
+    ap.add_argument("--scratch_dir", default="",
+                    help="Where to stage frame-0 h5 + propagated_masks.h5. "
+                         "Default: /dev/shm/<user>/interactive_mask_<pid>/. "
+                         "On a login node /dev/shm IS RAM and propagation "
+                         "easily OOMs — point this at a disk location "
+                         "(e.g. $HOME/.cache/interactive_mask) to avoid that. "
+                         "Note: SAM2's vp.init_state(mp4) ALSO holds the full "
+                         "decoded video in CPU RAM (~6MB × n_frames per cam), "
+                         "so for long videos you still need ~50GB+ free RAM "
+                         "per cam — submit via sbatch --mem=128G or higher.")
     args = ap.parse_args()
 
     STATE["sam2_checkpoint"] = args.sam2_checkpoint
     STATE["sam2_model_cfg"] = args.sam2_model_cfg
     STATE["source_cam"] = args.source_cam
 
-    scratch_dir = Path("/dev/shm") / getpass.getuser() / f"interactive_mask_{os.getpid()}"
+    if args.scratch_dir:
+        scratch_dir = Path(args.scratch_dir).expanduser().resolve() / f"interactive_mask_{os.getpid()}"
+    else:
+        scratch_dir = Path("/dev/shm") / getpass.getuser() / f"interactive_mask_{os.getpid()}"
     scratch_dir.mkdir(parents=True, exist_ok=True)
     STATE["scratch_dir"] = scratch_dir
 
@@ -1202,6 +1215,14 @@ def main():
     print(f"    ssh -L {args.port}:localhost:{args.port} <cluster>")
     print(f"  then open  http://localhost:{args.port}/")
     print(f"  scratch:   {scratch_dir}")
+    if str(scratch_dir).startswith("/dev/shm"):
+        print(f"  [WARN] scratch is on /dev/shm (tmpfs == RAM). On a login node "
+              f"this competes with SAM2's video buffers and easily OOMs. "
+              f"Pass --scratch_dir $HOME/.cache/interactive_mask to use disk, "
+              f"or run under sbatch with --mem >= 128G.")
+    print(f"  [OOM hint] Propagate calls SAM2 vp.init_state(mp4) which decodes "
+          f"the WHOLE video into CPU RAM (~6 MB per 1920x1080 frame, per cam). "
+          f"A 9000-frame video needs ~56 GB of free RAM at minimum.")
     print(f"  sam2 ckpt: {args.sam2_checkpoint}")
     print(f"  sam2 cfg:  {args.sam2_model_cfg}")
     app.run(host=args.host, port=args.port, debug=False, threaded=True)
