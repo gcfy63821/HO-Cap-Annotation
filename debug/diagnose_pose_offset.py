@@ -302,6 +302,37 @@ def discover_done_exps(videos_root: Path, task_filter=None) -> list:
 # Per-exp diagnosis
 # ============================================================
 
+def _load_merged_poses_world(merged_npy: Path, n_frames: int,
+                              object_idx: int = 0) -> np.ndarray:
+    """Read fd_poses_merged_fixed.npy and return (n_frames, 4, 4) world poses.
+    Frames missing from the file are filled with NaN so callers can skip them.
+    Supported shapes: (F, 7), (F, 16/4x4), (N_obj, F, 7), (N_obj, F, 4, 4)."""
+    arr = np.load(merged_npy)
+    if arr.ndim == 3 and arr.shape[-1] == 7:
+        # (N_obj, F, 7)
+        arr = arr[object_idx]
+    elif arr.ndim == 4 and arr.shape[-2:] == (4, 4):
+        arr = arr[object_idx]
+    # Now expect (F, 7) or (F, 4, 4) or (F, 16).
+    out = np.full((n_frames, 4, 4), np.nan, dtype=np.float32)
+    f_avail = arr.shape[0]
+    f_use = min(n_frames, f_avail)
+    if arr.ndim == 2 and arr.shape[-1] == 7:
+        for i in range(f_use):
+            qx, qy, qz, qw, tx, ty, tz = arr[i]
+            T = np.eye(4, dtype=np.float32)
+            T[:3, :3] = R.from_quat([qx, qy, qz, qw]).as_matrix()
+            T[:3, 3] = [tx, ty, tz]
+            out[i] = T
+    elif arr.ndim == 3 and arr.shape[-2:] == (4, 4):
+        out[:f_use] = arr[:f_use].astype(np.float32)
+    elif arr.ndim == 2 and arr.shape[-1] == 16:
+        out[:f_use] = arr[:f_use].reshape(-1, 4, 4).astype(np.float32)
+    else:
+        raise ValueError(f"Unsupported merged pose shape {arr.shape} in {merged_npy}")
+    return out
+
+
 def diagnose_one_exp(annotated_sequence: Path,
                        frames: list = None,
                        max_frames: int = 12,
@@ -309,7 +340,8 @@ def diagnose_one_exp(annotated_sequence: Path,
                        output_dir: Path = None,
                        force: bool = False,
                        tool_name_map_json: Path = None,
-                       tool_name_map_disabled: bool = False) -> dict:
+                       tool_name_map_disabled: bool = False,
+                       pose_source: str = "ob_in_cam") -> dict:
     """Run the diagnosis on a single annotated exp. Returns the summary dict.
     Raises on hard errors so the workspace driver can record + skip.
 
@@ -377,9 +409,18 @@ def diagnose_one_exp(annotated_sequence: Path,
             tool_masks_h5 = legacy
         else:
             raise FileNotFoundError(f"no masks.h5 under {annotated_sequence}/(tool_masks|masks)/")
+    if pose_source not in ("ob_in_cam", "merged"):
+        raise ValueError(f"pose_source must be ob_in_cam|merged, got {pose_source!r}")
+
     fd_root = annotated_sequence / "processed" / "fd_pose_solver"
+    merged_npy = fd_root / "fd_poses_merged_fixed.npy"
+
+    # In merged mode we don't need ob_in_cam txts; only the merged file.
     ob_in_cam_root = fd_root / object_id / "ob_in_cam"
-    if not ob_in_cam_root.is_dir():
+    if pose_source == "merged":
+        if not merged_npy.exists():
+            raise FileNotFoundError(f"merged pose file not found: {merged_npy}")
+    elif not ob_in_cam_root.is_dir():
         # Tool-name resolution may disagree with what was actually written
         # to disk (e.g. meta.yaml was generated from the task folder name
         # but the pipeline ran with the JSON-mapped tool name, or vice
@@ -403,7 +444,8 @@ def diagnose_one_exp(annotated_sequence: Path,
         mesh_path = find_mesh_path(models_folder, object_id)
         mapped_via = (mapped_via or "") + " | fallback_to_fd_subdir"
 
-    out_root = output_dir if output_dir is not None else annotated_sequence / "debug" / "pose_offset_diag"
+    diag_subdir = "pose_offset_diag" if pose_source == "ob_in_cam" else f"pose_offset_diag_{pose_source}"
+    out_root = output_dir if output_dir is not None else annotated_sequence / "debug" / diag_subdir
     out_root.mkdir(parents=True, exist_ok=True)
 
     summary_path = out_root / "summary.json"
@@ -444,6 +486,21 @@ def diagnose_one_exp(annotated_sequence: Path,
         # Clip to what's actually available.
         chosen_frames = [f for f in chosen_frames if 0 <= f < frame_count]
 
+        # Pre-load merged world poses if needed.
+        merged_world_poses = None
+        cam_RTs_inv = None
+        if pose_source == "merged":
+            object_idx_for_merged = 0
+            try:
+                if object_id in meta.get("object_ids", []):
+                    object_idx_for_merged = meta["object_ids"].index(object_id)
+            except Exception:
+                pass
+            merged_world_poses = _load_merged_poses_world(
+                merged_npy, frame_count, object_idx=object_idx_for_merged
+            )
+            cam_RTs_inv = {s: np.linalg.inv(cam_RTs[s]).astype(np.float32) for s in serials}
+
         summary = {
             "annotated_sequence": str(annotated_sequence),
             "original_sequence": str(original_sequence),
@@ -452,6 +509,8 @@ def diagnose_one_exp(annotated_sequence: Path,
             "tool_masks_h5": str(tool_masks_h5),
             "object_id": object_id,
             "mapped_via": mapped_via,
+            "pose_source": pose_source,
+            "merged_npy": str(merged_npy) if pose_source == "merged" else None,
             "frames": chosen_frames,
             "per_frame": [],
         }
@@ -464,13 +523,20 @@ def diagnose_one_exp(annotated_sequence: Path,
             frame_record = {"frame": frame_idx, "cameras": []}
 
             for cam_idx, serial in enumerate(serials):
-                pose_path = ob_in_cam_root / serial / f"{frame_idx:06d}.txt"
-                if not pose_path.exists():
-                    continue
-
-                pose_c = read_pose_txt(pose_path)
-                if np.all(pose_c == -1):
-                    continue
+                pose_path = None
+                if pose_source == "ob_in_cam":
+                    pose_path = ob_in_cam_root / serial / f"{frame_idx:06d}.txt"
+                    if not pose_path.exists():
+                        continue
+                    pose_c = read_pose_txt(pose_path)
+                    if np.all(pose_c == -1):
+                        continue
+                else:
+                    # merged: world pose → cam pose via inv(cam_RT).
+                    pose_w_full = merged_world_poses[frame_idx]
+                    if not np.all(np.isfinite(pose_w_full)):
+                        continue
+                    pose_c = (cam_RTs_inv[serial] @ pose_w_full).astype(np.float32)
 
                 if imgs_ds is not None:
                     color = np.asarray(imgs_ds[frame_idx, cam_idx], dtype=np.uint8)
@@ -535,7 +601,7 @@ def diagnose_one_exp(annotated_sequence: Path,
                 frame_record["cameras"].append(
                     {
                         "serial": serial,
-                        "pose_path": str(pose_path),
+                        "pose_path": str(pose_path) if pose_path is not None else None,
                         "mesh_centroid_cam": centroid_mesh_cam.tolist(),
                         "depth_centroid_cam": None if depth_centroid_cam is None else depth_centroid_cam.tolist(),
                         "offset_cam": None if offset_cam is None else offset_cam.tolist(),
@@ -621,6 +687,16 @@ def main():
     parser.add_argument("--no_tool_name_map_json", action="store_true",
                          help="Disable tool_name_map_json even if the default "
                               "file exists; fall back to meta.yaml's object_ids[0].")
+    parser.add_argument("--pose_source", choices=("ob_in_cam", "merged", "both"),
+                         default="ob_in_cam",
+                         help="Where to read object poses from. "
+                              "'ob_in_cam' (default) reads per-frame txts "
+                              "under processed/fd_pose_solver/<obj>/ob_in_cam/. "
+                              "'merged' reads processed/fd_pose_solver/"
+                              "fd_poses_merged_fixed.npy (world-frame) and "
+                              "transforms to each cam via inv(cam_RT). "
+                              "'both' runs both modes (writes to "
+                              "pose_offset_diag/ and pose_offset_diag_merged/).")
     parser.add_argument("--continue_on_error", action="store_true", default=True,
                          help="(workspace mode) keep going if one exp fails. Default ON.")
     args = parser.parse_args()
@@ -630,29 +706,39 @@ def main():
     if args.videos_root is not None and args.annotated_sequence is not None:
         parser.error("--videos_root and --annotated_sequence are mutually exclusive")
 
+    sources_to_run = (("ob_in_cam", "merged")
+                       if args.pose_source == "both" else (args.pose_source,))
+
     # ---------- single-exp mode ----------
     if args.annotated_sequence is not None:
-        out_dir = args.output_dir
-        try:
-            summary = diagnose_one_exp(
-                annotated_sequence=args.annotated_sequence,
-                frames=args.frames, max_frames=args.max_frames,
-                object_id=args.object_id, output_dir=out_dir, force=args.force,
-                tool_name_map_json=args.tool_name_map_json,
-                tool_name_map_disabled=args.no_tool_name_map_json,
-            )
-            out_path = (out_dir if out_dir is not None
-                          else args.annotated_sequence.resolve() / "debug" / "pose_offset_diag")
-            print(f"[INFO] Wrote diagnostics to {out_path}")
-            agg = summary.get("aggregate", {})
-            if "mean_offset_cam" in agg:
-                print(f"[INFO] mean_offset_cam={agg['mean_offset_cam']}  "
-                      f"||·||={agg['offset_norm_mean']:.4f} m  "
-                      f"(n={agg.get('n_camera_observations', 0)})")
-        except Exception as e:
-            print(f"[ERR] {e}", file=sys.stderr)
-            traceback.print_exc()
-            sys.exit(1)
+        for src in sources_to_run:
+            # Per-source default output subdir if user didn't pin one.
+            sub = "pose_offset_diag" if src == "ob_in_cam" else f"pose_offset_diag_{src}"
+            out_dir = args.output_dir
+            if out_dir is not None and args.pose_source == "both":
+                out_dir = out_dir / src
+            try:
+                summary = diagnose_one_exp(
+                    annotated_sequence=args.annotated_sequence,
+                    frames=args.frames, max_frames=args.max_frames,
+                    object_id=args.object_id, output_dir=out_dir, force=args.force,
+                    tool_name_map_json=args.tool_name_map_json,
+                    tool_name_map_disabled=args.no_tool_name_map_json,
+                    pose_source=src,
+                )
+                out_path = (out_dir if out_dir is not None
+                              else args.annotated_sequence.resolve() / "debug" / sub)
+                print(f"[INFO] [{src}] Wrote diagnostics to {out_path}")
+                agg = summary.get("aggregate", {})
+                if "mean_offset_cam" in agg:
+                    print(f"[INFO] [{src}] mean_offset_cam={agg['mean_offset_cam']}  "
+                          f"||·||={agg['offset_norm_mean']:.4f} m  "
+                          f"(n={agg.get('n_camera_observations', 0)})")
+            except Exception as e:
+                print(f"[ERR] [{src}] {e}", file=sys.stderr)
+                traceback.print_exc()
+                if args.pose_source != "both":
+                    sys.exit(1)
         return
 
     # ---------- workspace mode ----------
@@ -685,58 +771,65 @@ def main():
     failures = []
     aggregates_per_exp = []
     t0 = time.time()
-    for i, (task, exp, exp_dir, ann, reason) in enumerate(exps, 1):
+    for i, (task, exp, _exp_dir, ann, reason) in enumerate(exps, 1):
         prefix = f"[{i:>4d}/{len(exps)}] {task}/{exp}"
-        per_exp_out = (
-            args.output_dir / task / exp if args.output_dir is not None else None
-        )
-        # Quick skip if summary already exists and not forcing.
-        existing = (
-            (per_exp_out if per_exp_out is not None
-             else ann / "debug" / "pose_offset_diag") / "summary.json"
-        )
-        if existing.exists() and not args.force:
-            print(f"{prefix}  skip  (summary.json exists; pass --force to redo)")
-            n_skip += 1
-            try:
-                aggregates_per_exp.append({
-                    "task": task, "exp": exp,
-                    "summary_path": str(existing),
-                    "aggregate": json.loads(existing.read_text()).get("aggregate", {}),
-                })
-            except Exception:
-                pass
-            continue
-        try:
-            t1 = time.time()
-            summary = diagnose_one_exp(
-                annotated_sequence=ann,
-                frames=args.frames, max_frames=args.max_frames,
-                object_id=args.object_id, output_dir=per_exp_out, force=args.force,
-                tool_name_map_json=args.tool_name_map_json,
-                tool_name_map_disabled=args.no_tool_name_map_json,
+        for src in sources_to_run:
+            sub = "pose_offset_diag" if src == "ob_in_cam" else f"pose_offset_diag_{src}"
+            if args.output_dir is not None:
+                per_exp_out = (args.output_dir / src / task / exp
+                                if args.pose_source == "both"
+                                else args.output_dir / task / exp)
+            else:
+                per_exp_out = None
+            # Quick skip if summary already exists and not forcing.
+            existing = (
+                (per_exp_out if per_exp_out is not None
+                 else ann / "debug" / sub) / "summary.json"
             )
-            n_ok += 1
-            agg = summary.get("aggregate", {})
-            tag = ""
-            if "mean_offset_cam" in agg:
-                tag = (f"  ||offset||={agg['offset_norm_mean']:.3f} m  "
-                       f"(n={agg.get('n_camera_observations', 0)})")
-            print(f"{prefix}  OK    [{time.time()-t1:.1f}s]{tag}  ({reason})")
-            aggregates_per_exp.append({
-                "task": task, "exp": exp,
-                "summary_path": str(existing),
-                "aggregate": agg,
-            })
-        except KeyboardInterrupt:
-            print("[INTERRUPTED]")
-            sys.exit(130)
-        except Exception as e:
-            n_fail += 1
-            failures.append((task, exp, str(e)))
-            print(f"{prefix}  FAIL  ({type(e).__name__}: {e})")
-            if not args.continue_on_error:
-                raise
+            src_prefix = f"{prefix} [{src}]" if args.pose_source == "both" else prefix
+            if existing.exists() and not args.force:
+                print(f"{src_prefix}  skip  (summary.json exists; pass --force to redo)")
+                n_skip += 1
+                try:
+                    aggregates_per_exp.append({
+                        "task": task, "exp": exp, "pose_source": src,
+                        "summary_path": str(existing),
+                        "aggregate": json.loads(existing.read_text()).get("aggregate", {}),
+                    })
+                except Exception:
+                    pass
+                continue
+            try:
+                t1 = time.time()
+                summary = diagnose_one_exp(
+                    annotated_sequence=ann,
+                    frames=args.frames, max_frames=args.max_frames,
+                    object_id=args.object_id, output_dir=per_exp_out, force=args.force,
+                    tool_name_map_json=args.tool_name_map_json,
+                    tool_name_map_disabled=args.no_tool_name_map_json,
+                    pose_source=src,
+                )
+                n_ok += 1
+                agg = summary.get("aggregate", {})
+                tag = ""
+                if "mean_offset_cam" in agg:
+                    tag = (f"  ||offset||={agg['offset_norm_mean']:.3f} m  "
+                           f"(n={agg.get('n_camera_observations', 0)})")
+                print(f"{src_prefix}  OK    [{time.time()-t1:.1f}s]{tag}  ({reason})")
+                aggregates_per_exp.append({
+                    "task": task, "exp": exp, "pose_source": src,
+                    "summary_path": str(existing),
+                    "aggregate": agg,
+                })
+            except KeyboardInterrupt:
+                print("[INTERRUPTED]")
+                sys.exit(130)
+            except Exception as e:
+                n_fail += 1
+                failures.append((task, exp, src, str(e)))
+                print(f"{src_prefix}  FAIL  ({type(e).__name__}: {e})")
+                if not args.continue_on_error:
+                    raise
     elapsed = time.time() - t0
 
     # Workspace-level summary.
@@ -769,8 +862,13 @@ def main():
         print(f"Workspace summary written: {ws_summary_path}")
     if failures:
         print("\nFailures:")
-        for task, exp, msg in failures[:10]:
-            print(f"  {task}/{exp}: {msg}")
+        for entry in failures[:10]:
+            if len(entry) == 4:
+                task, exp, src, msg = entry
+                print(f"  {task}/{exp} [{src}]: {msg}")
+            else:
+                task, exp, msg = entry
+                print(f"  {task}/{exp}: {msg}")
         if len(failures) > 10:
             print(f"  ... and {len(failures) - 10} more")
     print("=" * 60)
