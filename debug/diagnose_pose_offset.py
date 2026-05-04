@@ -152,6 +152,41 @@ def find_mesh_path(models_folder: Path, object_id: str) -> Path:
     raise FileNotFoundError(f"No mesh found under {obj_dir}")
 
 
+# Default tool_name_map JSON, mirroring scripts/sbatch_run_auto_videos.sh.
+# Key is matched as a case-insensitive substring of "<task>/<exp>"; longest-key
+# wins. Value is the tool_name; mesh is then resolved under
+# <models_folder>/<tool>/{textured_mesh,cleaned_mesh_10000,mesh}.obj .
+TOOL_NAME_MAP_JSON_DEFAULT = Path(
+    "/viscam/u/chenrq/crq_ws/scripts/mesh_name_mapping.json"
+)
+
+
+def resolve_tool_from_name_map(
+    tool_name_map_json: Path,
+    task_name: str,
+    exp_name: str,
+    models_folder: Path,
+) -> tuple:
+    """Return (tool_name, mesh_path, matched_key) or (None, None, None)."""
+    if not tool_name_map_json or not tool_name_map_json.is_file():
+        return None, None, None
+    try:
+        mp = json.loads(tool_name_map_json.read_text())
+    except Exception:
+        return None, None, None
+    hay = f"{task_name}/{exp_name}".lower()
+    hits = [(k, v) for k, v in mp.items() if k.lower() in hay]
+    if not hits:
+        return None, None, None
+    hits.sort(key=lambda kv: -len(kv[0]))
+    key, name = hits[0]
+    for cand in ("textured_mesh.obj", "cleaned_mesh_10000.obj", "mesh.obj"):
+        path = models_folder / name / cand
+        if path.exists():
+            return name, path, key
+    return name, None, key
+
+
 def read_pose_txt(path: Path) -> np.ndarray:
     arr = np.loadtxt(path, dtype=np.float32)
     arr = np.asarray(arr).reshape(-1)
@@ -272,9 +307,18 @@ def diagnose_one_exp(annotated_sequence: Path,
                        max_frames: int = 12,
                        object_id: str = None,
                        output_dir: Path = None,
-                       force: bool = False) -> dict:
+                       force: bool = False,
+                       tool_name_map_json: Path = None,
+                       tool_name_map_disabled: bool = False) -> dict:
     """Run the diagnosis on a single annotated exp. Returns the summary dict.
-    Raises on hard errors so the workspace driver can record + skip."""
+    Raises on hard errors so the workspace driver can record + skip.
+
+    Tool/mesh resolution priority (mirrors sbatch_run_auto_videos.sh):
+      1. explicit --object_id
+      2. tool_name_map_json hit  (default: TOOL_NAME_MAP_JSON_DEFAULT, auto-on
+         when the file exists and not disabled)
+      3. meta.yaml's object_ids[0]
+    """
     annotated_sequence = annotated_sequence.resolve()
     original_sequence = derive_original_sequence(annotated_sequence)
     meta_path = original_sequence / "meta.yaml"
@@ -282,11 +326,34 @@ def diagnose_one_exp(annotated_sequence: Path,
         raise FileNotFoundError(f"missing meta.yaml: {meta_path}")
     meta = load_yaml(meta_path)
 
-    if not object_id:
-        object_id = meta["object_ids"][0]
     calib_path = Path(meta["calibration_yaml_path"])
     models_folder = Path(meta["models_folder"])
-    mesh_path = find_mesh_path(models_folder, object_id)
+
+    # Auto-detect default JSON unless explicitly disabled.
+    if (not tool_name_map_disabled
+            and tool_name_map_json is None
+            and TOOL_NAME_MAP_JSON_DEFAULT.is_file()):
+        tool_name_map_json = TOOL_NAME_MAP_JSON_DEFAULT
+
+    mesh_path = None
+    mapped_via = None
+    if not object_id and tool_name_map_json is not None:
+        # annotated_sequence is <...>/<videos>_annotated/<task>/<exp>
+        task_name = annotated_sequence.parent.name
+        exp_name = annotated_sequence.name
+        name, path, key = resolve_tool_from_name_map(
+            tool_name_map_json, task_name, exp_name, models_folder
+        )
+        if name is not None and path is not None:
+            object_id = name
+            mesh_path = path
+            mapped_via = f"tool_name_map_json:{key} -> {name}"
+
+    if not object_id:
+        object_id = meta["object_ids"][0]
+        mapped_via = mapped_via or "meta.yaml:object_ids[0]"
+    if mesh_path is None:
+        mesh_path = find_mesh_path(models_folder, object_id)
     tool_masks_h5 = annotated_sequence / "tool_masks" / "masks.h5"
     if not tool_masks_h5.exists():
         # Legacy fallback location.
@@ -295,9 +362,31 @@ def diagnose_one_exp(annotated_sequence: Path,
             tool_masks_h5 = legacy
         else:
             raise FileNotFoundError(f"no masks.h5 under {annotated_sequence}/(tool_masks|masks)/")
-    ob_in_cam_root = annotated_sequence / "processed" / "fd_pose_solver" / object_id / "ob_in_cam"
+    fd_root = annotated_sequence / "processed" / "fd_pose_solver"
+    ob_in_cam_root = fd_root / object_id / "ob_in_cam"
     if not ob_in_cam_root.is_dir():
-        raise FileNotFoundError(f"no ob_in_cam dir for object {object_id}: {ob_in_cam_root}")
+        # Tool-name resolution may disagree with what was actually written
+        # to disk (e.g. meta.yaml was generated from the task folder name
+        # but the pipeline ran with the JSON-mapped tool name, or vice
+        # versa). Scan fd_pose_solver/ for any subfolder containing
+        # ob_in_cam/.
+        alt = None
+        if fd_root.is_dir():
+            for sub in sorted(p for p in fd_root.iterdir() if p.is_dir()):
+                if (sub / "ob_in_cam").is_dir():
+                    alt = sub
+                    break
+        if alt is None:
+            raise FileNotFoundError(
+                f"no ob_in_cam dir for object {object_id}: {ob_in_cam_root}"
+            )
+        print(f"[WARN] ob_in_cam for '{object_id}' not found under {fd_root}; "
+              f"falling back to '{alt.name}'")
+        object_id = alt.name
+        ob_in_cam_root = alt / "ob_in_cam"
+        # Re-resolve mesh against the on-disk tool name.
+        mesh_path = find_mesh_path(models_folder, object_id)
+        mapped_via = (mapped_via or "") + " | fallback_to_fd_subdir"
 
     out_root = output_dir if output_dir is not None else annotated_sequence / "debug" / "pose_offset_diag"
     out_root.mkdir(parents=True, exist_ok=True)
@@ -347,6 +436,7 @@ def diagnose_one_exp(annotated_sequence: Path,
             "h5_path": None if h5_path is None else str(h5_path),
             "tool_masks_h5": str(tool_masks_h5),
             "object_id": object_id,
+            "mapped_via": mapped_via,
             "frames": chosen_frames,
             "per_frame": [],
         }
@@ -376,11 +466,18 @@ def diagnose_one_exp(annotated_sequence: Path,
                 raw_mask = np.asarray(masks_ds[frame_idx, cam_idx])
                 if raw_mask.ndim == 3:
                     raw_mask = raw_mask[0]
-                mask = (
-                    (raw_mask == 1).astype(np.uint8)
-                    if raw_mask.max() <= 1
-                    else (raw_mask == (meta["object_ids"].index(object_id) + 1)).astype(np.uint8)
-                )
+                if raw_mask.max() <= 1:
+                    mask_label = 1
+                else:
+                    try:
+                        mask_label = meta["object_ids"].index(object_id) + 1
+                    except ValueError:
+                        # object_id was resolved via tool_name_map_json and
+                        # isn't in meta.yaml's object_ids; fall back to the
+                        # first object (matches the merger / hand-joint stages
+                        # which only handle the first object too).
+                        mask_label = 1
+                mask = (raw_mask == mask_label).astype(np.uint8)
 
                 verts_cam = (pose_c[:3, :3] @ vertices.T).T + pose_c[:3, 3]
                 centroid_mesh_cam = pose_c[:3, :3] @ mesh_centroid_local + pose_c[:3, 3]
@@ -500,6 +597,15 @@ def main():
                               "Default: per-exp <annotated>/debug/pose_offset_diag/.")
     parser.add_argument("--force", action="store_true",
                          help="Re-run diagnosis even if summary.json already exists.")
+    parser.add_argument("--tool_name_map_json", type=Path, default=None,
+                         help="JSON {key: tool_name} for tool resolution. Key is "
+                              "matched as case-insensitive substring of "
+                              "'<task>/<exp>'; longest key wins. Mesh is then "
+                              "resolved under <models_folder>/<tool>/. Default: "
+                              f"{TOOL_NAME_MAP_JSON_DEFAULT} (auto-on if exists).")
+    parser.add_argument("--no_tool_name_map_json", action="store_true",
+                         help="Disable tool_name_map_json even if the default "
+                              "file exists; fall back to meta.yaml's object_ids[0].")
     parser.add_argument("--continue_on_error", action="store_true", default=True,
                          help="(workspace mode) keep going if one exp fails. Default ON.")
     args = parser.parse_args()
@@ -517,6 +623,8 @@ def main():
                 annotated_sequence=args.annotated_sequence,
                 frames=args.frames, max_frames=args.max_frames,
                 object_id=args.object_id, output_dir=out_dir, force=args.force,
+                tool_name_map_json=args.tool_name_map_json,
+                tool_name_map_disabled=args.no_tool_name_map_json,
             )
             out_path = (out_dir if out_dir is not None
                           else args.annotated_sequence.resolve() / "debug" / "pose_offset_diag")
@@ -590,6 +698,8 @@ def main():
                 annotated_sequence=ann,
                 frames=args.frames, max_frames=args.max_frames,
                 object_id=args.object_id, output_dir=per_exp_out, force=args.force,
+                tool_name_map_json=args.tool_name_map_json,
+                tool_name_map_disabled=args.no_tool_name_map_json,
             )
             n_ok += 1
             agg = summary.get("aggregate", {})
