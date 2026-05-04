@@ -313,11 +313,12 @@ def diagnose_one_exp(annotated_sequence: Path,
     """Run the diagnosis on a single annotated exp. Returns the summary dict.
     Raises on hard errors so the workspace driver can record + skip.
 
-    Tool/mesh resolution priority (mirrors sbatch_run_auto_videos.sh):
+    Tool/mesh resolution priority:
       1. explicit --object_id
-      2. tool_name_map_json hit  (default: TOOL_NAME_MAP_JSON_DEFAULT, auto-on
+      2. meta.yaml's object_ids[0]  (only used if mesh resolves under
+         <models_folder>/<id>/; otherwise falls through)
+      3. tool_name_map_json hit  (default: TOOL_NAME_MAP_JSON_DEFAULT, auto-on
          when the file exists and not disabled)
-      3. meta.yaml's object_ids[0]
     """
     annotated_sequence = annotated_sequence.resolve()
     original_sequence = derive_original_sequence(annotated_sequence)
@@ -337,6 +338,18 @@ def diagnose_one_exp(annotated_sequence: Path,
 
     mesh_path = None
     mapped_via = None
+
+    # Priority 2: meta.yaml's object_ids[0] (only if the mesh actually exists).
+    if not object_id:
+        meta_obj_id = meta["object_ids"][0]
+        try:
+            mesh_path = find_mesh_path(models_folder, meta_obj_id)
+            object_id = meta_obj_id
+            mapped_via = "meta.yaml:object_ids[0]"
+        except FileNotFoundError:
+            mesh_path = None    # fall through to tool_name_map_json
+
+    # Priority 3: tool_name_map_json fallback when meta.yaml didn't resolve.
     if not object_id and tool_name_map_json is not None:
         # annotated_sequence is <...>/<videos>_annotated/<task>/<exp>
         task_name = annotated_sequence.parent.name
@@ -350,6 +363,8 @@ def diagnose_one_exp(annotated_sequence: Path,
             mapped_via = f"tool_name_map_json:{key} -> {name}"
 
     if not object_id:
+        # Last resort: use meta.yaml id even if mesh is missing — let
+        # find_mesh_path raise the canonical error.
         object_id = meta["object_ids"][0]
         mapped_via = mapped_via or "meta.yaml:object_ids[0]"
     if mesh_path is None:
