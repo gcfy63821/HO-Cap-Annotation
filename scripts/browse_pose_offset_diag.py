@@ -44,44 +44,68 @@ def annotated_root_for_videos(videos_root: Path) -> Path:
 # Discovery
 # ============================================================
 
-def gather_pose_offset_entries(annotated_root: Path, only_with_summary=True):
-    """Walk <annotated_root>/<task>/<exp>/debug/pose_offset_diag/ and collect
-    one entry per exp.
+def gather_pose_offset_entries(annotated_root: Path, only_with_summary=True,
+                                  pose_sources=("ob_in_cam", "merged")):
+    """Walk <annotated_root>/<task>/<exp>/debug/pose_offset_diag{,_<src>}/
+    and collect one entry per (exp, pose_source).
 
     Each entry has:
-        task, exp, diag_dir, summary_path, summary (parsed JSON or None),
+        task, exp, pose_source, diag_dir, summary_path,
+        summary (parsed JSON or None),
         frames = [{"frame": int, "cams": {serial: rel_path_from_annotated_root}}, ...]
         merger_done, hand_done, joint_done   (status badges)
     """
     out = []
     if not annotated_root.is_dir():
         return out
+    # Map pose_source -> diag subdir name (matches diagnose script convention).
+    src_to_subdir = {
+        s: ("pose_offset_diag" if s == "ob_in_cam" else f"pose_offset_diag_{s}")
+        for s in pose_sources
+    }
     for task_dir in sorted(p for p in annotated_root.iterdir() if p.is_dir()):
         for exp_dir in sorted(p for p in task_dir.iterdir() if p.is_dir()):
-            diag_dir = exp_dir / "debug" / "pose_offset_diag"
-            if not diag_dir.is_dir():
-                if only_with_summary:
+            for pose_source, subdir in src_to_subdir.items():
+                diag_dir = exp_dir / "debug" / subdir
+                if not diag_dir.is_dir():
+                    if only_with_summary:
+                        continue
+                summary_path = diag_dir / "summary.json"
+                summary = None
+                if summary_path.exists():
+                    try:
+                        summary = json.loads(summary_path.read_text())
+                    except Exception as e:
+                        summary = {"_parse_error": str(e)}
+                if only_with_summary and summary is None:
                     continue
-            summary_path = diag_dir / "summary.json"
-            summary = None
-            if summary_path.exists():
-                try:
-                    summary = json.loads(summary_path.read_text())
-                except Exception as e:
-                    summary = {"_parse_error": str(e)}
-            if only_with_summary and summary is None:
-                continue
 
-            # Build per-frame cam image lists. Prefer the order in summary.json
-            # (so the user sees the same frames the diagnose script analyzed),
-            # fall back to walking the directory.
-            frames = []
-            seen_frames = set()
-            if isinstance(summary, dict) and "per_frame" in summary:
-                for fr_record in summary["per_frame"]:
-                    fr = int(fr_record["frame"])
-                    fdir = diag_dir / f"frame_{fr:06d}"
-                    if not fdir.is_dir():
+                # Build per-frame cam image lists. Prefer the order in summary.json
+                # (so the user sees the same frames the diagnose script analyzed),
+                # fall back to walking the directory.
+                frames = []
+                seen_frames = set()
+                if isinstance(summary, dict) and "per_frame" in summary:
+                    for fr_record in summary["per_frame"]:
+                        fr = int(fr_record["frame"])
+                        fdir = diag_dir / f"frame_{fr:06d}"
+                        if not fdir.is_dir():
+                            continue
+                        cams = {}
+                        for png in sorted(fdir.glob("cam_*.png")):
+                            serial = png.stem.split("_", 1)[1]
+                            cams[serial] = str(png.relative_to(annotated_root))
+                        if cams:
+                            frames.append({"frame": fr, "cams": cams})
+                            seen_frames.add(fr)
+                # Walk dir for any extra frames (or all frames if no summary).
+                for fdir in sorted(diag_dir.glob("frame_*")) if diag_dir.is_dir() else []:
+                    if not fdir.is_dir(): continue
+                    try:
+                        fr = int(fdir.name.split("_", 1)[1])
+                    except ValueError:
+                        continue
+                    if fr in seen_frames:
                         continue
                     cams = {}
                     for png in sorted(fdir.glob("cam_*.png")):
@@ -89,34 +113,19 @@ def gather_pose_offset_entries(annotated_root: Path, only_with_summary=True):
                         cams[serial] = str(png.relative_to(annotated_root))
                     if cams:
                         frames.append({"frame": fr, "cams": cams})
-                        seen_frames.add(fr)
-            # Walk dir for any extra frames (or all frames if no summary).
-            for fdir in sorted(diag_dir.glob("frame_*")) if diag_dir.is_dir() else []:
-                if not fdir.is_dir(): continue
-                try:
-                    fr = int(fdir.name.split("_", 1)[1])
-                except ValueError:
-                    continue
-                if fr in seen_frames:
-                    continue
-                cams = {}
-                for png in sorted(fdir.glob("cam_*.png")):
-                    serial = png.stem.split("_", 1)[1]
-                    cams[serial] = str(png.relative_to(annotated_root))
-                if cams:
-                    frames.append({"frame": fr, "cams": cams})
 
-            out.append({
-                "task": task_dir.name,
-                "exp": exp_dir.name,
-                "diag_dir": diag_dir,
-                "summary_path": summary_path,
-                "summary": summary,
-                "frames": frames,
-                "merger_done": (exp_dir / "processed/fd_pose_solver/fd_poses_merged_fixed.npy").exists(),
-                "hand_done":   (exp_dir / "result_hand_optimized.pkl").exists(),
-                "joint_done":  (exp_dir / "processed/joint_pose_solver/poses_o.npy").exists(),
-            })
+                out.append({
+                    "task": task_dir.name,
+                    "exp": exp_dir.name,
+                    "pose_source": pose_source,
+                    "diag_dir": diag_dir,
+                    "summary_path": summary_path,
+                    "summary": summary,
+                    "frames": frames,
+                    "merger_done": (exp_dir / "processed/fd_pose_solver/fd_poses_merged_fixed.npy").exists(),
+                    "hand_done":   (exp_dir / "result_hand_optimized.pkl").exists(),
+                    "joint_done":  (exp_dir / "processed/joint_pose_solver/poses_o.npy").exists(),
+                })
     return out
 
 
@@ -297,16 +306,20 @@ document.addEventListener('DOMContentLoaded', () => {
       setCardFrame(hovered, i + 1);
     }
   });
-  // Filter
+  // Filter (text + source)
   const f = document.getElementById('filter');
-  if (f) {
-    f.addEventListener('input', e => {
-      const q = e.target.value.toLowerCase();
-      document.querySelectorAll('.card').forEach(c => {
-        c.style.display = c.dataset.label.toLowerCase().includes(q) ? '' : 'none';
-      });
+  const srcF = document.getElementById('srcfilter');
+  function applyFilters() {
+    const q = (f ? f.value : '').toLowerCase();
+    const s = srcF ? srcF.value : '';
+    document.querySelectorAll('.card').forEach(c => {
+      const okText = c.dataset.label.toLowerCase().includes(q);
+      const okSrc  = !s || c.dataset.source === s;
+      c.style.display = (okText && okSrc) ? '' : 'none';
     });
   }
+  if (f)    f.addEventListener('input',  applyFilters);
+  if (srcF) srcF.addEventListener('change', applyFilters);
   // Sort
   const sort = document.getElementById('sortby');
   if (sort) {
@@ -339,7 +352,8 @@ def fmt_vec(v, precision=3):
 
 
 def build_card(entry, annotated_root: Path) -> str:
-    label = f'{entry["task"]}/{entry["exp"]}'
+    src = entry.get("pose_source", "ob_in_cam")
+    label = f'{entry["task"]}/{entry["exp"]}  [{src}]'
     label_attr = html.escape(label, quote=True)
 
     summary = entry["summary"] or {}
@@ -352,6 +366,7 @@ def build_card(entry, annotated_root: Path) -> str:
     obj_id = summary.get("object_id", "?")
 
     parts = [f'<div class="card" data-label="{label_attr}" '
+              f'data-source="{html.escape(src, quote=True)}" '
               f'data-norm="{(norm if norm is not None else -1)}" '
               f'data-frames="{html.escape(json.dumps(entry["frames"]), quote=True)}" '
               f'title="{label_attr}">']
@@ -382,9 +397,12 @@ def build_card(entry, annotated_root: Path) -> str:
     elif not aggregate:
         stats_html = '<div class="offset-stats">no aggregate (no valid camera observations)</div>'
 
+    src_color = "#6cf" if src == "ob_in_cam" else "#fc6"
     parts.append(
         f'<div class="label">'
-        f'<span class="task">{html.escape(entry["task"])}</span>'
+        f'<span class="task">{html.escape(entry["task"])}'
+        f'  <span style="color:{src_color};font-size:10px">[{html.escape(src)}]</span>'
+        f'</span>'
         f'<span class="exp">{html.escape(entry["exp"])}'
         f'<span class="copy_btn" onclick="copyText(this, &quot;{label_attr}&quot;); event.stopPropagation();">copy</span>'
         f'</span>'
@@ -454,16 +472,31 @@ def write_index(annotated_root: Path, entries, out_path: Path):
     parts = [HTML_HEAD.format(root_name=html.escape(annotated_root.name))]
     parts.append(f'<h1>Pose offset diagnostics <span style="color:#888">— '
                   f'{html.escape(annotated_root.name)}</span></h1>')
+    by_src = {}
+    for e in entries:
+        by_src.setdefault(e.get("pose_source", "ob_in_cam"), 0)
+        by_src[e.get("pose_source", "ob_in_cam")] += 1
+    src_breakdown = "  ".join(f"{s}={n}" for s, n in sorted(by_src.items()))
     parts.append(
         f'<div class="stats">'
-        f'{n_total} exps with diag dir &nbsp;·&nbsp; '
+        f'{n_total} entries with diag dir &nbsp;·&nbsp; '
         f'{n_with_frames} have rendered frames &nbsp;·&nbsp; '
-        f'{n_with_offset} have offset stats'
+        f'{n_with_offset} have offset stats &nbsp;·&nbsp; '
+        f'by source: {html.escape(src_breakdown)}'
         f'</div>'
+    )
+    sources_present = sorted({e.get("pose_source", "ob_in_cam") for e in entries})
+    src_options = "".join(
+        f'<option value="{html.escape(s)}">{html.escape(s)}</option>' for s in sources_present
     )
     parts.append(
         '<div class="filter">'
         '<input id="filter" placeholder="filter (substring of task/exp)...">'
+        '<label>source:</label>'
+        '<select id="srcfilter" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #444;border-radius:4px;padding:5px">'
+        '<option value="">(all)</option>'
+        f'{src_options}'
+        '</select>'
         '<label>sort by:</label>'
         '<select id="sortby" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #444;border-radius:4px;padding:5px">'
         '<option value="">(input order)</option>'
@@ -498,6 +531,12 @@ def main():
     ap.add_argument("--include_no_summary", action="store_true",
                     help="Also list exps that have a debug/pose_offset_diag/ directory "
                          "but no summary.json. Default OFF.")
+    ap.add_argument("--pose_sources", nargs="+",
+                    default=["ob_in_cam", "merged"],
+                    help="Which pose source subdirs to scan. Each maps to a "
+                         "diag dir name: ob_in_cam→pose_offset_diag, "
+                         "<other>→pose_offset_diag_<other>. "
+                         "Default: ob_in_cam merged.")
     ap.add_argument("--serve", action="store_true",
                     help="After writing the index, serve <annotated_root>/ over HTTP.")
     ap.add_argument("--port", type=int, default=8091)
@@ -519,7 +558,8 @@ def main():
                   else annotated_root / "_pose_offset_diag_index.html")
 
     entries = gather_pose_offset_entries(
-        annotated_root, only_with_summary=(not args.include_no_summary)
+        annotated_root, only_with_summary=(not args.include_no_summary),
+        pose_sources=tuple(args.pose_sources),
     )
     if not entries:
         print(f"No exps with pose_offset_diag found under {annotated_root}.")
