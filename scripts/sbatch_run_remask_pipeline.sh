@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=16
-#SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam4
+#SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam15
 #SBATCH --output=/viscam/u/chenrq/crq_ws/slurm_outs/%j.out
 #SBATCH --error=/viscam/u/chenrq/crq_ws/slurm_outs/%j.err
 #
