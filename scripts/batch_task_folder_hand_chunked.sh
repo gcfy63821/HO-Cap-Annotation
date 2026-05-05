@@ -54,6 +54,8 @@ SKIP_EXISTING=0
 KEEP_H5=0
 NO_MERGE=0
 KEEP_CHUNK_FILES=0
+ONLY_EXP=""           # if set, only process this single exp under TASK_FOLDER
+                      # (used by sbatch_run_hand_array.sh for per-exp scheduling)
 # If set, build h5 in this dir and symlink it into the sequence folder so
 # cluster_reconstruct still finds it at $SEQUENCE_FOLDER/data00000000.h5.
 # Typical values: "/dev/shm/$USER/$SLURM_JOB_ID" or "/scratch/$USER/$SLURM_JOB_ID".
@@ -72,6 +74,7 @@ while [[ "$#" -gt 0 ]]; do
         --no_merge)          NO_MERGE=1; shift;;
         --keep_chunk_files)  KEEP_CHUNK_FILES=1; shift;;
         --h5_scratch_dir)    H5_SCRATCH_DIR="$2"; shift 2;;
+        --only_exp)          ONLY_EXP="$2"; shift 2;;
         -h|--help)
             sed -n '2,32p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
@@ -140,6 +143,10 @@ FAILED_CHUNKS=()
 for EXP_DIR in "$TASK_FOLDER_ABS"/*/; do
     [[ -d "$EXP_DIR" ]] || continue
     EXP_NAME="$(basename "$EXP_DIR")"
+    # Per-exp filter (used by array scheduling — one array element per exp).
+    if [[ -n "$ONLY_EXP" && "$EXP_NAME" != "$ONLY_EXP" ]]; then
+        continue
+    fi
     TOTAL_EXP=$((TOTAL_EXP+1))
 
     SEQUENCE_NAME="${SEQUENCE_BASE}/${EXP_NAME}"
