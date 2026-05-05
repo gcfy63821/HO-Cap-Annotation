@@ -4,7 +4,7 @@
 #SBATCH --partition=viscam
 #SBATCH --gres=gpu:1
 #SBATCH --mem=128G
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --time=24:00:00
 #SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam14,viscam15
 #SBATCH --output=/viscam/u/chenrq/crq_ws/slurm_outs/redo_msk_%j.out
