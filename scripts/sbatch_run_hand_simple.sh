@@ -142,6 +142,8 @@ echo ""
 PENDING=()    # array of "<task>__<exp>"  (use __ as a separator that's
               # vanishingly rare in real names; revert with parameter expansion)
 
+N_NO_MASK=0
+NO_MASK=()    # exps skipped due to missing mask source (printed at end)
 for TASK_DIR in "$VIDEOS_ROOT"/*/; do
     TASK_NAME="$(basename "$TASK_DIR")"
     [[ "$TASK_NAME" == realsense_calibrate_* ]] && continue
@@ -154,9 +156,29 @@ for TASK_DIR in "$VIDEOS_ROOT"/*/; do
         # Only real exps (have at least one cam*_rgb.mp4)
         compgen -G "${EXP_DIR}cam*_rgb.mp4" >/dev/null 2>&1 || continue
         # Skip if already done
-        DONE_PKL="${ANNOTATED_ROOT}/${TASK_NAME}/${EXP_NAME}/result_hand_optimized.pkl"
+        ANN="${ANNOTATED_ROOT}/${TASK_NAME}/${EXP_NAME}"
+        DONE_PKL="${ANN}/result_hand_optimized.pkl"
         if [[ "$SKIP_EXISTING" == "1" && -f "$DONE_PKL" ]]; then
             continue
+        fi
+        # generate_meta.py (called by the inner script) needs a mask source.
+        # Accept any of: tool_masks/masks.h5, masks/masks.h5, or per-frame
+        # npz/npy under masks/cam*_rgb/. Without one of these the inner job
+        # fails immediately with "No mask source found", so prune them here.
+        if [[ ! -f "${ANN}/tool_masks/masks.h5" \
+              && ! -f "${ANN}/masks/masks.h5" ]]; then
+            HAS_PER_FRAME=0
+            if [[ -d "${ANN}/masks" ]]; then
+                if compgen -G "${ANN}/masks/cam*_rgb/*.npz" >/dev/null 2>&1 \
+                   || compgen -G "${ANN}/masks/cam*_rgb/*.npy" >/dev/null 2>&1; then
+                    HAS_PER_FRAME=1
+                fi
+            fi
+            if [[ "$HAS_PER_FRAME" != "1" ]]; then
+                NO_MASK+=("${TASK_NAME}/${EXP_NAME}")
+                N_NO_MASK=$((N_NO_MASK + 1))
+                continue
+            fi
         fi
         PENDING+=("${TASK_NAME}__${EXP_NAME}")
     done
@@ -164,6 +186,17 @@ done
 
 N_PENDING=${#PENDING[@]}
 echo "[scan] pending exps: $N_PENDING"
+if [[ "$N_NO_MASK" -gt 0 ]]; then
+    echo "[scan] dropped $N_NO_MASK exps with NO mask source"
+    echo "       (need <ann>/tool_masks/masks.h5 or <ann>/masks/masks.h5"
+    echo "        or per-frame npz/npy under <ann>/masks/cam*_rgb/)"
+    echo "       first 20 dropped:"
+    for ((k=0; k<N_NO_MASK && k<20; k++)); do
+        echo "         - ${NO_MASK[$k]}"
+    done
+    [[ "$N_NO_MASK" -gt 20 ]] && echo "         ... ($((N_NO_MASK - 20)) more)"
+    echo ""
+fi
 if [[ "$N_PENDING" -lt 1 ]]; then
     echo "[scan] nothing to do."
     exit 0

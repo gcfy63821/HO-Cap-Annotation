@@ -261,9 +261,10 @@ for EXP_DIR in "$TASK_FOLDER_ABS"/*/; do
         fi
 
         # --- step 2: generate meta (start_frame = CHUNK_START for mask alignment) ---
-        # hand-only annotation has no tool/object masks. generate_meta.py still
-        # tries to write {annotated_path}/masks/masks.h5 — pre-create the dir so
-        # it falls through with zero masks instead of failing on missing folder.
+        # Hand-only annotation has no tool/object masks. Pass --no_mask so
+        # generate_meta.py skips all mask discovery/streaming (otherwise it
+        # raises "No mask source found" when the exp has no tool_masks/masks.h5
+        # and no per-frame npz under masks/cam*_rgb/).
         mkdir -p "${ANNOTATED_PATH}/masks"
         if ! python preprocess/generate_meta.py \
                 --h5_path "$H5_PATH" \
@@ -271,6 +272,7 @@ for EXP_DIR in "$TASK_FOLDER_ABS"/*/; do
                 --models_folder "$MODELS_FOLDER" \
                 --tool_name "$TOOL_NAME" \
                 --start_frame "$CHUNK_START" \
+                --no_mask \
                 --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4; then
             echo "    [ERR] generate_meta"
             FAIL_CHUNK=$((FAIL_CHUNK+1)); FAILED_CHUNKS+=("$EXP_NAME:$CHUNK_TAG:meta")

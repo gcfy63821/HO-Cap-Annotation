@@ -360,7 +360,7 @@ def slice_masks_h5(source_path, dest_path, start_frame, num_frames, num_cams, ex
     print(f"[INFO] Sliced masks {start_frame}..{end} from {source_path} -> {dest_path}  shape={sliced.shape}")
 
 
-def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_root, subject_id="subject_5", tool_name="blue_scooper", models_folder="models", object_mask_dir=None, start_frame=0, thresholds=None, masks_h5_source=None):
+def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_root, subject_id="subject_5", tool_name="blue_scooper", models_folder="models", object_mask_dir=None, start_frame=0, thresholds=None, masks_h5_source=None, no_mask=False):
     """
     Generate meta.yaml for a HO-Cap dataset sequence. Also saves masks as h5 files in their respective directories.
     Auto-detects number of objects from mask labels and reads objects.yaml for tool names.
@@ -386,7 +386,13 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
     img_H, img_W = imgs_shape[2], imgs_shape[3]
 
     masks_h5_path = Path(mask_root_dir) / "masks.h5"
-    if masks_h5_source:
+    if no_mask:
+        # Hand-only path: hand reconstruction doesn't read tool masks. Skip
+        # the entire mask discovery/streaming step. Downstream object-pose
+        # stages would still fail without masks, but the caller has opted in
+        # by passing --no_mask, so that's intentional.
+        print(f"[INFO] --no_mask: skipping mask discovery & masks.h5 building")
+    elif masks_h5_source:
         # Slice from the supplied full masks.h5 — no npz reads.
         slice_masks_h5(
             source_path=masks_h5_source,
@@ -457,18 +463,27 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
                 expected_H=img_H, expected_W=img_W, start_frame=start_frame)
 
     # Save object masks if provided
+    if no_mask:
+        # Skip every block that touches the (now nonexistent) mask root.
+        object_mask_dir = None
     if object_mask_dir is not None:
         object_masks = load_masks_from_folder(object_mask_dir, num_frames, num_cams, expected_H=img_H, expected_W=img_W, start_frame=start_frame)
         object_masks_h5_path = Path(object_mask_dir) / "object_masks.h5"
         save_masks_to_h5(object_masks, object_masks_h5_path, dataset_name="object_masks")
 
     # Auto-detect number of objects from mask labels
-    num_objects_detected = detect_num_objects_from_masks(mask_root_dir, num_cams, start_frame)
-    print(f"[INFO] Detected {num_objects_detected} object(s) from mask labels")
+    if no_mask:
+        # Without masks we have nothing to count. Pretend single-object.
+        num_objects_detected = 1
+        print(f"[INFO] --no_mask: forcing num_objects_detected=1 (hand-only)")
+    else:
+        num_objects_detected = detect_num_objects_from_masks(mask_root_dir, num_cams, start_frame)
+        print(f"[INFO] Detected {num_objects_detected} object(s) from mask labels")
 
     # Determine object_ids list
     # Priority: objects.yaml > auto-detect count with tool_name fallback
-    object_names = load_object_names_from_yaml(mask_root_dir)
+    object_names = (None if no_mask
+                     else load_object_names_from_yaml(mask_root_dir))
     if object_names is not None:
         # Validate count matches detection
         if num_objects_detected > 0 and len(object_names) != num_objects_detected:
@@ -491,7 +506,10 @@ def generate_meta_yaml(h5_path, mask_root_dir, calibration_yaml_path, output_roo
     calib_serials = [str(cam['camera_id']).zfill(2) for cam in calib_data]
 
     # Prefer actual camera folder names from mask directory (e.g. cam8_rgb -> '08')
-    discovered = discover_camera_folders(mask_root_dir)
+    if no_mask:
+        discovered = []
+    else:
+        discovered = discover_camera_folders(mask_root_dir)
     discovered_serials = [str(cam_id).zfill(2) for cam_id, _ in discovered]
     if len(discovered_serials) >= num_cams:
         cam_serials = discovered_serials[:num_cams]
@@ -571,6 +589,12 @@ if __name__ == "__main__":
              'npz under tool_masks/cam*_rgb/. Lets the pipeline reuse a full '
              'masks.h5 from a previous DINO run (or external source) without '
              'requiring the npz checkpoint files.')
+    parser.add_argument('--no_mask', action='store_true',
+        help='Hand-only mode: skip all mask discovery / masks.h5 building. '
+             'Use this when the only downstream stage is hand reconstruction '
+             '(which does NOT read tool_masks/masks.h5). object_ids will be '
+             'set to [tool_name]; downstream object-pose stages will fail '
+             'and that is the intended behavior.')
     args = parser.parse_args()
 
     # Infer folder_name, task_name, and sequence_name from h5_path
@@ -610,4 +634,5 @@ if __name__ == "__main__":
         start_frame=args.start_frame,
         thresholds=[args.x_min, args.x_max, args.y_min, args.y_max, args.z_min, args.z_max],
         masks_h5_source=args.masks_h5_source,
+        no_mask=args.no_mask,
     )
