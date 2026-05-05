@@ -6,7 +6,7 @@
 #SBATCH --mem=96G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=24:00:00
-#SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam4
+#SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam4,viscam14,viscam15
 #SBATCH --output=/viscam/u/chenrq/crq_ws/slurm_outs/hand_rmsk_%j.out
 #SBATCH --error=/viscam/u/chenrq/crq_ws/slurm_outs/hand_rmsk_%j.err
 #
