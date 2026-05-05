@@ -2,7 +2,7 @@
 #SBATCH --account viscam
 #SBATCH --job-name hand_simp
 #SBATCH --partition=viscam
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:4
 #SBATCH --mem=96G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=24:00:00
