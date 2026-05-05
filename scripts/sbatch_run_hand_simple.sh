@@ -2,7 +2,7 @@
 #SBATCH --account viscam
 #SBATCH --job-name hand_simp
 #SBATCH --partition=viscam
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:2
 #SBATCH --mem=96G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=24:00:00
@@ -209,21 +209,32 @@ run_one() {
     local logf="$H5_SCRATCH_ROOT/log_${idx}_${task}_${exp}.log"
     echo "[$(date +%H:%M:%S)] [worker $idx → gpu $gpu] START  $task / $exp  (log: $logf)"
 
-    # Pin this worker to one GPU. Constrain BLAS threads so 4 workers don't
-    # collectively oversubscribe the 16 CPUs.
-    CUDA_VISIBLE_DEVICES="$gpu" \
-    OMP_NUM_THREADS="$PER_WORKER_THREADS" \
-    MKL_NUM_THREADS="$PER_WORKER_THREADS" \
-    OPENBLAS_NUM_THREADS="$PER_WORKER_THREADS" \
-    NUMEXPR_NUM_THREADS="$PER_WORKER_THREADS" \
-    H5_COMPRESSION=lzf \
+    # Pin this worker to one GPU. Use `export` (inherited by all
+    # descendants — including the conda-activated python inside the inner
+    # script) instead of inline VAR=value (per-command env) which can be
+    # silently dropped by some conda hooks. Also pin CUDA_DEVICE_ORDER so
+    # the device index inside the proc matches what nvidia-smi shows.
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    export CUDA_VISIBLE_DEVICES="$gpu"
+    export OMP_NUM_THREADS="$PER_WORKER_THREADS"
+    export MKL_NUM_THREADS="$PER_WORKER_THREADS"
+    export OPENBLAS_NUM_THREADS="$PER_WORKER_THREADS"
+    export NUMEXPR_NUM_THREADS="$PER_WORKER_THREADS"
+    export H5_COMPRESSION=lzf
+
+    {
+        echo "[worker $idx] CUDA_DEVICE_ORDER=$CUDA_DEVICE_ORDER"
+        echo "[worker $idx] CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+        nvidia-smi --query-gpu=index,uuid,name,memory.total --format=csv 2>&1 | head -5
+    } >>"$logf" 2>&1
+
     bash "$HAND_BATCH_SCRIPT" \
         --task_folder "$task_folder" \
         --calibration_yaml "$CAL_YAML" \
         --chunk_size "$CHUNK_SIZE" \
         --h5_scratch_dir "$scratch" \
         --only_exp "$exp" \
-        "${INNER_FLAGS[@]}" >"$logf" 2>&1
+        "${INNER_FLAGS[@]}" >>"$logf" 2>&1
     local rc=$?
     if [[ $rc -eq 0 ]]; then
         echo "[$(date +%H:%M:%S)] [worker $idx → gpu $gpu] OK     $task / $exp"
