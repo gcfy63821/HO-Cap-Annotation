@@ -378,6 +378,51 @@ def draw_mesh(img: np.ndarray, verts_cam: np.ndarray, faces: np.ndarray,
                             thickness=1, lineType=cv2.LINE_AA)
 
 
+def parse_color(spec, default):
+    """Accept a `#rrggbb` / `rrggbb` hex string or a comma-separated 'r,g,b'.
+    Returns an (r, g, b) tuple. Falls back to default on bad input."""
+    if not spec:
+        return default
+    s = spec.strip().lstrip("#")
+    try:
+        if "," in s:
+            r, g, b = (int(x) for x in s.split(",")[:3])
+        else:
+            if len(s) == 3:
+                s = "".join(c * 2 for c in s)
+            if len(s) != 6:
+                raise ValueError(f"hex must be 6 chars, got {s!r}")
+            r = int(s[0:2], 16); g = int(s[2:4], 16); b = int(s[4:6], 16)
+        return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
+    except Exception as e:
+        print(f"[WARN] bad color spec {spec!r} ({e}); using default {default}")
+        return default
+
+
+# Designer-friendly default palette (RGB tuples).
+# Object  = amber 400  #fbbf24  (warm gold, pops against most scenes)
+# L hand  = rose  400  #fb7185  (coral pink)
+# R hand  = sky   400  #38bdf8  (cool cyan)
+DEFAULT_OBJECT_COLOR     = (251, 191,  36)
+DEFAULT_LEFT_HAND_COLOR  = (251, 113, 133)
+DEFAULT_RIGHT_HAND_COLOR = ( 56, 189, 248)
+
+# A few named presets; pick with --palette <name>.
+PALETTES = {
+    "default": (DEFAULT_OBJECT_COLOR, DEFAULT_LEFT_HAND_COLOR, DEFAULT_RIGHT_HAND_COLOR),
+    # warm = amber tool, rose & magenta hands
+    "warm":    ((245, 158,  11), (244,  63,  94), (217,  70, 239)),
+    # cool = teal tool, cyan & violet hands
+    "cool":    (( 20, 184, 166), ( 34, 211, 238), (139,  92, 246)),
+    # high-contrast original
+    "vivid":   ((  0, 255,   0), (255,  60,  60), ( 60,  60, 255)),
+    # pastel
+    "pastel":  ((167, 243, 208), (252, 165, 165), (165, 180, 252)),
+    # mono (good with bg_white_alpha) — object black, hands red/blue ink
+    "ink":     (( 24,  24,  27), (190,  18,  60), ( 30,  64, 175)),
+}
+
+
 def concat_frames_grid(frames, grid=(2, 4)):
     rows = []
     for r in range(grid[0]):
@@ -465,7 +510,10 @@ def render_one_exp(annotated_sequence: Path,
                      mesh_every: int = 4,
                      hand_every: int = 1,
                      bg_white_alpha: float = 0.0,
-                     bg_dilate_px: int = 2) -> dict:
+                     bg_dilate_px: int = 2,
+                     object_color: tuple = DEFAULT_OBJECT_COLOR,
+                     left_hand_color: tuple = DEFAULT_LEFT_HAND_COLOR,
+                     right_hand_color: tuple = DEFAULT_RIGHT_HAND_COLOR) -> dict:
     annotated_sequence = annotated_sequence.resolve()
     original_sequence = derive_original_sequence(annotated_sequence)
     meta_path = original_sequence / "meta.yaml"
@@ -627,11 +675,11 @@ def render_one_exp(annotated_sequence: Path,
 
                     if obj_proj is not None:
                         draw_mesh(img, obj_proj, obj_faces, Ks[cam_idx],
-                                    color=(0, 255, 0), every=mesh_every,
+                                    color=object_color, every=mesh_every,
                                     fill_alpha=fill_alpha)
                     for side, vc in hand_proj.items():
                         faces_h = mano.faces_left if side == "left" else mano.faces_right
-                        color = (255, 60, 60) if side == "left" else (60, 60, 255)
+                        color = left_hand_color if side == "left" else right_hand_color
                         draw_mesh(img, vc, faces_h, Ks[cam_idx],
                                     color=color, every=hand_every,
                                     fill_alpha=fill_alpha)
@@ -718,6 +766,18 @@ def main():
                     help="Dilate the kept (foreground) region by this many "
                          "pixels before fading bg, so wireframes drawn on "
                          "the silhouette boundary aren't washed out.")
+    ap.add_argument("--palette", choices=tuple(PALETTES.keys()), default="default",
+                    help="Color preset: default (amber/coral/sky), warm "
+                         "(amber/rose/magenta), cool (teal/cyan/violet), "
+                         "vivid (the old saturated RGB), pastel (soft), "
+                         "ink (dark tool, ink-red/blue hands — best with "
+                         "--bg_white_alpha 0.6+).")
+    ap.add_argument("--object_color", type=str, default=None,
+                    help="Override tool color: hex '#fbbf24' or 'r,g,b'.")
+    ap.add_argument("--left_hand_color", type=str, default=None,
+                    help="Override left-hand color: hex or 'r,g,b'.")
+    ap.add_argument("--right_hand_color", type=str, default=None,
+                    help="Override right-hand color: hex or 'r,g,b'.")
     ap.add_argument("--output_dir", type=Path, default=None)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--continue_on_error", action="store_true", default=True)
@@ -730,6 +790,13 @@ def main():
     if args.videos_root is not None and args.annotated_sequence is not None:
         ap.error("--videos_root and --annotated_sequence are mutually exclusive")
 
+    pal_obj, pal_left, pal_right = PALETTES[args.palette]
+    object_color     = parse_color(args.object_color, pal_obj)
+    left_hand_color  = parse_color(args.left_hand_color, pal_left)
+    right_hand_color = parse_color(args.right_hand_color, pal_right)
+    print(f"[palette={args.palette}] tool={object_color}  "
+          f"left={left_hand_color}  right={right_hand_color}")
+
     common = dict(
         start_frame=args.start_frame, end_frame=args.end_frame,
         frame_step=args.frame_step, pose_prefer=args.pose_prefer,
@@ -737,6 +804,9 @@ def main():
         no_hand=args.no_hand, fill_alpha=args.fill_alpha,
         mesh_every=args.mesh_every, hand_every=args.hand_every,
         bg_white_alpha=args.bg_white_alpha, bg_dilate_px=args.bg_dilate_px,
+        object_color=object_color,
+        left_hand_color=left_hand_color,
+        right_hand_color=right_hand_color,
         tool_name_map_json=args.tool_name_map_json,
         tool_name_map_disabled=args.no_tool_name_map_json,
         object_id=args.object_id, force=args.force,
