@@ -108,6 +108,35 @@ HOCAP_ROOT="${HOCAP_ROOT:-/home/ruoqu/crq_ws/robotool/HO-Cap-Annotation}"
 HAND_ROOT="${HAND_ROOT:-/home/ruoqu/crq_ws/robotool/HandReconstruction}"
 MODELS_FOLDER="${MODELS_FOLDER:-${HOCAP_ROOT}/data/models}"
 
+# Fail loud if either root doesn't actually contain the expected entry
+# scripts. This catches the silent "HAND_ROOT didn't propagate from sbatch
+# wrapper, fell back to /home/ruoqu/..., picked up a stale checkout, ran
+# the wrong cluster_reconstruct.py" bug — argparse on the wrong file emits
+# 'unrecognized arguments: --sequence_folder' which is hard to trace
+# through the chunk-loop output.
+if [[ ! -f "$HAND_ROOT/cluster_reconstruct.py" ]]; then
+    echo "[FATAL] HAND_ROOT=$HAND_ROOT has no cluster_reconstruct.py."
+    echo "        Set HAND_ROOT explicitly in your env / wrapper sbatch."
+    exit 1
+fi
+if [[ ! -f "$HOCAP_ROOT/preprocess/generate_meta.py" ]]; then
+    echo "[FATAL] HOCAP_ROOT=$HOCAP_ROOT has no preprocess/generate_meta.py."
+    echo "        Set HOCAP_ROOT explicitly in your env / wrapper sbatch."
+    exit 1
+fi
+# Sanity probe: confirm cluster_reconstruct.py is the version that takes
+# --sequence_folder (the WiLoR demo with the same name has a totally
+# different CLI). If you replace the file with WiLoR's demo by mistake
+# this catches it before we waste an h5 build.
+if ! grep -q '\-\-sequence_folder' "$HAND_ROOT/cluster_reconstruct.py"; then
+    echo "[FATAL] $HAND_ROOT/cluster_reconstruct.py does not accept --sequence_folder."
+    echo "        Looks like the WiLoR demo got copied over the real file."
+    grep -n 'add_argument' "$HAND_ROOT/cluster_reconstruct.py" | head -8
+    exit 1
+fi
+echo "[paths] HOCAP_ROOT = $HOCAP_ROOT"
+echo "[paths] HAND_ROOT  = $HAND_ROOT  (cluster_reconstruct.py OK)"
+
 SEQUENCE_BASE="${TASK_FOLDER_ABS#$BASE_PATH}"
 
 if [[ -z "$TOOL_NAME" ]]; then
