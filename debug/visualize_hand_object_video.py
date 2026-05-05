@@ -214,89 +214,178 @@ def load_object_world_poses(annotated_sequence: Path, n_frames: int,
 # Hand (MANO) loading + reconstruction
 # ============================================================
 
+def _as_np(x):
+    """Robust array converter — handles None / list of tensors / tensor / np.
+    Mirrors scripts/visualize_hand_viser.py:_as_np so the (N,1,48) chunk-list
+    case from result_hand_optimized.pkl is squeezed correctly."""
+    if x is None:
+        return np.zeros(0)
+    if isinstance(x, np.ndarray):
+        return x
+    if isinstance(x, list):
+        if len(x) == 0:
+            return np.zeros(0)
+        out = []
+        for item in x:
+            if hasattr(item, "detach"):
+                item = item.detach().cpu().numpy()
+            out.append(np.asarray(item))
+        return np.stack(out, axis=0) if out else np.zeros(0)
+    if hasattr(x, "detach"):
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
+
+
 def try_load_hand_data(annotated_sequence: Path):
-    """Returns (hand_data_dict, poses_m (2, F, 51)) or (None, None) if any
-    artifact is missing. poses_m index order = [left, right]."""
-    pkl_path = annotated_sequence / "result_hand_optimized.pkl"
-    poses_m_path = annotated_sequence / "processed" / "joint_pose_solver" / "poses_m.npy"
-    if not (pkl_path.exists() and poses_m_path.exists()):
-        return None, None
+    """Load hand state from result_hand_optimized.pkl (or result.pkl).
+    Returns a normalized dict (same schema as visualize_hand_viser.py's
+    load_hand_pkl), or None if no usable pkl is found.
+
+    Note: pose comes from the pkl's left_hand_pose / right_hand_pose fields,
+    NOT from processed/joint_pose_solver/poses_m.npy. This matches what
+    visualize_hand_viser uses and avoids the 'pose source mismatch' that
+    can put hand verts in a different frame than the optimised translation
+    + base_rot expect."""
+    import pickle
+    pkl_path = None
+    for cand in ("result_hand_optimized.pkl", "result.pkl"):
+        p = annotated_sequence / cand
+        if p.exists():
+            pkl_path = p
+            break
+    if pkl_path is None:
+        return None
     try:
-        import pickle
         with open(pkl_path, "rb") as f:
             data = pickle.load(f)
-        hp = data.get("hand_pose")
-        if hp is None: return None, None
-        hand_data = {
-            "left_hand_beta":         np.array(hp.get("left_hand_beta", [])),
-            "left_hand_translation":  np.array(hp.get("left_hand_translation", [])),
-            "left_hand_base_rot":     np.array(hp.get("left_hand_base_rot", [])),
-            "right_hand_beta":        np.array(hp.get("right_hand_beta", [])),
-            "right_hand_translation": np.array(hp.get("right_hand_translation", [])),
-            "right_hand_base_rot":    np.array(hp.get("right_hand_base_rot", [])),
+        hp = data["hand_pose"]
+        result = {
+            "left_hand_pose":         _as_np(hp.get("left_hand_pose", [])),
+            "left_hand_beta":         np.asarray(hp.get("left_hand_beta", [])).squeeze(),
+            "left_hand_translation":  _as_np(hp.get("left_hand_translation", [])),
+            "left_hand_base_rot":     np.asarray(hp.get("left_hand_base_rot", []))
+                if hp.get("left_hand_base_rot") is not None else np.eye(3),
+            "right_hand_pose":        _as_np(hp.get("right_hand_pose", [])),
+            "right_hand_beta":        np.asarray(hp.get("right_hand_beta", [])).squeeze(),
+            "right_hand_translation": _as_np(hp.get("right_hand_translation", [])),
+            "num_frames":             int(data.get("num_frames", 0)),
+            "start_frame":            data.get("start_frame", 0),
+            "_pkl_path":              str(pkl_path),
         }
-        poses_m_raw = np.load(poses_m_path).astype(np.float32)
-        # Convention from visualize_cluster_video.py: file order is
-        # [right, left]; we re-stack to [left, right].
-        poses_m = np.stack([poses_m_raw[1], poses_m_raw[0]], axis=0)
-        return hand_data, poses_m
+        # pose can land as (N,1,48) when chunks were list-of-(1,48); squeeze.
+        for k in ("left_hand_pose", "right_hand_pose",
+                  "left_hand_translation", "right_hand_translation"):
+            arr = result[k]
+            if arr.ndim == 3 and arr.shape[1] == 1:
+                result[k] = arr[:, 0, :]
+        return result
     except Exception as e:
-        print(f"[WARN] hand load failed: {e}")
-        return None, None
+        print(f"[WARN] hand load failed ({pkl_path}): {e}")
+        return None
 
 
-def _get_betas(b):
-    b = np.asarray(b)
-    if b.ndim == 2 and b.shape[0] == 1: return b[0]
-    return b.squeeze()
+def infer_hand_num_frames(hand: dict) -> int:
+    for key in ("right_hand_pose", "left_hand_pose",
+                "right_hand_translation", "left_hand_translation"):
+        arr = hand.get(key)
+        if arr is not None and getattr(arr, "shape", (0,))[0] > 0:
+            return int(arr.shape[0])
+    return int(hand.get("num_frames", 0))
 
 
 class ManoBundle:
+    """Right MANO layer drives BOTH hands — same convention as
+    visualize_hand_viser.py. The left hand mesh is produced by:
+        verts, joints = mano_layer_right(pose, beta)
+        verts = (verts/1000) - root_joint
+        verts[:,0] *= -1            # mirror to left
+        verts = verts @ base_rot.T  # left-hand-specific orientation
+        verts += translation
+    Right hand uses the same right layer with no mirror / no base_rot.
+
+    Faces: also use right_layer.th_faces for both — left mesh is just the
+    same triangulation with flipped X, so triangle winding is consistent
+    enough for visualisation."""
+
     def __init__(self):
         import torch
         from manopth.manolayer import ManoLayer
         from hocap_annotation.utils import CFG
         self.torch = torch
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.layer_left = ManoLayer(
-            side="left", mano_root=CFG.mano.model_path,
-            use_pca=False, ncomps=45,
-        ).to(self.device)
         self.layer_right = ManoLayer(
             side="right", mano_root=CFG.mano.model_path,
             use_pca=False, ncomps=45,
         ).to(self.device)
-        self.faces_left = self.layer_left.th_faces.detach().cpu().numpy()
-        self.faces_right = self.layer_right.th_faces.detach().cpu().numpy()
+        self.faces = self.layer_right.th_faces.detach().cpu().numpy()
+        # Aliases kept for compatibility with the older two-layer call sites.
+        self.faces_left = self.faces
+        self.faces_right = self.faces
 
-    def reconstruct(self, side: str, hand_data: dict, frame_idx: int,
-                      pose51: np.ndarray):
-        torch = self.torch
-        try:
-            pose = torch.tensor(pose51).to(self.device).unsqueeze(0).float()
-            beta = torch.tensor(hand_data[f"{side}_hand_beta"]).to(self.device).float()
-            trans = torch.tensor(hand_data[f"{side}_hand_translation"][frame_idx]).to(self.device).unsqueeze(0).float()
-            base_rot_arr = hand_data[f"{side}_hand_base_rot"]
-            if base_rot_arr.ndim == 3 and frame_idx < base_rot_arr.shape[0]:
-                base_rot = torch.tensor(base_rot_arr[frame_idx]).to(self.device).float()
-            else:
-                base_rot = torch.eye(3, device=self.device)
-            layer = self.layer_left if side == "left" else self.layer_right
-            verts, joints = layer(pose, beta)
-            verts = (verts[0] / 1000.0)
-            joints = (joints[0] / 1000.0)
-            if verts.dim() == 3 and verts.size(0) == 1: verts = verts.squeeze(0)
-            if joints.dim() == 3 and joints.size(0) == 1: joints = joints.squeeze(0)
-            root = joints[0].clone().detach()
-            verts = verts - root
-            if side == "left":
-                verts[:, 0] = -verts[:, 0]
-                verts = verts @ base_rot.T
-            verts = verts + trans
-            return verts.detach().cpu().numpy().astype(np.float32)
-        except Exception as e:
-            print(f"[WARN] mano reconstruct {side} frame={frame_idx}: {e}")
-            return None
+
+def reconstruct_left_verts(hand: dict, frame_idx: int, mano_bundle: ManoBundle):
+    torch = mano_bundle.torch
+    pose_arr = hand["left_hand_pose"]
+    if pose_arr.ndim < 2 or frame_idx >= pose_arr.shape[0]:
+        return None
+    try:
+        device = mano_bundle.device
+        pose  = torch.tensor(pose_arr[frame_idx], dtype=torch.float32, device=device).unsqueeze(0)
+        trans = torch.tensor(hand["left_hand_translation"][frame_idx],
+                                dtype=torch.float32, device=device).unsqueeze(0)
+        beta  = torch.tensor(hand["left_hand_beta"], dtype=torch.float32, device=device)
+        if beta.ndim == 1:
+            beta = beta.unsqueeze(0)
+
+        base = hand["left_hand_base_rot"]
+        if isinstance(base, np.ndarray) and base.ndim == 3 and base.shape[0] > 0:
+            ri = min(frame_idx, base.shape[0] - 1)
+            base_rot = torch.tensor(base[ri], dtype=torch.float32, device=device)
+        elif isinstance(base, np.ndarray) and base.ndim == 2 and base.shape == (3, 3):
+            base_rot = torch.tensor(base, dtype=torch.float32, device=device)
+        else:
+            base_rot = torch.eye(3, dtype=torch.float32, device=device)
+
+        verts, joints = mano_bundle.layer_right(pose, beta)
+        verts = verts[0] / 1000.0
+        joints = joints[0] / 1000.0
+        root = joints[0].clone()
+        verts = verts - root
+        verts[:, 0] *= -1
+        verts = verts @ base_rot.T
+        verts = verts + trans
+        return verts.detach().cpu().numpy().astype(np.float32)
+    except Exception as e:
+        if frame_idx < 3:
+            print(f"[WARN] left hand frame {frame_idx}: {e}")
+        return None
+
+
+def reconstruct_right_verts(hand: dict, frame_idx: int, mano_bundle: ManoBundle):
+    torch = mano_bundle.torch
+    pose_arr = hand["right_hand_pose"]
+    if pose_arr.ndim < 2 or frame_idx >= pose_arr.shape[0]:
+        return None
+    try:
+        device = mano_bundle.device
+        pose  = torch.tensor(pose_arr[frame_idx], dtype=torch.float32, device=device).unsqueeze(0)
+        trans = torch.tensor(hand["right_hand_translation"][frame_idx],
+                                dtype=torch.float32, device=device).unsqueeze(0)
+        beta  = torch.tensor(hand["right_hand_beta"], dtype=torch.float32, device=device)
+        if beta.ndim == 1:
+            beta = beta.unsqueeze(0)
+
+        verts, joints = mano_bundle.layer_right(pose, beta)
+        verts = verts[0] / 1000.0
+        joints = joints[0] / 1000.0
+        root = joints[0].clone()
+        verts = verts - root
+        verts = verts + trans
+        return verts.detach().cpu().numpy().astype(np.float32)
+    except Exception as e:
+        if frame_idx < 3:
+            print(f"[WARN] right hand frame {frame_idx}: {e}")
+        return None
 
 
 # ============================================================
@@ -598,16 +687,22 @@ def render_one_exp(annotated_sequence: Path,
             annotated_sequence, n_frames_total, object_idx=0, prefer=pose_prefer)
 
         # ---- hand setup ----
-        hand_data = None; poses_m = None; mano = None
+        # Match scripts/visualize_hand_viser.py: pose comes from
+        # result_hand_optimized.pkl (or result.pkl), and the right MANO
+        # layer drives both hands.
+        hand_data = None; mano = None
         if not no_hand:
-            hand_data, poses_m = try_load_hand_data(annotated_sequence)
+            hand_data = try_load_hand_data(annotated_sequence)
             if hand_data is not None:
                 try:
                     mano = ManoBundle()
                 except Exception as e:
                     print(f"[WARN] could not init MANO ({e}); rendering tool-only")
                     mano = None
-                    hand_data = None; poses_m = None
+                    hand_data = None
+            else:
+                print(f"[INFO] no result(_hand_optimized).pkl under "
+                      f"{annotated_sequence} — rendering tool-only")
 
         n_cams = len(serials)
         # tile size: the source frames may be larger; we resize each tile to
@@ -620,14 +715,14 @@ def render_one_exp(annotated_sequence: Path,
             for fi, frame_idx in enumerate(chosen):
                 pose_w = obj_poses_w[frame_idx]
                 has_obj = bool(np.all(np.isfinite(pose_w)))
-                # Pre-compute hand world verts for this frame.
+                # Pre-compute hand world verts for this frame, using the
+                # pkl-based loaders ported from visualize_hand_viser.py.
                 hand_world = {}
-                if mano is not None and poses_m is not None:
-                    for side_idx, side in enumerate(["left", "right"]):
-                        if frame_idx < poses_m.shape[1]:
-                            v = mano.reconstruct(side, hand_data, frame_idx,
-                                                  poses_m[side_idx, frame_idx])
-                            if v is not None: hand_world[side] = v
+                if mano is not None and hand_data is not None:
+                    lv = reconstruct_left_verts(hand_data, frame_idx, mano)
+                    if lv is not None: hand_world["left"] = lv
+                    rv = reconstruct_right_verts(hand_data, frame_idx, mano)
+                    if rv is not None: hand_world["right"] = rv
 
                 tiles = []
                 for cam_idx in range(n_cams):
@@ -664,10 +759,9 @@ def render_one_exp(annotated_sequence: Path,
                                  + cam_RTs_inv[cam_idx][:3, 3]
                             hand_proj[side] = vc
                             if fg_mask is not None:
-                                faces_h = mano.faces_left if side == "left" else mano.faces_right
                                 pts_i, valid = project_and_validate(
                                     vc, Ks[cam_idx], H_img, W_img)
-                                paint_fg_mask(fg_mask, pts_i, faces_h, valid, every=1)
+                                paint_fg_mask(fg_mask, pts_i, mano.faces, valid, every=1)
 
                     if fg_mask is not None:
                         img = fade_background(img, fg_mask, bg_white_alpha,
@@ -678,9 +772,8 @@ def render_one_exp(annotated_sequence: Path,
                                     color=object_color, every=mesh_every,
                                     fill_alpha=fill_alpha)
                     for side, vc in hand_proj.items():
-                        faces_h = mano.faces_left if side == "left" else mano.faces_right
                         color = left_hand_color if side == "left" else right_hand_color
-                        draw_mesh(img, vc, faces_h, Ks[cam_idx],
+                        draw_mesh(img, vc, mano.faces, Ks[cam_idx],
                                     color=color, every=hand_every,
                                     fill_alpha=fill_alpha)
                     cv2.putText(img, f"f{frame_idx:06d} cam{serials[cam_idx]}",
