@@ -411,8 +411,14 @@ def is_exp_done(annotated_exp: Path) -> tuple:
     return False, "no merged object pose"
 
 
-def discover_done_exps(videos_root: Path, task_filter=None):
+def discover_done_exps(videos_root: Path, task_filter=None,
+                          only_remasked: bool = False):
+    """Walk videos_root and yield exps with merged object pose. When
+    `only_remasked` is True, also require <annotated>/<exp>/mask_prompts.json
+    so we only render exps that were re-annotated by simple_mask_annotator
+    (i.e. ones whose tool_masks/masks.h5 was regenerated)."""
     out, skipped = [], 0
+    skipped_no_remask = 0
     for task_dir in sorted(p for p in videos_root.iterdir() if p.is_dir()):
         nm = task_dir.name
         if nm.startswith("realsense_calibrate"): continue
@@ -423,11 +429,19 @@ def discover_done_exps(videos_root: Path, task_filter=None):
         for exp_dir in sorted(p for p in task_dir.iterdir() if p.is_dir()):
             if not list(exp_dir.glob("cam*_rgb.mp4")): continue
             ann = derive_annotated_for(videos_root, nm, exp_dir.name)
+            if only_remasked and not (ann / "mask_prompts.json").exists():
+                skipped_no_remask += 1
+                continue
             ok, reason = is_exp_done(ann)
             if ok:
+                if only_remasked:
+                    reason = f"{reason} + mask_prompts.json"
                 out.append((nm, exp_dir.name, exp_dir, ann, reason))
             else:
                 skipped += 1
+    if only_remasked:
+        print(f"[discover] only_remasked filter: dropped "
+              f"{skipped_no_remask} exps without mask_prompts.json")
     return out, skipped
 
 
@@ -674,6 +688,11 @@ def main():
     ap.add_argument("--annotated_sequence", type=Path, default=None,
                     help="Single-exp mode: <videos>_annotated/<task>/<exp>.")
     ap.add_argument("--task_filter", nargs="+", default=None)
+    ap.add_argument("--only_remasked", action="store_true",
+                    help="Only render exps that have a mask_prompts.json — "
+                         "i.e. were re-annotated by simple_mask_annotator. "
+                         "Use after batch_redo_masks + sbatch_run_remask_pipeline "
+                         "to QA the regenerated subset.")
     ap.add_argument("--object_id", default=None)
     ap.add_argument("--start_frame", type=int, default=0)
     ap.add_argument("--end_frame", type=int, default=-1)
@@ -739,7 +758,9 @@ def main():
         ap.error(f"--videos_root not a directory: {videos_root}")
 
     exps, n_skip = discover_done_exps(
-        videos_root, task_filter=set(args.task_filter) if args.task_filter else None)
+        videos_root,
+        task_filter=set(args.task_filter) if args.task_filter else None,
+        only_remasked=args.only_remasked)
     if not exps:
         print(f"No DONE exps under {videos_root} (skipped {n_skip} unfinished)")
         sys.exit(0)
