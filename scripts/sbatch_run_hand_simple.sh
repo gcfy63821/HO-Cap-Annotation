@@ -3,7 +3,7 @@
 #SBATCH --job-name hand_simp
 #SBATCH --partition=viscam
 #SBATCH --gres=gpu:2
-#SBATCH --mem=128G
+#SBATCH --mem=96G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=24:00:00
 #SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam4
