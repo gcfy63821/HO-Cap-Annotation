@@ -251,8 +251,12 @@ def load_object_poses(npy_path: Path):
     return arr.astype(np.float32)
 
 
-def load_object_meshes(meta_path: Path):
-    """Return list of (object_id, vertices, faces). Empty if meta missing/unreadable."""
+def load_object_meshes(meta_path: Path, models_folder_override: Path = None):
+    """Return list of (object_id, vertices, faces). Empty if meta missing/unreadable.
+
+    If `models_folder_override` is given, it takes priority over whatever
+    `models_folder` field is in meta.yaml — useful when meta.yaml was
+    generated on another machine and the path no longer exists locally."""
     if not meta_path.exists():
         return []
     try:
@@ -262,10 +266,17 @@ def load_object_meshes(meta_path: Path):
         print(f"[WARN] failed to read {meta_path}: {e}")
         return []
     object_ids = meta.get("object_ids", []) or []
-    models_folder = meta.get("models_folder")
-    if not object_ids or not models_folder:
+    if models_folder_override is not None:
+        models_folder = Path(models_folder_override)
+        if not models_folder.is_dir():
+            print(f"[WARN] --models_folder override does not exist: {models_folder}")
+    else:
+        meta_mf = meta.get("models_folder")
+        if not object_ids or not meta_mf:
+            return []
+        models_folder = Path(meta_mf)
+    if not object_ids:
         return []
-    models_folder = Path(models_folder)
     out = []
     for obj_id in object_ids:
         for cand in ["cleaned_mesh_10000.obj", "textured_mesh.obj", "mesh.obj"]:
@@ -482,6 +493,11 @@ def main():
                     choices=[None, "joint_pose_solver", "object_pose_solver", "fd_pose_solver"],
                     help="Force a specific object pose source. Default: best available.")
     ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--models_folder", type=str, default="",
+                    help="Override the models folder (object meshes root). "
+                         "If set, takes priority over meta.yaml's "
+                         "'models_folder' field. Useful when meta.yaml was "
+                         "generated on another machine / a stale path.")
     ap.add_argument("--world_transform", type=str, default="yz_flip (default)",
                     choices=list(WORLD_TRANSFORMS.keys()),
                     help="Coordinate transform applied to every mesh before rendering. "
@@ -496,6 +512,11 @@ def main():
     annotated_root = _ANNOTATED_ROOT
     scan_root = _SCAN_ROOT
     videos_root = _VIDEOS_ROOT
+
+    models_folder_override = (Path(args.models_folder).expanduser().resolve()
+                                if args.models_folder else None)
+    if models_folder_override is not None:
+        print(f"[INFO] --models_folder override = {models_folder_override}")
 
     # --videos_root is sugar for --annotated_root <parent>/<basename>_annotated.
     # Resolve before the validation below.
@@ -627,7 +648,7 @@ def main():
             sources = [s for s in sources if s[0] == args.pose_source]
 
         # Object meshes (from meta.yaml). If meta is missing, no objects.
-        obj_meshes = load_object_meshes(meta_path)
+        obj_meshes = load_object_meshes(meta_path, models_folder_override=models_folder_override)
 
         return {
             "exp_name": exp_name,
