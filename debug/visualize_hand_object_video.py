@@ -490,17 +490,19 @@ def parse_color(spec, default):
 
 # Designer-friendly default palette (RGB tuples).
 # Object  = amber 400  #fbbf24  (warm gold, pops against most scenes)
-# L hand  = rose  400  #fb7185  (coral pink)
+# L hand  = pink  200  #fbcfe8  (bright luminous pink — pumped up from
+#                                pink-300 so it reads brighter under
+#                                pyrender's lit shading)
 # R hand  = sky   400  #38bdf8  (cool cyan)
 DEFAULT_OBJECT_COLOR     = (251, 191,  36)
-DEFAULT_LEFT_HAND_COLOR  = (251, 113, 133)
+DEFAULT_LEFT_HAND_COLOR  = (255, 207, 232)
 DEFAULT_RIGHT_HAND_COLOR = ( 56, 189, 248)
 
 # A few named presets; pick with --palette <name>.
 PALETTES = {
     "default": (DEFAULT_OBJECT_COLOR, DEFAULT_LEFT_HAND_COLOR, DEFAULT_RIGHT_HAND_COLOR),
-    # warm = amber tool, rose & magenta hands
-    "warm":    ((245, 158,  11), (244,  63,  94), (217,  70, 239)),
+    # warm = amber tool, light pink & magenta hands
+    "warm":    ((245, 158,  11), (251, 207, 232), (217,  70, 239)),
     # cool = teal tool, cyan & violet hands
     "cool":    (( 20, 184, 166), ( 34, 211, 238), (139,  92, 246)),
     # high-contrast original
@@ -602,7 +604,12 @@ def render_one_exp(annotated_sequence: Path,
                      bg_dilate_px: int = 2,
                      object_color: tuple = DEFAULT_OBJECT_COLOR,
                      left_hand_color: tuple = DEFAULT_LEFT_HAND_COLOR,
-                     right_hand_color: tuple = DEFAULT_RIGHT_HAND_COLOR) -> dict:
+                     right_hand_color: tuple = DEFAULT_RIGHT_HAND_COLOR,
+                     models_folder_override: Path = None,
+                     show_deformable: bool = False,
+                     deformable_subdir: str = "deformable_masks",
+                     deformable_color: tuple = (220, 50, 200),
+                     deformable_alpha: float = 0.45) -> dict:
     annotated_sequence = annotated_sequence.resolve()
     original_sequence = derive_original_sequence(annotated_sequence)
     meta_path = original_sequence / "meta.yaml"
@@ -611,7 +618,16 @@ def render_one_exp(annotated_sequence: Path,
     meta = load_yaml(meta_path)
 
     calib_path = Path(meta["calibration_yaml_path"])
-    models_folder = Path(meta["models_folder"])
+    # --models_folder CLI override takes priority over meta.yaml's
+    # 'models_folder' field — useful when meta was generated on another
+    # machine / a stale path, or you want to point at a different mesh
+    # set (e.g. cleaned vs textured).
+    if models_folder_override is not None:
+        models_folder = Path(models_folder_override)
+        if not models_folder.is_dir():
+            print(f"[WARN] --models_folder override not a dir: {models_folder}")
+    else:
+        models_folder = Path(meta["models_folder"])
 
     # ---- tool / mesh resolution ----
     if (not tool_name_map_disabled
@@ -705,6 +721,24 @@ def render_one_exp(annotated_sequence: Path,
                       f"{annotated_sequence} — rendering tool-only")
 
         n_cams = len(serials)
+
+        # Optional deformable mask overlay (from batch_deformable_annotator.py)
+        deformable_f = None; deformable_ds = None
+        if show_deformable:
+            p = annotated_sequence / deformable_subdir / "masks.h5"
+            if p.exists():
+                try:
+                    deformable_f = h5py.File(p, "r")
+                    deformable_ds = deformable_f.get("masks")
+                    if deformable_ds is None or deformable_ds.ndim < 4:
+                        deformable_f.close(); deformable_f = None; deformable_ds = None
+                    else:
+                        print(f"[deformable] using {p}  shape={deformable_ds.shape}")
+                except Exception as e:
+                    print(f"[deformable] could not open {p}: {e}")
+            else:
+                print(f"[deformable] no {p} — skipping overlay")
+
         # tile size: the source frames may be larger; we resize each tile to
         # tile_w/tile_h so the 2x4 grid is exactly (4*tile_w, 2*tile_h).
         grid_w = 4 * tile_w; grid_h = 2 * tile_h
@@ -730,6 +764,20 @@ def render_one_exp(annotated_sequence: Path,
                         rgb = np.asarray(imgs_ds[frame_idx, cam_idx], dtype=np.uint8)
                     else:
                         rgb = video_source.get_color(frame_idx, cam_idx)
+
+                    # Read deformable mask now; we'll overlay it AFTER
+                    # wireframe + bg fade so it sits as a foreground layer.
+                    dmask_for_overlay = None
+                    if (deformable_ds is not None
+                            and frame_idx < deformable_ds.shape[0]
+                            and cam_idx < deformable_ds.shape[1]):
+                        try:
+                            dmask_for_overlay = np.asarray(deformable_ds[frame_idx, cam_idx])
+                        except Exception as e:
+                            if frame_idx < 3:
+                                print(f"[WARN] deformable read frame={frame_idx} "
+                                      f"cam={cam_idx}: {e}")
+
                     img = rgb.copy()
                     H_img, W_img = img.shape[:2]
 
@@ -776,6 +824,26 @@ def render_one_exp(annotated_sequence: Path,
                         draw_mesh(img, vc, mano.faces, Ks[cam_idx],
                                     color=color, every=hand_every,
                                     fill_alpha=fill_alpha)
+
+                    # Foreground deformable overlay — translucent fill +
+                    # outline, sits on top of wireframe and bg fade.
+                    if dmask_for_overlay is not None:
+                        dmask = dmask_for_overlay
+                        if dmask.shape != img.shape[:2]:
+                            dmask = cv2.resize(dmask.astype(np.uint8),
+                                                 (img.shape[1], img.shape[0]),
+                                                 interpolation=cv2.INTER_NEAREST)
+                        mb = dmask > 0
+                        if mb.any():
+                            layer = img.copy()
+                            layer[mb] = np.array(deformable_color, dtype=np.uint8)
+                            img = cv2.addWeighted(img, 1.0 - deformable_alpha,
+                                                    layer, deformable_alpha, 0)
+                            cnt, _ = cv2.findContours(
+                                mb.astype(np.uint8) * 255,
+                                cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
+                            )
+                            cv2.drawContours(img, cnt, -1, (255, 255, 0), 2)
                     cv2.putText(img, f"f{frame_idx:06d} cam{serials[cam_idx]}",
                                   (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
                     cv2.putText(img, f"f{frame_idx:06d} cam{serials[cam_idx]}",
@@ -796,6 +864,9 @@ def render_one_exp(annotated_sequence: Path,
         finally:
             writer.release()
             if video_source is not None: video_source.close()
+            if deformable_f is not None:
+                try: deformable_f.close()
+                except Exception: pass
 
     summary = {
         "annotated_sequence": str(annotated_sequence),
@@ -876,6 +947,19 @@ def main():
     ap.add_argument("--continue_on_error", action="store_true", default=True)
     ap.add_argument("--tool_name_map_json", type=Path, default=None)
     ap.add_argument("--no_tool_name_map_json", action="store_true")
+    ap.add_argument("--models_folder", type=Path, default=None,
+                    help="Override the models folder (object meshes root). "
+                         "If set, takes priority over meta.yaml's 'models_folder' "
+                         "field. Useful when meta was generated on another "
+                         "machine / a stale path, or you want to point at a "
+                         "different mesh set.")
+    ap.add_argument("--show_deformable", action="store_true",
+                    help="Overlay deformable mask layer (written by "
+                         "scripts/batch_deformable_annotator.py) onto each cam "
+                         "tile before wireframe is drawn.")
+    ap.add_argument("--deformable_subdir", type=str, default="deformable_masks")
+    ap.add_argument("--deformable_color", type=str, default="#dc32c8")
+    ap.add_argument("--deformable_alpha", type=float, default=0.45)
     args = ap.parse_args()
 
     if args.videos_root is None and args.annotated_sequence is None:
@@ -902,6 +986,11 @@ def main():
         right_hand_color=right_hand_color,
         tool_name_map_json=args.tool_name_map_json,
         tool_name_map_disabled=args.no_tool_name_map_json,
+        models_folder_override=args.models_folder,
+        show_deformable=args.show_deformable,
+        deformable_subdir=args.deformable_subdir,
+        deformable_color=parse_color(args.deformable_color, (220, 50, 200)),
+        deformable_alpha=args.deformable_alpha,
         object_id=args.object_id, force=args.force,
     )
 

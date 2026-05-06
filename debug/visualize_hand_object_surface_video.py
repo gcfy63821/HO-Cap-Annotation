@@ -83,6 +83,50 @@ CV2GL = np.array([[1, 0, 0, 0],
 
 
 # ============================================================
+# Deformable mask overlay (optional, written by batch_deformable_annotator.py)
+# ============================================================
+
+def open_deformable_h5(annotated_sequence: Path, subdir: str = "deformable_masks"):
+    """Returns (h5 file handle, dataset) or (None, None) if not present.
+    Caller is responsible for closing the handle."""
+    p = annotated_sequence / subdir / "masks.h5"
+    if not p.exists():
+        return None, None
+    try:
+        f = h5py.File(p, "r")
+        ds = f.get("masks")
+        if ds is None or ds.ndim < 4:
+            f.close(); return None, None
+        return f, ds
+    except Exception as e:
+        print(f"[WARN] could not open {p}: {e}")
+        return None, None
+
+
+def overlay_deformable(rgb: np.ndarray, mask_2d: np.ndarray,
+                          color, alpha: float = 0.5,
+                          contour: bool = True,
+                          contour_color=(255, 255, 0)) -> np.ndarray:
+    """Translucent fill + outline of deformable mask onto RGB."""
+    if mask_2d is None or mask_2d.size == 0 or mask_2d.sum() == 0:
+        return rgb
+    if mask_2d.shape != rgb.shape[:2]:
+        mask_2d = cv2.resize(mask_2d.astype(np.uint8),
+                              (rgb.shape[1], rgb.shape[0]),
+                              interpolation=cv2.INTER_NEAREST)
+    mb = mask_2d > 0
+    out = rgb.copy()
+    layer = rgb.copy()
+    layer[mb] = np.array(color, dtype=np.uint8)
+    out = cv2.addWeighted(out, 1.0 - alpha, layer, alpha, 0)
+    if contour:
+        cnt, _ = cv2.findContours((mb).astype(np.uint8) * 255,
+                                    cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(out, cnt, -1, contour_color, 2)
+    return out
+
+
+# ============================================================
 # Surface compositor
 # ============================================================
 
@@ -218,7 +262,12 @@ def render_one_exp(annotated_sequence: Path,
                      light_intensity: float = 4.0,
                      object_color: tuple = DEFAULT_OBJECT_COLOR,
                      left_hand_color: tuple = DEFAULT_LEFT_HAND_COLOR,
-                     right_hand_color: tuple = DEFAULT_RIGHT_HAND_COLOR) -> dict:
+                     right_hand_color: tuple = DEFAULT_RIGHT_HAND_COLOR,
+                     models_folder_override: Path = None,
+                     show_deformable: bool = False,
+                     deformable_subdir: str = "deformable_masks",
+                     deformable_color: tuple = (220, 50, 200),
+                     deformable_alpha: float = 0.45) -> dict:
     annotated_sequence = annotated_sequence.resolve()
     original_sequence = derive_original_sequence(annotated_sequence)
     meta_path = original_sequence / "meta.yaml"
@@ -226,7 +275,12 @@ def render_one_exp(annotated_sequence: Path,
         raise FileNotFoundError(f"missing meta.yaml: {meta_path}")
     meta = yaml.safe_load(meta_path.read_text())
     calib_path = Path(meta["calibration_yaml_path"])
-    models_folder = Path(meta["models_folder"])
+    if models_folder_override is not None:
+        models_folder = Path(models_folder_override)
+        if not models_folder.is_dir():
+            print(f"[WARN] --models_folder override not a dir: {models_folder}")
+    else:
+        models_folder = Path(meta["models_folder"])
 
     # ---- tool / mesh ----
     if (not tool_name_map_disabled and tool_name_map_json is None
@@ -321,6 +375,17 @@ def render_one_exp(annotated_sequence: Path,
         # ---- pyrender renderer at source resolution ----
         compositor = SurfaceCompositor(src_w, src_h)
 
+        # Optional deformable mask overlay (from batch_deformable_annotator.py)
+        deformable_f = None; deformable_ds = None
+        if show_deformable:
+            deformable_f, deformable_ds = open_deformable_h5(
+                annotated_sequence, subdir=deformable_subdir)
+            if deformable_ds is not None:
+                print(f"[deformable] using {annotated_sequence}/{deformable_subdir}/"
+                      f"masks.h5  shape={deformable_ds.shape}")
+            else:
+                print(f"[deformable] no {deformable_subdir}/masks.h5 — skipping overlay")
+
         n_cams = len(serials)
         grid_w = 4 * tile_w; grid_h = 2 * tile_h
         writer = open_writer(out_path, grid_w, grid_h, fps=fps)
@@ -349,6 +414,20 @@ def render_one_exp(annotated_sequence: Path,
                     else:
                         rgb = video_source.get_color(frame_idx, cam_idx)
 
+                    # Read the deformable mask now (cheap), but we apply it
+                    # AFTER the mesh composite so it sits as a translucent
+                    # foreground layer on top of everything.
+                    dmask_for_overlay = None
+                    if (deformable_ds is not None
+                            and frame_idx < deformable_ds.shape[0]
+                            and cam_idx < deformable_ds.shape[1]):
+                        try:
+                            dmask_for_overlay = np.asarray(deformable_ds[frame_idx, cam_idx])
+                        except Exception as e:
+                            if frame_idx < 3:
+                                print(f"[WARN] deformable read frame={frame_idx} "
+                                      f"cam={cam_idx}: {e}")
+
                     # Build per-cam hand mesh list with colors.
                     hand_render = []
                     for side, vw in hand_world.items():
@@ -367,6 +446,16 @@ def render_one_exp(annotated_sequence: Path,
                         rgb, rgba, mesh_alpha=mesh_alpha,
                         bg_white_alpha=bg_white_alpha,
                     )
+
+                    # Foreground deformable overlay — sits on TOP of the
+                    # 3D mesh composite. Translucent fill + crisp outline.
+                    if dmask_for_overlay is not None:
+                        img = overlay_deformable(
+                            img, dmask_for_overlay,
+                            color=deformable_color,
+                            alpha=deformable_alpha,
+                            contour=True,
+                        )
 
                     cv2.putText(img, f"f{frame_idx:06d} cam{serials[cam_idx]}",
                                   (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
@@ -388,6 +477,9 @@ def render_one_exp(annotated_sequence: Path,
             writer.release()
             compositor.close()
             if video_source is not None: video_source.close()
+            if deformable_f is not None:
+                try: deformable_f.close()
+                except Exception: pass
 
     summary = {
         "annotated_sequence": str(annotated_sequence),
@@ -457,6 +549,32 @@ def main():
     ap.add_argument("--continue_on_error", action="store_true", default=True)
     ap.add_argument("--tool_name_map_json", type=Path, default=None)
     ap.add_argument("--no_tool_name_map_json", action="store_true")
+    ap.add_argument("--models_folder", type=Path, default=None,
+                    help="Override the models folder (object meshes root). "
+                         "If set, takes priority over meta.yaml's 'models_folder' "
+                         "field.")
+    ap.add_argument("--show_deformable", action="store_true",
+                    help="Overlay deformable mask layer (written by "
+                         "scripts/batch_deformable_annotator.py) onto each cam "
+                         "tile before the 3D mesh is composited.")
+    ap.add_argument("--deformable_subdir", type=str, default="deformable_masks",
+                    help="Subdir under <annotated>/<exp> where deformable "
+                         "masks.h5 lives. Default 'deformable_masks'. "
+                         "Match whatever you passed to "
+                         "batch_deformable_annotator.py --output_subdir.")
+    ap.add_argument("--deformable_color", type=str, default="#ff66b3",
+                    help="Color for deformable mask overlay. hex or 'r,g,b'. "
+                         "Default pink #ff66b3 — distinct from tool/hand.")
+    ap.add_argument("--deformable_alpha", type=float, default=0.45,
+                    help="Translucency of deformable overlay (0=invisible, "
+                         "1=opaque). Default 0.45.")
+    ap.add_argument("--deformable_tasks", nargs="*", default=["nuts"],
+                    help="Workspace mode: task-name substrings that should "
+                         "auto-enable deformable mask overlay even without "
+                         "--show_deformable. Default ['nuts'] — any task whose "
+                         "name contains 'nuts' gets the pink deformable layer "
+                         "(harmless if its masks.h5 doesn't exist). Pass with "
+                         "no value to disable auto-matching.")
     args = ap.parse_args()
 
     if args.videos_root is None and args.annotated_sequence is None:
@@ -485,13 +603,31 @@ def main():
         right_hand_color=right_hand_color,
         tool_name_map_json=args.tool_name_map_json,
         tool_name_map_disabled=args.no_tool_name_map_json,
+        models_folder_override=args.models_folder,
+        deformable_subdir=args.deformable_subdir,
+        deformable_color=parse_color(args.deformable_color, (220, 50, 200)),
+        deformable_alpha=args.deformable_alpha,
         object_id=args.object_id, force=args.force,
     )
 
+    deformable_task_substrs = tuple(s.lower() for s in (args.deformable_tasks or ()))
+
+    def task_wants_deformable(task_name: str) -> bool:
+        if args.show_deformable:
+            return True
+        if not deformable_task_substrs:
+            return False
+        tn = task_name.lower()
+        return any(s in tn for s in deformable_task_substrs)
+
     if args.annotated_sequence is not None:
+        # Single-exp mode: derive task name from <task>/<exp> layout.
+        single_task = args.annotated_sequence.resolve().parent.name
         try:
             render_one_exp(annotated_sequence=args.annotated_sequence,
-                            output_path=args.output_dir, **common)
+                            output_path=args.output_dir,
+                            show_deformable=task_wants_deformable(single_task),
+                            **common)
         except Exception as e:
             print(f"[ERR] {e}", file=sys.stderr)
             traceback.print_exc(); sys.exit(1)
@@ -526,7 +662,9 @@ def main():
         try:
             t1 = time.time()
             summary = render_one_exp(annotated_sequence=ann,
-                                          output_path=per_exp_out, **common)
+                                          output_path=per_exp_out,
+                                          show_deformable=task_wants_deformable(task),
+                                          **common)
             n_ok += 1
             print(f"{prefix}  OK [{time.time()-t1:.1f}s]  "
                   f"{summary.get('n_frames_written', '?')} frames  ({reason})")
