@@ -113,11 +113,11 @@ python tools/00_convert_videos_to_h5.py $H5_ARGS
 
 # # # 构建 generate_meta 参数，传入 start_frame 写入 meta.yaml
 META_ARGS="--h5_path $H5_PATH \
-    --calibration_yaml_path /home/ruoqu/crq_ws/robotool/DataCollection/calibration_0503.yaml \
+    --calibration_yaml_path /home/ruoqu/crq_ws/robotool/DataCollection/calibration_0514.yaml \
     --models_folder /home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/models \
     --tool_name $TOOL_NAME \
     --start_frame $START_FRAME"
-python preprocess/generate_meta.py $META_ARGS --x_min -0.6 --x_max 0.6 --y_min -0.5 --y_max 0.6 --z_min -0.5 --z_max 0.4
+python preprocess/generate_meta.py $META_ARGS --x_min -0.8 --x_max 0.8 --y_min -0.6 --y_max 0.6 --z_min -0.5 --z_max 0.4
 
 # Detect number of objects from meta.yaml
 NUM_OBJECTS=$(python3 -c "import yaml; meta=yaml.safe_load(open('$SEQUENCE_FOLDER/meta.yaml')); print(len(meta['object_ids']))")

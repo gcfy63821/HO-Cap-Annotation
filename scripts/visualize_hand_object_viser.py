@@ -234,6 +234,9 @@ def discover_object_pose_sources(annotated: Path):
         ("joint_pose_solver",  annotated / "processed" / "joint_pose_solver"  / "poses_o.npy"),
         ("object_pose_solver", annotated / "processed" / "object_pose_solver" / "poses_o.npy"),
         ("fd_pose_solver",     annotated / "processed" / "fd_pose_solver"     / "fd_poses_merged_fixed.npy"),
+        # Flat layout — fetch_exp_from_server.sh / older local exps drop the
+        # merged-fixed array directly at the exp root.
+        ("fd_pose_solver_flat", annotated / "fd_poses_merged_fixed.npy"),
     ]
     for name, p in candidates:
         if p.exists():
@@ -349,14 +352,20 @@ def discover_experiments(task_folder: Path):
 
 
 def is_exp_done(annotated: Path, require_hand: bool = False) -> bool:
-    """Return True iff this annotated/<task>/<exp> dir has the canonical
-    "annotation finished" sentinels.
+    """Return True iff this annotated/<task>/<exp> dir has at least one of
+    the recognised "annotation finished" pose files. Accepts every layout
+    that discover_object_pose_sources knows how to load — keep the two
+    in sync.
 
-    Minimum: processed/fd_pose_solver/fd_poses_merged_fixed.npy exists
-             (Stage 5 merger ran).
     With require_hand=True: also require result_hand_optimized.pkl.
     """
-    if not (annotated / "processed" / "fd_pose_solver" / "fd_poses_merged_fixed.npy").exists():
+    has_pose = any((annotated / rel).exists() for rel in (
+        "processed/joint_pose_solver/poses_o.npy",
+        "processed/object_pose_solver/poses_o.npy",
+        "processed/fd_pose_solver/fd_poses_merged_fixed.npy",
+        "fd_poses_merged_fixed.npy",    # flat layout (fetched / legacy)
+    ))
+    if not has_pose:
         return False
     if require_hand and not (annotated / "result_hand_optimized.pkl").exists():
         return False

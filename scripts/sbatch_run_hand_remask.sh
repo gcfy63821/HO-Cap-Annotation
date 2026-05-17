@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH --mem=96G
 #SBATCH --cpus-per-task=16
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam4,viscam14,viscam15
 #SBATCH --output=/viscam/u/chenrq/crq_ws/slurm_outs/hand_rmsk_%j.out
 #SBATCH --error=/viscam/u/chenrq/crq_ws/slurm_outs/hand_rmsk_%j.err
@@ -32,6 +32,15 @@
 #                              the rest of the videos_root.)
 #       [--all]              (no filter on mask_prompts.json — process
 #                              every exp under videos_root)
+#       [--skip_marked]      (skip any exp that already has
+#                              .hand_remask_done.json — i.e. was
+#                              successfully redone by a previous run of
+#                              this script. Useful for resuming a
+#                              partially-completed batch over an entire
+#                              videos_root: marked exps are skipped,
+#                              unmarked ones (including those with only
+#                              OLD pre-remask hand outputs) get fully
+#                              redone with the usual wipe-and-rerun.)
 #       [--dry_run]
 #
 # Resume: by default this script DELETES result_hand_optimized.pkl + all
@@ -65,6 +74,7 @@ GPUS=2
 CHUNK_SIZE=500
 KEEP_EXISTING=0
 DRY_RUN=0
+SKIP_MARKED=0
 # Filter mode: which exps to include based on mask_prompts.json presence.
 #   "with"  (default) — only exps that HAVE mask_prompts.json
 #   "rest"            — only exps that do NOT have mask_prompts.json
@@ -80,6 +90,7 @@ while [[ "$#" -gt 0 ]]; do
         --keep_existing)      KEEP_EXISTING=1; shift;;
         --rest)               FILTER_MODE="rest"; shift;;
         --all)                FILTER_MODE="all"; shift;;
+        --skip_marked)        SKIP_MARKED=1; shift;;
         --dry_run)            DRY_RUN=1; shift;;
         -h|--help)            sed -n '2,45p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
@@ -105,6 +116,7 @@ echo "  keep_existing    : $KEEP_EXISTING (0 = wipe old hand outputs first)"
 echo "  filter mode      : $FILTER_MODE  (with = only mask_prompts.json,"
 echo "                                    rest = only NO mask_prompts.json,"
 echo "                                    all  = every exp)"
+echo "  skip_marked      : $SKIP_MARKED  (1 = skip exps with .hand_remask_done.json)"
 echo "=========================================================================="
 
 source "$CONDA_SH"
@@ -122,6 +134,7 @@ echo ""
 # Filter by FILTER_MODE = with | rest | all (mask_prompts.json presence).
 PENDING=()
 N_FILTERED_OUT=0
+N_SKIPPED_MARKED=0
 for TASK_DIR in "$VIDEOS_ROOT"/*/; do
     TASK_NAME="$(basename "$TASK_DIR")"
     [[ "$TASK_NAME" == realsense_calibrate_* ]] && continue
@@ -133,6 +146,12 @@ for TASK_DIR in "$VIDEOS_ROOT"/*/; do
         EXP_NAME="$(basename "$EXP_DIR")"
         compgen -G "${EXP_DIR}cam*_rgb.mp4" >/dev/null 2>&1 || continue
         ANN="${ANNOTATED_ROOT}/${TASK_NAME}/${EXP_NAME}"
+        # --skip_marked: skip exps that were already successfully remask-redone.
+        # Marker is dropped by run_one() on rc==0, so its presence means a
+        # previous invocation of THIS script finished this exp cleanly.
+        if [[ "$SKIP_MARKED" == "1" && -f "${ANN}/.hand_remask_done.json" ]]; then
+            N_SKIPPED_MARKED=$((N_SKIPPED_MARKED + 1)); continue
+        fi
         HAS_PROMPTS=0
         [[ -f "${ANN}/mask_prompts.json" ]] && HAS_PROMPTS=1
         case "$FILTER_MODE" in
@@ -162,6 +181,7 @@ case "$FILTER_MODE" in
     all)  echo "[scan] [filter=all]   queued (every exp): $N_PENDING";;
 esac
 echo "[scan] filtered out: $N_FILTERED_OUT"
+[[ "$SKIP_MARKED" == "1" ]] && echo "[scan] skipped (already have .hand_remask_done.json): $N_SKIPPED_MARKED"
 echo ""
 if [[ "$N_PENDING" -lt 1 ]]; then
     echo "[scan] nothing to do."
