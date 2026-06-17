@@ -113,7 +113,7 @@ python tools/00_convert_videos_to_h5.py $H5_ARGS
 
 # # # 构建 generate_meta 参数，传入 start_frame 写入 meta.yaml
 META_ARGS="--h5_path $H5_PATH \
-    --calibration_yaml_path /home/ruoqu/crq_ws/robotool/DataCollection/calibration_0514.yaml \
+    --calibration_yaml_path /home/ruoqu/crq_ws/robotool/DataCollection/calibration_0601.yaml \
     --models_folder /home/ruoqu/crq_ws/robotool/HO-Cap-Annotation/data/models \
     --tool_name $TOOL_NAME \
     --start_frame $START_FRAME"
