@@ -23,7 +23,8 @@
 #         --data_root /viscam/projects/robotool/data \
 #         --bundle    /viscam/projects/robotool/_va_bundle \
 #         [--videos_root /abs/p1 /abs/p2 ...]  [--shards 4]  [--max_concurrent 16]
-#         [--refmask] [--keyframe_fracs 0,0.1,0.2] [--thumb_fracs 0.4,0.6]
+#         [--refmask] [--keyframe_fracs 0,0.1,0.2] [--thumb_fracs 0.4,0.6] [--force]
+#     --force: recompute everything, ignoring existing _manifest.json (no resume skip).
 #         [--manifest_out /abs/path.txt] [--dry_run]
 #     Scans for exps (dirs with cam0_rgb.mp4 or data00000000.h5), writes a
 #     one-exp-dir-per-line manifest, then submits
@@ -67,6 +68,7 @@ KEYFRAME_FRACS="0,0.1,0.2"
 THUMB_FRACS="0.4,0.6"
 DO_MERGE=0
 DRY_RUN=0
+FORCE=0
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -81,6 +83,7 @@ while [[ "$#" -gt 0 ]]; do
         --keyframe_fracs) KEYFRAME_FRACS="$2"; shift 2;;
         --thumb_fracs)    THUMB_FRACS="$2"; shift 2;;
         --merge)          DO_MERGE=1; shift;;
+        --force)          FORCE=1; shift;;
         --dry_run)        DRY_RUN=1; shift;;
         -h|--help)        sed -n '2,55p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
@@ -88,6 +91,7 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 REFMASK_FLAG=$([[ "$REFMASK" == "1" ]] && echo "" || echo "--no_refmask")
+FORCE_FLAG=$([[ "$FORCE" == "1" ]] && echo "--force" || echo "")
 
 # =================================================================
 #  Mode C: MERGE (dependent job)
@@ -116,7 +120,7 @@ if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     # of the manifest (--skip_existing makes it resumable per exp).
     python "$PRECOMPUTE" --exp_list "$MANIFEST" --shard "${SLURM_ARRAY_TASK_ID}/${SHARDS}" \
         --bundle "$BUNDLE" --no_merge --skip_existing \
-        --keyframe_fracs "$KEYFRAME_FRACS" --thumb_fracs "$THUMB_FRACS" $REFMASK_FLAG
+        --keyframe_fracs "$KEYFRAME_FRACS" --thumb_fracs "$THUMB_FRACS" $REFMASK_FLAG $FORCE_FLAG
     RC=$?
     echo "[child] shard ${SLURM_ARRAY_TASK_ID}/${SHARDS} rc=$RC"
     exit $RC
@@ -150,7 +154,8 @@ if [[ -z "$MANIFEST" || ! -f "$MANIFEST" ]]; then
         fi
     fi
     echo "[scan] writing exp manifest -> $MANIFEST_OUT  (skipping done exps for resume)"
-    DATA_ROOT_ARG="$DATA_ROOT" MANIFEST_OUT="$MANIFEST_OUT" BUNDLE_ARG="$BUNDLE" \
+    SCAN_BUNDLE=$([[ "$FORCE" == "1" ]] && echo "" || echo "$BUNDLE")   # --force: don't skip done exps
+    DATA_ROOT_ARG="$DATA_ROOT" MANIFEST_OUT="$MANIFEST_OUT" BUNDLE_ARG="$SCAN_BUNDLE" \
     python3 - "${VIDEOS_ROOTS[@]}" <<'PY'
 import os, sys
 from pathlib import Path
@@ -220,6 +225,7 @@ SUBMIT_ARGS=(--array=0-$((NSHARDS-1))%${MAX_CONCURRENT} "${LOG_ARGS[@]}"
              "$0" --manifest "$MANIFEST" --bundle "$BUNDLE" --shards "$NSHARDS"
              --keyframe_fracs "$KEYFRAME_FRACS" --thumb_fracs "$THUMB_FRACS")
 [[ "$REFMASK" == "1" ]] && SUBMIT_ARGS+=(--refmask)
+[[ "$FORCE" == "1" ]] && SUBMIT_ARGS+=(--force)
 
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "would submit: sbatch ${SUBMIT_ARGS[*]}"
