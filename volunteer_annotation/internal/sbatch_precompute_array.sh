@@ -123,7 +123,12 @@ fi
 #  Mode A: FRONTEND  (build manifest + submit array + dependent merge)
 # =================================================================
 [[ -n "$BUNDLE" ]] || { echo "Error: --bundle required"; exit 1; }
-mkdir -p "$BUNDLE"
+if ! mkdir -p "$BUNDLE" 2>/dev/null; then
+    echo "Error: cannot create bundle dir: $BUNDLE"
+    echo "  (the built-in defaults are CLUSTER paths under /viscam — on a local box"
+    echo "   override with --data_root <dir> --bundle <dir>, or use generate_bundle.sh)"
+    exit 1
+fi
 
 if [[ -z "$MANIFEST" || ! -f "$MANIFEST" ]]; then
     if [[ -z "$DATA_ROOT" && "${#VIDEOS_ROOTS[@]}" -eq 0 ]]; then
@@ -141,19 +146,35 @@ from pathlib import Path
 data_root = (os.environ.get("DATA_ROOT_ARG") or "").strip()
 bundle = (os.environ.get("BUNDLE_ARG") or "").strip()
 out = Path(os.environ["MANIFEST_OUT"])
-roots = [Path(p).resolve() for p in sys.argv[1:]]
+roots = [Path(p) for p in sys.argv[1:]]
 if data_root:
-    dr = Path(data_root).expanduser().resolve()
+    dr = Path(data_root).expanduser()
+    if not dr.is_dir():
+        print(f"[scan][ERR] --data_root not found: {dr}"); sys.exit(2)
     for p in sorted(dr.iterdir()):
         if p.is_dir() and p.name.startswith("videos_") and not p.name.endswith("_annotated"):
-            roots.append(p.resolve())
+            roots.append(p)
+
+# Bounded-depth scan (NOT rglob — that walks the whole NFS subtree incl. depth
+# videos / calibration_debug and is very slow). Exps live at videos_root/<exp>
+# or videos_root/<task>/<exp>; just stat the marker file in candidate dirs.
+def is_exp(d):
+    return (d / "cam0_rgb.mp4").exists() or (d / "data00000000.h5").exists()
+
+def subdirs(d):
+    try:
+        return sorted(x for x in d.iterdir() if x.is_dir())
+    except OSError:
+        return []
+
 exps, seen = [], set()
 for r in roots:
-    for marker in ("cam0_rgb.mp4", "data00000000.h5"):
-        for f in r.rglob(marker):
-            d = f.parent.resolve()
-            if d not in seen:
-                seen.add(d); exps.append(d)
+    for c in subdirs(r):                 # videos_root/<exp>
+        cands = [c] if is_exp(c) else subdirs(c)   # else try videos_root/<task>/<exp>
+        for d in cands:
+            rd = d.resolve()
+            if rd not in seen and is_exp(d):
+                seen.add(rd); exps.append(rd)
 exps.sort()
 total = len(exps)
 if bundle:  # resume: drop exps whose <bundle>/<task>/<exp>/_manifest.json exists
