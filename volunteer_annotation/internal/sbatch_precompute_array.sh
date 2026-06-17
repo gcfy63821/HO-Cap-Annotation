@@ -200,20 +200,30 @@ fi
 N=$(grep -cve '^\s*$' "$MANIFEST")
 [[ "$N" -ge 1 ]] || { echo "manifest empty: $MANIFEST"; exit 0; }
 
-SUBMIT_ARGS=(--array=0-$((N-1))%${MAX_CONCURRENT} "$0" --manifest "$MANIFEST" --bundle "$BUNDLE"
+# One consolidated log for the whole run (all array children + the merge job
+# append stdout+stderr here) instead of per-exp .out/.err. Each child prints an
+# "ARRAY CHILD ... exp_dir: ..." banner so you can still grep a specific exp.
+RUN_TS="$(date +%Y%m%d_%H%M%S)"
+LOGDIR="$BUNDLE/_logs"; mkdir -p "$LOGDIR"
+LOG="$LOGDIR/precompute_${RUN_TS}.log"
+LOG_ARGS=(--output="$LOG" --error="$LOG" --open-mode=append)
+
+SUBMIT_ARGS=(--array=0-$((N-1))%${MAX_CONCURRENT} "${LOG_ARGS[@]}"
+             "$0" --manifest "$MANIFEST" --bundle "$BUNDLE"
              --keyframe_fracs "$KEYFRAME_FRACS" --thumb_fracs "$THUMB_FRACS")
 [[ "$REFMASK" == "1" ]] && SUBMIT_ARGS+=(--refmask)
 
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "would submit: sbatch ${SUBMIT_ARGS[*]}"
-    echo "then merge:   sbatch --dependency=afterany:<jid> $0 --merge --bundle $BUNDLE"
+    echo "consolidated log: $LOG"
     exit 0
 fi
 
 echo "submitting array of $N exp(s) (concurrency=${MAX_CONCURRENT})"
 ARRAY_JID=$(sbatch --parsable "${SUBMIT_ARGS[@]}")
 echo "  array job: $ARRAY_JID"
-MERGE_JID=$(sbatch --parsable --dependency=afterany:"$ARRAY_JID" \
+MERGE_JID=$(sbatch --parsable --dependency=afterany:"$ARRAY_JID" "${LOG_ARGS[@]}" \
             --job-name precompute_merge "$0" --merge --bundle "$BUNDLE")
 echo "  merge job: $MERGE_JID (runs after array)"
-echo "done. manifest.json will be ready at $BUNDLE/manifest.json once merge finishes."
+echo "log:    $LOG   (single file, all exps + merge; tail -f to watch)"
+echo "output: $BUNDLE/manifest.json   (ready once merge finishes)"

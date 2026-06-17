@@ -22,14 +22,34 @@ Usage:
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_CKPT = REPO_ROOT / "mesh_reconstruction/sam2/checkpoints/sam2.1_hiera_large.pt"
 DEFAULT_CFG = "configs/sam2.1/sam2.1_hiera_l.yaml"
+
+
+def resolve_ckpt(cli=None, name="sam2.1_hiera_large.pt"):
+    """--sam2_checkpoint > $SAM2_CKPT > next to the sam2 package > repo fallback."""
+    cands = []
+    if cli:
+        cands.append(Path(cli))
+    if os.environ.get("SAM2_CKPT"):
+        cands.append(Path(os.environ["SAM2_CKPT"]))
+    try:
+        import sam2
+        base = Path(sam2.__file__).resolve().parents[1]
+        cands += [base / "checkpoints" / name, base / "checkpoints" / "sam2_hiera_large.pt"]
+    except Exception:
+        pass
+    cands.append(REPO_ROOT / "mesh_reconstruction/sam2/checkpoints" / name)
+    for c in cands:
+        if c and Path(c).is_file():
+            return str(c)
+    raise SystemExit("[ERR] SAM2 checkpoint not found; set --sam2_checkpoint or $SAM2_CKPT.")
 
 
 def build_predictor(ckpt, cfg, device):
@@ -75,7 +95,7 @@ def main():
     # PREVIEW — final masks are regenerated on GPU at full precision from the
     # stored points. A real seam break (wrong features) scores far lower (<0.9).
     ap.add_argument("--min_iou", type=float, default=0.97)
-    ap.add_argument("--sam2_checkpoint", type=str, default=str(DEFAULT_CKPT))
+    ap.add_argument("--sam2_checkpoint", type=str, default=None)
     ap.add_argument("--model_cfg", type=str, default=DEFAULT_CFG)
     args = ap.parse_args()
 
@@ -83,7 +103,7 @@ def main():
     manifest = json.loads((bundle_root / "manifest.json").read_text())
     device = torch.device(args.device)
     print(f"[init] decode device={device}, min_iou={args.min_iou}")
-    predictor = build_predictor(args.sam2_checkpoint, args.model_cfg, device)
+    predictor = build_predictor(resolve_ckpt(args.sam2_checkpoint), args.model_cfg, device)
 
     ious, n_frames, n_fail = [], 0, 0
     for cam in manifest["cameras"]:

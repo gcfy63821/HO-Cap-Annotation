@@ -26,6 +26,7 @@ import argparse
 import glob
 import hashlib
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -36,9 +37,31 @@ import numpy as np
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_CKPT = REPO_ROOT / "mesh_reconstruction/sam2/checkpoints/sam2.1_hiera_large.pt"
 DEFAULT_CFG = "configs/sam2.1/sam2.1_hiera_l.yaml"
 DEFAULT_MESH_MAP = REPO_ROOT / "HO-Cap-Annotation/scripts/mesh_name_mapping.json"
+
+
+def resolve_ckpt(cli=None, name="sam2.1_hiera_large.pt"):
+    """Find the SAM2 checkpoint. Priority: --sam2_checkpoint > $SAM2_CKPT >
+    next to the importable sam2 package (<sam2_repo>/checkpoints/) > this repo's
+    mesh_reconstruction/sam2/checkpoints/. Avoids hardcoding a machine path."""
+    cands = []
+    if cli:
+        cands.append(Path(cli))
+    if os.environ.get("SAM2_CKPT"):
+        cands.append(Path(os.environ["SAM2_CKPT"]))
+    try:
+        import sam2
+        base = Path(sam2.__file__).resolve().parents[1]   # <sam2_repo>/sam2/__init__.py -> <sam2_repo>
+        cands += [base / "checkpoints" / name, base / "checkpoints" / "sam2_hiera_large.pt"]
+    except Exception:
+        pass
+    cands.append(REPO_ROOT / "mesh_reconstruction/sam2/checkpoints" / name)
+    for c in cands:
+        if c and Path(c).is_file():
+            return str(c)
+    raise SystemExit("[ERR] SAM2 checkpoint not found. Set --sam2_checkpoint or "
+                     "$SAM2_CKPT. Tried:\n  " + "\n  ".join(str(c) for c in cands))
 
 H5_NAME = "data00000000.h5"
 SCHEMA_VERSION = 2
@@ -221,7 +244,8 @@ def main():
                     help="don't rebuild top-level manifest.json (parallel workers; merge once at end)")
     ap.add_argument("--force", action="store_true",
                     help="recompute even if <exp>/_manifest.json exists (overrides --skip_existing)")
-    ap.add_argument("--sam2_checkpoint", type=str, default=str(DEFAULT_CKPT))
+    ap.add_argument("--sam2_checkpoint", type=str, default=None,
+                    help="SAM2 .pt; default auto-resolves ($SAM2_CKPT or next to the sam2 package)")
     ap.add_argument("--model_cfg", type=str, default=DEFAULT_CFG)
     args = ap.parse_args()
 
@@ -235,9 +259,10 @@ def main():
     if device.type == "cuda" and torch.cuda.get_device_properties(0).major >= 8:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-    print(f"[init] device={device}, keyframe_fracs={kf_fracs}, thumb_fracs={th_fracs}, "
-          f"refmask={want_refmask}, mesh map={len(mesh_map)} entries")
-    predictor = build_predictor(args.sam2_checkpoint, args.model_cfg, device)
+    ckpt = resolve_ckpt(args.sam2_checkpoint)
+    print(f"[init] device={device}, ckpt={ckpt}, keyframe_fracs={kf_fracs}, "
+          f"thumb_fracs={th_fracs}, refmask={want_refmask}, mesh map={len(mesh_map)} entries")
+    predictor = build_predictor(ckpt, args.model_cfg, device)
 
     exps = [Path(args.exp)] if args.exp else discover_exps(args.all)
     if args.shard and args.all:
@@ -245,7 +270,7 @@ def main():
         exps = [e for i, e in enumerate(exps) if i % n == k]
         print(f"[shard] {k}/{n}: {len(exps)} of this shard")
     print(f"[init] {len(exps)} experiment(s)")
-    sam2_model = Path(args.sam2_checkpoint).name
+    sam2_model = Path(ckpt).name
     t_start = time.time()
     n_done = n_skip = n_cams = 0
     for exp_dir in exps:

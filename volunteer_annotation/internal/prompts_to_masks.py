@@ -22,6 +22,7 @@ import argparse
 import gc
 import glob
 import json
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -33,10 +34,33 @@ import torch
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_CKPT = REPO_ROOT / "mesh_reconstruction/sam2/checkpoints/sam2.1_hiera_large.pt"
 # hocap's build_sam2_video_predictor expects a real config FILE path (it uses
 # the parent dir as the hydra config dir + the stem as config name).
 DEFAULT_CFG = REPO_ROOT / "HO-Cap-Annotation/config/sam2_config/sam2.1_hiera_l.yaml"
+
+
+def resolve_ckpt(cli=None, name="sam2.1_hiera_large.pt"):
+    """Find the SAM2 checkpoint without hardcoding a machine path. Priority:
+    --sam2_checkpoint > $SAM2_CKPT > next to the importable sam2 package >
+    repo config/checkpoints or mesh_reconstruction/sam2/checkpoints."""
+    cands = []
+    if cli:
+        cands.append(Path(cli))
+    if os.environ.get("SAM2_CKPT"):
+        cands.append(Path(os.environ["SAM2_CKPT"]))
+    try:
+        import sam2
+        base = Path(sam2.__file__).resolve().parents[1]
+        cands += [base / "checkpoints" / name, base / "checkpoints" / "sam2_hiera_large.pt"]
+    except Exception:
+        pass
+    cands += [REPO_ROOT / "HO-Cap-Annotation/config/checkpoints/sam2" / name,
+              REPO_ROOT / "mesh_reconstruction/sam2/checkpoints" / name]
+    for c in cands:
+        if c and Path(c).is_file():
+            return str(c)
+    raise SystemExit("[ERR] SAM2 checkpoint not found. Set --sam2_checkpoint or "
+                     "$SAM2_CKPT. Tried:\n  " + "\n  ".join(str(c) for c in cands))
 
 H5_NAME = "data00000000.h5"
 
@@ -185,7 +209,8 @@ def main():
                     help="experiment dir (data00000000.h5 or cam*_rgb.mp4, + tool_masks/prompts/)")
     ap.add_argument("--max_frames", type=int, default=None,
                     help="propagate only the first N frames (quick test)")
-    ap.add_argument("--sam2_checkpoint", type=str, default=str(DEFAULT_CKPT))
+    ap.add_argument("--sam2_checkpoint", type=str, default=None,
+                    help="SAM2 .pt; default auto-resolves ($SAM2_CKPT or next to the sam2 package)")
     ap.add_argument("--model_cfg", type=str, default=str(DEFAULT_CFG))
     args = ap.parse_args()
 
@@ -196,8 +221,9 @@ def main():
         raise SystemExit(f"no prompt JSON in {prompts_dir}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[init] device={device}, {len(prompt_files)} camera prompt file(s)")
-    predictor = build_video_predictor(args.sam2_checkpoint, args.model_cfg, device)
+    ckpt = resolve_ckpt(args.sam2_checkpoint)
+    print(f"[init] device={device}, ckpt={ckpt}, {len(prompt_files)} camera prompt file(s)")
+    predictor = build_video_predictor(ckpt, args.model_cfg, device)
 
     # Consolidate roles across all cameras: a role present in ANY view is part
     # of the exp roster. Assign contiguous object_ids in fixed role order so the
