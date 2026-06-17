@@ -56,6 +56,7 @@ MERGE="$INTERNAL/merge_manifests.py"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
+export PYTHONUNBUFFERED=1   # stream python progress to the log in real time (no block buffering)
 
 MANIFEST=""
 MANIFEST_OUT=""
@@ -197,9 +198,17 @@ for r in roots:
                 seen.add(rd); exps.append(rd)
 exps.sort()
 total = len(exps)
-if bundle:  # resume: drop exps whose <bundle>/<task>/<exp>/_manifest.json exists
+def frag_path(b, d):   # mirrors precompute task_exp_from_path nesting
+    rel = None
+    for anc in d.parents:
+        if anc.name.startswith("videos_"):
+            rel = d.relative_to(anc.parent); break
+    if rel is None:
+        rel = Path(d.parent.name) / d.name
+    return b / rel / "_manifest.json"
+if bundle:  # resume: drop exps already done (per-exp _manifest.json present)
     b = Path(bundle)
-    exps = [d for d in exps if not (b / d.parent.name / d.name / "_manifest.json").is_file()]
+    exps = [d for d in exps if not frag_path(b, d).is_file()]
 out.write_text("\n".join(str(e) for e in exps) + ("\n" if exps else ""))
 print(f"[scan] {total} exp(s) found, {total - len(exps)} already done, {len(exps)} pending")
 PY

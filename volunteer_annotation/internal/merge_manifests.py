@@ -18,9 +18,12 @@ FRAGMENT = "_manifest.json"   # per-exp fragment filename
 
 
 def build_manifest(bundle):
-    """Combine every <bundle>/*/*/_manifest.json into <bundle>/manifest.json."""
+    """Combine every per-exp _manifest.json into <bundle>/manifest.json.
+    Bundle nests as <videos_xxxx>/<exp> OR <videos_xxxx>/<task>/<exp>, so glob
+    both the 2- and 3-level depths."""
     bundle = Path(bundle)
-    frags = sorted(glob.glob(str(bundle / "*" / "*" / FRAGMENT)))
+    frags = sorted(set(glob.glob(str(bundle / "*" / "*" / FRAGMENT))) |
+                   set(glob.glob(str(bundle / "*" / "*" / "*" / FRAGMENT))))
     cameras, sam2_model, embed_dtype = [], None, "float16"
     for f in frags:
         m = json.loads(Path(f).read_text())

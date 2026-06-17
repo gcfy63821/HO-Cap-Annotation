@@ -96,8 +96,20 @@ def cam_name(c):
 
 
 def task_exp_from_path(exp_dir):
+    """Return (task, exp) for the bundle path <bundle>/<task>/<exp>/, where task
+    INCLUDES the videos_xxxx grouping so each source folder is self-contained and
+    folders never collide. e.g. .../videos_0106/squeegee_sweep_nuts/<exp>
+    -> task='videos_0106/squeegee_sweep_nuts', exp='<exp>'; .../videos_0102/<exp>
+    -> task='videos_0102'. Falls back to the parent dir name if no videos_* ancestor."""
     exp_dir = Path(exp_dir).resolve()
-    return exp_dir.parent.name, exp_dir.name
+    rel = None
+    for anc in exp_dir.parents:
+        if anc.name.startswith("videos_"):
+            rel = exp_dir.relative_to(anc.parent)   # videos_xxxx/.../<exp>
+            break
+    if rel is None:
+        rel = Path(exp_dir.parent.name) / exp_dir.name
+    return str(rel.parent), rel.name
 
 
 def fracs_to_idx(fracs, n):
