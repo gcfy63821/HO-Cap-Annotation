@@ -48,6 +48,7 @@ set -u
 export HOCAP_ROOT="${HOCAP_ROOT:-/viscam/u/chenrq/crq_ws/hocap/HO-Cap-Annotation}"
 export CONDA_SH="${CONDA_SH:-/viscam/u/chenrq/miniconda3/etc/profile.d/conda.sh}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-hocap-annotation}"
+SLURM_OUTS="${SLURM_OUTS:-/viscam/u/chenrq/crq_ws/slurm_outs}"   # consolidated run log dir
 INTERNAL="$HOCAP_ROOT/volunteer_annotation/internal"
 PRECOMPUTE="$INTERNAL/precompute_embeddings.py"
 MERGE="$INTERNAL/merge_manifests.py"
@@ -217,8 +218,8 @@ NSHARDS=${SHARDS:-4}
 # append stdout+stderr here) instead of per-exp .out/.err. Each child prints an
 # "ARRAY CHILD ... exp_dir: ..." banner so you can still grep a specific exp.
 RUN_TS="$(date +%Y%m%d_%H%M%S)"
-LOGDIR="$BUNDLE/_logs"; mkdir -p "$LOGDIR"
-LOG="$LOGDIR/precompute_${RUN_TS}.log"
+mkdir -p "$SLURM_OUTS"
+LOG="$SLURM_OUTS/precompute_${RUN_TS}.log"
 LOG_ARGS=(--output="$LOG" --error="$LOG" --open-mode=append)
 
 SUBMIT_ARGS=(--array=0-$((NSHARDS-1))%${MAX_CONCURRENT} "${LOG_ARGS[@]}"
