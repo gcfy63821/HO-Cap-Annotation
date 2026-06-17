@@ -135,8 +135,16 @@ if [[ -z "$MANIFEST" || ! -f "$MANIFEST" ]]; then
         echo "Error: provide --data_root or --videos_root ... or --manifest <txt>"; exit 1
     fi
     if [[ -z "$MANIFEST_OUT" ]]; then
-        MANIFEST_OUT="/tmp/${USER}/precompute_$(date +%Y%m%d_%H%M%S).txt"
-        mkdir -p "$(dirname "$MANIFEST_OUT")"
+        # MUST be on shared storage (NOT /tmp, which is node-local) so array
+        # children on compute nodes can read it. Prefer writing it INTO the
+        # videos_root folder it describes (co-located with the data); fall back
+        # to the bundle dir for multi-root / --data_root scans or if unwritable.
+        TS="$(date +%Y%m%d_%H%M%S)"
+        if [[ "${#VIDEOS_ROOTS[@]}" -eq 1 && -w "${VIDEOS_ROOTS[0]}" ]]; then
+            MANIFEST_OUT="${VIDEOS_ROOTS[0]}/_va_exp_list_${TS}.txt"
+        else
+            MANIFEST_OUT="$BUNDLE/_exp_list_${TS}.txt"
+        fi
     fi
     echo "[scan] writing exp manifest -> $MANIFEST_OUT  (skipping done exps for resume)"
     DATA_ROOT_ARG="$DATA_ROOT" MANIFEST_OUT="$MANIFEST_OUT" BUNDLE_ARG="$BUNDLE" \
