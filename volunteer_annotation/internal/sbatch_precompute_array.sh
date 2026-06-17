@@ -11,8 +11,10 @@
 #SBATCH --error=/viscam/u/chenrq/crq_ws/slurm_outs/precompute_%A_%a.err
 #
 # SLURM-array embedding precompute for the volunteer annotation pipeline.
-# Mirrors scripts/sbatch_run_hand_array.sh: one EXP per array element, each on
-# its own GPU. Modeled on that script's frontend/child structure.
+# Modeled on scripts/sbatch_run_hand_array.sh, but array elements = SHARDS
+# (parallel workers), NOT one-per-exp: precompute is light (~30s/exp) so a
+# per-exp job would waste more on GPU alloc + model load than the work itself.
+# Each shard loads SAM2 ONCE and processes ~N/SHARDS exps.
 #
 # THREE modes (auto-detected):
 #
@@ -20,7 +22,7 @@
 #     bash sbatch_precompute_array.sh \
 #         --data_root /viscam/projects/robotool/data \
 #         --bundle    /viscam/projects/robotool/_va_bundle \
-#         [--videos_root /abs/p1 /abs/p2 ...]  [--max_concurrent 16]
+#         [--videos_root /abs/p1 /abs/p2 ...]  [--shards 4]  [--max_concurrent 16]
 #         [--refmask] [--keyframe_fracs 0,0.1,0.2] [--thumb_fracs 0.4,0.6]
 #         [--manifest_out /abs/path.txt] [--dry_run]
 #     Scans for exps (dirs with cam0_rgb.mp4 or data00000000.h5), writes a
@@ -28,9 +30,9 @@
 #       sbatch --array=0-(N-1)%MAX <self> --manifest <m> --bundle <b> ...
 #     and a dependent merge job that runs after the array.
 #
-# (B) ARRAY CHILD  (auto via $SLURM_ARRAY_TASK_ID): reads its exp dir from the
-#     manifest line, runs precompute_embeddings.py --exp <dir> --bundle <b>
-#     --manifest_name manifest_<arrayid>.json (per-shard, no race).
+# (B) ARRAY CHILD  (auto via $SLURM_ARRAY_TASK_ID): runs precompute_embeddings.py
+#     --exp_list <manifest> --shard <id>/<SHARDS> --no_merge --skip_existing,
+#     processing every SHARDS-th exp with the model loaded once.
 #
 # (C) MERGE  (--merge): merges manifest_*.json -> manifest.json (dependent job).
 #
@@ -59,6 +61,7 @@ DATA_ROOT="/viscam/projects/robotool/data"          # default; override with --d
 VIDEOS_ROOTS=()
 BUNDLE="/viscam/projects/robotool/_va_bundle"        # default; override with --bundle
 MAX_CONCURRENT=16
+SHARDS=4                                             # # array elements (parallel workers); override with --shards
 REFMASK=0
 KEYFRAME_FRACS="0,0.1,0.2"
 THUMB_FRACS="0.4,0.6"
@@ -73,6 +76,7 @@ while [[ "$#" -gt 0 ]]; do
         --videos_root)    shift; while [[ "$#" -gt 0 && "${1:0:2}" != "--" ]]; do VIDEOS_ROOTS+=("$1"); shift; done;;
         --bundle)         BUNDLE="$2"; shift 2;;
         --max_concurrent) MAX_CONCURRENT="$2"; shift 2;;
+        --shards)         SHARDS="$2"; shift 2;;
         --refmask)        REFMASK=1; shift;;
         --keyframe_fracs) KEYFRAME_FRACS="$2"; shift 2;;
         --thumb_fracs)    THUMB_FRACS="$2"; shift 2;;
@@ -101,21 +105,20 @@ fi
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     [[ -n "$MANIFEST" && -f "$MANIFEST" ]] || { echo "[child] bad --manifest: $MANIFEST"; exit 1; }
     [[ -n "$BUNDLE" ]] || { echo "[child] --bundle required"; exit 1; }
-    LINE_NO=$((SLURM_ARRAY_TASK_ID + 1))
-    EXP_DIR="$(sed -n "${LINE_NO}p" "$MANIFEST")"
-    [[ -n "$EXP_DIR" && -d "$EXP_DIR" ]] || { echo "[child] bad exp dir at line $LINE_NO: '$EXP_DIR'"; exit 2; }
+    [[ -n "$SHARDS" ]] || { echo "[child] --shards required"; exit 1; }
 
     source "$CONDA_SH"; conda activate "$CONDA_ENV_NAME"
     echo "=========================================="
-    echo "ARRAY CHILD job=${SLURM_JOB_ID} array_id=${SLURM_ARRAY_TASK_ID} node=$(hostname)"
-    echo "  exp_dir : $EXP_DIR"
-    echo "  bundle  : $BUNDLE   refmask=$REFMASK"
+    echo "ARRAY CHILD job=${SLURM_JOB_ID} shard=${SLURM_ARRAY_TASK_ID}/${SHARDS} node=$(hostname)"
+    echo "  manifest: $MANIFEST   bundle: $BUNDLE   refmask=$REFMASK"
     echo "=========================================="
-    python "$PRECOMPUTE" --exp "$EXP_DIR" --bundle "$BUNDLE" \
-        --no_merge --skip_existing \
+    # ONE process per shard: loads the SAM2 model ONCE, then does every Nth exp
+    # of the manifest (--skip_existing makes it resumable per exp).
+    python "$PRECOMPUTE" --exp_list "$MANIFEST" --shard "${SLURM_ARRAY_TASK_ID}/${SHARDS}" \
+        --bundle "$BUNDLE" --no_merge --skip_existing \
         --keyframe_fracs "$KEYFRAME_FRACS" --thumb_fracs "$THUMB_FRACS" $REFMASK_FLAG
     RC=$?
-    echo "[child] rc=$RC ($EXP_DIR)"
+    echo "[child] shard ${SLURM_ARRAY_TASK_ID}/${SHARDS} rc=$RC"
     exit $RC
 fi
 
@@ -200,6 +203,11 @@ fi
 N=$(grep -cve '^\s*$' "$MANIFEST")
 [[ "$N" -ge 1 ]] || { echo "manifest empty: $MANIFEST"; exit 0; }
 
+# Array elements = SHARDS workers (NOT one per exp): each loads SAM2 once and
+# processes ~N/SHARDS exps, so the model-load + job overhead is amortized.
+NSHARDS=${SHARDS:-4}
+(( NSHARDS > N )) && NSHARDS=$N        # no point having more shards than exps
+
 # One consolidated log for the whole run (all array children + the merge job
 # append stdout+stderr here) instead of per-exp .out/.err. Each child prints an
 # "ARRAY CHILD ... exp_dir: ..." banner so you can still grep a specific exp.
@@ -208,18 +216,19 @@ LOGDIR="$BUNDLE/_logs"; mkdir -p "$LOGDIR"
 LOG="$LOGDIR/precompute_${RUN_TS}.log"
 LOG_ARGS=(--output="$LOG" --error="$LOG" --open-mode=append)
 
-SUBMIT_ARGS=(--array=0-$((N-1))%${MAX_CONCURRENT} "${LOG_ARGS[@]}"
-             "$0" --manifest "$MANIFEST" --bundle "$BUNDLE"
+SUBMIT_ARGS=(--array=0-$((NSHARDS-1))%${MAX_CONCURRENT} "${LOG_ARGS[@]}"
+             "$0" --manifest "$MANIFEST" --bundle "$BUNDLE" --shards "$NSHARDS"
              --keyframe_fracs "$KEYFRAME_FRACS" --thumb_fracs "$THUMB_FRACS")
 [[ "$REFMASK" == "1" ]] && SUBMIT_ARGS+=(--refmask)
 
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "would submit: sbatch ${SUBMIT_ARGS[*]}"
+    echo "  -> $N exp(s) over $NSHARDS shard(s) (~$(( (N + NSHARDS - 1) / NSHARDS )) exp/shard, model loaded once per shard)"
     echo "consolidated log: $LOG"
     exit 0
 fi
 
-echo "submitting array of $N exp(s) (concurrency=${MAX_CONCURRENT})"
+echo "submitting $NSHARDS shard(s) for $N exp(s) (~$(( (N + NSHARDS - 1) / NSHARDS )) exp/shard, concurrency=${MAX_CONCURRENT})"
 ARRAY_JID=$(sbatch --parsable "${SUBMIT_ARGS[@]}")
 echo "  array job: $ARRAY_JID"
 MERGE_JID=$(sbatch --parsable --dependency=afterany:"$ARRAY_JID" "${LOG_ARGS[@]}" \

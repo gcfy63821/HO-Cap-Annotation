@@ -227,8 +227,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--exp", type=str)
-    src.add_argument("--all", type=str)
+    src.add_argument("--exp", type=str, help="one exp dir")
+    src.add_argument("--all", type=str, help="root dir; discover exps under it (rglob)")
+    src.add_argument("--exp_list", type=str,
+                     help="file with one exp dir per line (pre-scanned); use with --shard")
     ap.add_argument("--bundle", type=str, required=True)
     ap.add_argument("--keyframe_fracs", type=str, default="0,0.1,0.2",
                     help="comma frac positions for annotatable keyframes (embed+jpg)")
@@ -237,7 +239,8 @@ def main():
     ap.add_argument("--mesh_name_map", type=str, default=str(DEFAULT_MESH_MAP))
     ap.add_argument("--no_refmask", action="store_true")
     ap.add_argument("--shard", type=str, default=None,
-                    help="k/N: with --all, process only exps where index%%N==k (parallel sharding)")
+                    help="k/N: process only exps where index%%N==k (parallel sharding; "
+                         "1 process per shard loads the model ONCE for its whole batch)")
     ap.add_argument("--skip_existing", action="store_true",
                     help="resume: skip exps whose <exp>/_manifest.json already exists")
     ap.add_argument("--no_merge", action="store_true",
@@ -264,11 +267,16 @@ def main():
           f"thumb_fracs={th_fracs}, refmask={want_refmask}, mesh map={len(mesh_map)} entries")
     predictor = build_predictor(ckpt, args.model_cfg, device)
 
-    exps = [Path(args.exp)] if args.exp else discover_exps(args.all)
-    if args.shard and args.all:
+    if args.exp:
+        exps = [Path(args.exp)]
+    elif args.all:
+        exps = discover_exps(args.all)
+    else:
+        exps = [Path(l) for l in Path(args.exp_list).read_text().splitlines() if l.strip()]
+    if args.shard:
         k, n = (int(x) for x in args.shard.split("/"))
         exps = [e for i, e in enumerate(exps) if i % n == k]
-        print(f"[shard] {k}/{n}: {len(exps)} of this shard")
+        print(f"[shard] {k}/{n}: {len(exps)} exp(s) for this shard")
     print(f"[init] {len(exps)} experiment(s)")
     sam2_model = Path(ckpt).name
     t_start = time.time()
