@@ -147,7 +147,10 @@ data_root = (os.environ.get("DATA_ROOT_ARG") or "").strip()
 bundle = (os.environ.get("BUNDLE_ARG") or "").strip()
 out = Path(os.environ["MANIFEST_OUT"])
 roots = [Path(p) for p in sys.argv[1:]]
-if data_root:
+# Explicit --videos_root scopes the run; only fall back to scanning the whole
+# data_root when NO --videos_root was given (avoids the default data_root
+# silently pulling in every videos_* dir).
+if data_root and not roots:
     dr = Path(data_root).expanduser()
     if not dr.is_dir():
         print(f"[scan][ERR] --data_root not found: {dr}"); sys.exit(2)
