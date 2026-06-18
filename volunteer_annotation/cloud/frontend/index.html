@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>SAM2 志愿者标注 · 8 视角 · 多关键帧</title>
+<title>SAM2 志愿者标注 · 8 视角</title>
 <style>
   *{ box-sizing:border-box; }
   body{ font-family:system-ui,sans-serif; margin:0; background:#15151a; color:#eee; }
   header{ padding:8px 14px; background:#26262c; display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
   header h1{ font-size:15px; margin:0; }
-  #meta{ color:#9ab; font-size:13px; } #status{ margin-left:auto; color:#fc8; font-size:13px; }
+  #prog{ color:#9ab; font-size:13px; } #meta{ color:#789; font-size:12px; } #status{ color:#fc8; font-size:13px; }
   main{ display:flex; gap:12px; padding:10px; }
   #grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:6px; flex:1; min-width:0; }
   .tile{ position:relative; background:#000; border:2px solid #333; border-radius:4px; overflow:hidden; line-height:0; }
@@ -20,7 +20,7 @@
   .nm{ position:absolute; top:3px; left:5px; z-index:2; font-size:11px; color:#fff; cursor:pointer;
        background:rgba(0,0,0,.55); padding:1px 6px; border-radius:3px; }
   .kfb{ font-size:10px; padding:1px 5px; border:0; border-radius:3px; background:#3a3a44; color:#ccc; cursor:pointer; }
-  .kfb.on{ background:#fff; color:#000; font-weight:700; }
+  .kfb.on{ background:#fff; color:#000; font-weight:700; } .kfb.has{ outline:2px solid #2f7; }
   .panel{ width:310px; flex-shrink:0; font-size:14px; }
   .role{ padding:7px; border:2px solid #444; border-radius:7px; margin-bottom:6px; cursor:pointer; }
   .role.active{ background:#2a3340; }
@@ -33,8 +33,7 @@
   #browse{ margin-top:10px; border-top:1px solid #444; padding-top:8px; }
   #bigref{ width:100%; border:1px solid #555; border-radius:4px; }
   #strip{ display:flex; gap:4px; flex-wrap:wrap; margin:5px 0; }
-  #strip .fr{ position:relative; cursor:pointer; }
-  #strip img{ height:46px; border:2px solid #555; border-radius:3px; display:block; }
+  #strip .fr{ position:relative; cursor:pointer; } #strip img{ height:46px; border:2px solid #555; border-radius:3px; display:block; }
   #strip .fr.kf img{ border-color:#6cf; } #strip .fr .t{ position:absolute; bottom:0; left:0; font-size:9px; background:rgba(0,0,0,.6); padding:0 2px; }
   .hint{ color:#999; font-size:12px; line-height:1.5; margin-top:8px; }
 </style>
@@ -42,183 +41,172 @@
 <body>
 <header>
   <h1>SAM2 标注 · 8 视角</h1>
-  <span id="prog" style="color:#9ab;font-size:13px"></span>
-  <span>视频 <select id="vidsel" onchange="loadTask(+this.value)" style="max-width:280px"></select></span>
+  <span id="prog"></span>
+  <span>视频 <select id="vidsel" onchange="loadTask(+this.value)" style="max-width:260px"></select></span>
   <span>志愿者 <input id="vol" value="anon" style="width:80px" onchange="refreshNav()"></span>
-  <span id="meta" style="color:#789;font-size:12px"></span>
-  <span id="status"></span>
+  <span id="meta"></span><span id="status"></span>
 </header>
 <main>
   <div id="grid"></div>
   <div class="panel">
     <div id="roles"></div>
-    <button class="go" onclick="previewRole()">预览当前角色(全视角)</button>
+    <button class="go" onclick="previewRole()">预览当前角色·当前帧</button>
     <button onclick="undo()">撤销点</button>
     <button onclick="clearRoleAll()">清空当前角色</button>
     <button class="primary" onclick="submit()">提交整组</button>
     <button onclick="loadNext()">跳过 / 下一组</button>
     <button class="bad" onclick="flagBad()">⚠ 标记坏视频</button>
     <div id="browse">
-      <b>浏览 <span id="bcam" style="color:#fd0"></span></b>（点视角名聚焦；蓝框=可标关键帧）
-      <div id="strip"></div>
-      <img id="bigref"/>
+      <b>浏览 <span id="bcam" style="color:#fd0"></span></b>（点视角名聚焦）
+      <div id="strip"></div><img id="bigref"/>
     </div>
     <div class="hint">
-      左键=正点 · 右键=负点。先选右侧角色(勾「存在」)；<br>
-      若某视角 frame0 看不到该物体，点该视角下方的关键帧号(如 67/133)切到工具出现的帧再打点；<br>
-      不同角色可选不同帧。点「预览当前角色」看结果，全部弄好「提交整组」。
+      左键=正点 · 右键=负点。先选右侧角色(勾「存在」)。<br>
+      <b>工具类</b>:在 1 个帧上标(看不到就点视角下方帧号切到出现的帧)。<br>
+      <b>操作对象</b>(可变形):需在 <b>3 个帧</b>(0% / 50% / 末)上各标一组——点下方 3 个帧号切换,每帧分别打点,绿框=已标该帧。<br>
+      点「预览」看当前帧结果。全部弄好「提交整组」。
     </div>
   </div>
 </main>
 <script>
 const COLORS={primary_tool:'#ff5050',auxiliary_tool:'#50c850',manipulated_object:'#508cff'};
-let task=null, activeRole=null, focusCam=null;
-let ann={}, present={}, imgCache={}, canvases={};
-const $=id=>document.getElementById(id), setStatus=s=>$('status').textContent=s;
+const MULTI='manipulated_object';      // role annotated on 3 frames
+let task=null, activeRole=null, focusCam=null, ann={}, present={}, imgCache={}, canvases={};
+const $=id=>document.getElementById(id), setStatus=s=>$('status').textContent=s, vol=()=>$('vol').value||'anon';
 
-// Return a cached <img>. If it's not loaded yet, fire onReady ONCE when it
-// loads (the caller re-renders then). Never call onReady synchronously for an
-// already-complete image — that would recurse (renderTile -> getImg -> cb -> renderTile...).
-function getImg(url,onReady){
-  let im=imgCache[url];
-  if(!im){ im=new Image(); imgCache[url]=im; im.onload=onReady||null; im.src=url; }
-  return im;
+function getImg(url,onReady){ let im=imgCache[url];
+  if(!im){ im=new Image(); imgCache[url]=im; im.onload=onReady||null; im.src=url; } return im; }
+function camOf(c){ return task.cameras.find(x=>x.camera===c); }
+
+// frames a role is annotated on: object -> [0%, ~50%, last]; tools -> all keyframes
+function roleFrames(cam, role){
+  if(role===MULTI){
+    const kf=cam.keyframes, half=cam.n_frames*0.5;
+    const mid=kf.reduce((a,b)=>Math.abs(b-half)<Math.abs(a-half)?b:a, kf[0]);
+    return [...new Set([kf[0], mid, kf[kf.length-1]])];
+  }
+  return cam.keyframes;
 }
-
-function vol(){ return $('vol').value||'anon'; }
+function cell(camera, role){ const a=ann[camera][role];
+  if(!a.byFrame[a.cur]) a.byFrame[a.cur]={points:[],labels:[],iou:null,overlay:null};
+  return a.byFrame[a.cur]; }
 
 async function refreshNav(){
   const p=await(await fetch('/api/progress?annotator_id='+encodeURIComponent(vol()))).json();
   $('prog').textContent=`总 ${p.total} · 已标 ${p.submitted} · 我标 ${p.mine} · 坏 ${p.bad} · 剩 ${p.remaining}`;
-  const t=(await(await fetch('/api/tasks?annotator_id='+encodeURIComponent(vol()))).json()).tasks;
-  const cur=task?task.id:null;
-  $('vidsel').innerHTML=t.map(x=>{
-    const ic=x.status==='submitted'?(x.mine?'✓我标':'✓已标'):x.status==='bad'?'⚠坏':x.status==='locked'?'…占用':'○未标';
-    return `<option value="${x.id}" ${x.id===cur?'selected':''}>[${ic}] ${x.exp}</option>`;
-  }).join('');
+  const t=(await(await fetch('/api/tasks?annotator_id='+encodeURIComponent(vol()))).json()).tasks, cur=task?task.id:null;
+  $('vidsel').innerHTML=t.map(x=>{ const ic=x.status==='submitted'?(x.mine?'✓我标':'✓已标'):x.status==='bad'?'⚠坏':x.status==='locked'?'…占用':'○未标';
+    return `<option value="${x.id}" ${x.id===cur?'selected':''}>[${ic}] ${x.exp}</option>`; }).join('');
 }
-
 function applyTask(t){
   task=t; ann={}; present={}; imgCache={}; canvases={};
-  task.roles.forEach(rl=> present[rl.role]=(rl.role==='primary_tool'));
+  task.roles.forEach(rl=>present[rl.role]=(rl.role==='primary_tool'));
   activeRole=task.roles[0].role; focusCam=task.cameras[0].camera;
   const st=(task.status&&!['unassigned','locked'].includes(task.status))?` [已是 ${task.status}]`:'';
   $('meta').textContent=`#${task.id} ${task.exp} · ${task.cameras.length}视角${st}`;
   buildGrid(); renderRoles(); renderBrowse(); refreshNav();
 }
-
-async function loadNext(){
-  const j=await(await fetch('/api/task/next?annotator_id='+encodeURIComponent(vol()))).json();
+async function loadNext(){ const j=await(await fetch('/api/task/next?annotator_id='+encodeURIComponent(vol()))).json();
   if(!j.task){ setStatus('没有待标视频了 🎉'); $('meta').textContent=''; $('grid').innerHTML=''; refreshNav(); return; }
-  applyTask(j.task); setStatus('');
-}
-
-async function loadTask(id){
-  const j=await(await fetch('/api/task/'+id+'?annotator_id='+encodeURIComponent(vol()))).json();
-  if(j.task){ applyTask(j.task); setStatus(''); }
-}
+  applyTask(j.task); setStatus(''); }
+async function loadTask(id){ const j=await(await fetch('/api/task/'+id+'?annotator_id='+encodeURIComponent(vol()))).json();
+  if(j.task){ applyTask(j.task); setStatus(''); } }
 
 function buildGrid(){
   const g=$('grid'); g.innerHTML='';
   task.cameras.forEach(cam=>{
     ann[cam.camera]={};
-    const kf0=cam.keyframes[0];
-    task.roles.forEach(rl=> ann[cam.camera][rl.role]={frame:kf0,points:[],labels:[],iou:null,overlay:null});
+    task.roles.forEach(rl=> ann[cam.camera][rl.role]={cur:roleFrames(cam,rl.role)[0], byFrame:{}});
     const tile=document.createElement('div'); tile.className='tile'; tile.id='tile_'+cam.camera;
     const cv=document.createElement('canvas'); cv.width=cam.width; cv.height=cam.height;
     const nm=document.createElement('span'); nm.className='nm'; nm.textContent=cam.camera.replace('_rgb','');
     nm.onclick=()=>{ focusCam=cam.camera; renderBrowse(); markFocus(); };
-    const bar=document.createElement('div'); bar.className='tbar';
-    const lbl=document.createElement('span'); lbl.style.cssText='font-size:10px;color:#ccc;margin-right:auto'; lbl.textContent='标注帧:';
-    bar.appendChild(lbl);
-    cam.keyframes.forEach(kf=>{ const b=document.createElement('button'); b.className='kfb'; b.textContent='f'+kf;
-      b.dataset.cam=cam.camera; b.dataset.kf=kf; b.onclick=()=>setTileFrame(cam.camera,kf); bar.appendChild(b); });
+    const bar=document.createElement('div'); bar.className='tbar'; bar.id='bar_'+cam.camera;
     tile.appendChild(cv); tile.appendChild(nm); tile.appendChild(bar); g.appendChild(tile);
     canvases[cam.camera]=cv;
     cv.addEventListener('mousedown',e=>onClick(cam.camera,e));
     cv.addEventListener('contextmenu',e=>e.preventDefault());
-    renderTile(cam.camera);
   });
-  markFocus();
+  renderBars(); markFocus(); task.cameras.forEach(c=>renderTile(c.camera));
 }
 function markFocus(){ task.cameras.forEach(c=>{ const t=$('tile_'+c.camera); if(t)t.classList.toggle('focus',c.camera===focusCam); }); }
 
-function camOf(camera){ return task.cameras.find(c=>c.camera===camera); }
-function curFrame(camera){ return ann[camera][activeRole].frame; }
-
-function setTileFrame(camera,kf){
+function renderBars(){
+  task.cameras.forEach(cam=>{ const bar=$('bar_'+cam.camera); if(!bar)return;
+    const frames=roleFrames(cam,activeRole), a=ann[cam.camera][activeRole];
+    const lbl=activeRole===MULTI?'对象3帧:':'标注帧:';
+    bar.innerHTML='<span style="font-size:10px;color:#ccc;margin-right:auto">'+lbl+'</span>'+
+      frames.map(f=>{ const has=a.byFrame[f]&&a.byFrame[f].points.length;
+        return `<button class="kfb ${f===a.cur?'on':''} ${has?'has':''}" onclick="pickFrame('${cam.camera}',${f})">f${f}</button>`; }).join('');
+  });
+}
+function pickFrame(camera,f){
   const a=ann[camera][activeRole];
-  if(a.frame!==kf && a.points.length && !confirm('切换帧会清除该角色在此视角已打的点，确定?')) return;
-  if(a.frame!==kf){ a.points=[]; a.labels=[]; a.iou=null; a.overlay=null; }
-  a.frame=kf; renderTile(camera); renderRoles();
+  if(activeRole!==MULTI){   // single-frame role: switching frame replaces (clears other frames)
+    const other=Object.keys(a.byFrame).find(k=>+k!==f && a.byFrame[k].points.length);
+    if(other && !confirm('切换帧会清除该角色在此视角已打的点，确定?')) return;
+    a.byFrame={};
+  }
+  a.cur=f; if(!a.byFrame[f]) a.byFrame[f]={points:[],labels:[],iou:null,overlay:null};
+  renderBars(); renderTile(camera); renderRoles();
 }
 
-function onClick(camera,e){
-  e.preventDefault();
+function onClick(camera,e){ e.preventDefault();
   if(!present[activeRole]){ setStatus('请先在右侧勾选「存在」再打点'); return; }
   const cv=canvases[camera], r=cv.getBoundingClientRect();
   const x=Math.round((e.clientX-r.left)/r.width*cv.width), y=Math.round((e.clientY-r.top)/r.height*cv.height);
-  const a=ann[camera][activeRole]; a.points.push([x,y]); a.labels.push(e.button===2?0:1); a.overlay=null;
-  renderTile(camera); renderRoles();
+  const c=cell(camera,activeRole); c.points.push([x,y]); c.labels.push(e.button===2?0:1); c.overlay=null;
+  renderTile(camera); renderRoles(); renderBars();
 }
-
 function renderTile(camera){
-  const cv=canvases[camera], ctx=cv.getContext('2d'), cam=camOf(camera), f=curFrame(camera);
-  const img=getImg(cam.keyframe_urls[f],()=>renderTile(camera));
-  if(!img.complete) return;
+  const cv=canvases[camera], ctx=cv.getContext('2d'), cam=camOf(camera), f=ann[camera][activeRole].cur;
+  const img=getImg(cam.keyframe_urls[f],()=>renderTile(camera)); if(!img.complete) return;
   ctx.clearRect(0,0,cv.width,cv.height); ctx.drawImage(img,0,0,cv.width,cv.height);
-  // active role overlay (only if it belongs to the frame shown)
-  const ar=ann[camera][activeRole];
-  if(ar.overlay&&ar.overlay.complete&&ar.frame===f) ctx.drawImage(ar.overlay,0,0,cv.width,cv.height);
-  // points of any role whose chosen frame == shown frame
-  task.roles.forEach(rl=>{ const a=ann[camera][rl.role]; if(a.frame!==f) return; const col=COLORS[rl.role];
-    a.points.forEach((p,k)=>{ ctx.beginPath(); ctx.arc(p[0],p[1],8,0,2*Math.PI); ctx.lineWidth=3; ctx.strokeStyle='#fff';
-      if(a.labels[k]===1){ ctx.fillStyle=col; ctx.fill(); ctx.stroke(); }
-      else { ctx.strokeStyle=col; ctx.lineWidth=4; ctx.stroke(); } }); });
-  // highlight active keyframe button
-  document.querySelectorAll(`.kfb[data-cam="${camera}"]`).forEach(b=>b.classList.toggle('on',+b.dataset.kf===f));
+  const ac=ann[camera][activeRole].byFrame[f];
+  if(ac&&ac.overlay&&ac.overlay.complete) ctx.drawImage(ac.overlay,0,0,cv.width,cv.height);
+  task.roles.forEach(rl=>{ const d=ann[camera][rl.role].byFrame[f]; if(!d)return; const col=COLORS[rl.role];
+    d.points.forEach((p,k)=>{ ctx.beginPath(); ctx.arc(p[0],p[1],8,0,2*Math.PI); ctx.lineWidth=3; ctx.strokeStyle='#fff';
+      if(d.labels[k]===1){ ctx.fillStyle=col; ctx.fill(); ctx.stroke(); } else { ctx.strokeStyle=col; ctx.lineWidth=4; ctx.stroke(); } }); });
 }
-
 function renderRoles(){
   $('roles').innerHTML=task.roles.map(rl=>{
-    const nCam=task.cameras.filter(c=>ann[c.camera][rl.role].points.length).length;
-    const ious=task.cameras.map(c=>ann[c.camera][rl.role].iou).filter(v=>v!=null);
-    const avg=ious.length?(ious.reduce((a,b)=>a+b,0)/ious.length).toFixed(2):'';
+    const nf= rl.role===MULTI ? 3 : 1;
+    const doneCams=task.cameras.filter(c=>Object.values(ann[c.camera][rl.role].byFrame).some(d=>d.points.length)).length;
+    let extra='';
+    if(rl.role===MULTI){ // total annotated frames across cams / (3 * cams)
+      const fr=task.cameras.reduce((s,c)=>s+Object.values(ann[c.camera][rl.role].byFrame).filter(d=>d.points.length).length,0);
+      extra=` · ${fr}/${3*task.cameras.length} 帧`;
+    }
     return `<div class="role ${rl.role===activeRole?'active':''}" onclick="setActive('${rl.role}')">
-      <label onclick="event.stopPropagation()"><input type="checkbox" ${present[rl.role]?'checked':''}
-        onchange="togglePresent('${rl.role}')"></label>
-      <span class="sw" style="background:${COLORS[rl.role]}"></span><b>${rl.label}</b>
-      <span class="iou">${avg?'IoU '+avg:''}</span>
-      <div class="sub">${rl.name} · ${nCam}/${task.cameras.length} 视角已标</div></div>`;
+      <label onclick="event.stopPropagation()"><input type="checkbox" ${present[rl.role]?'checked':''} onchange="togglePresent('${rl.role}')"></label>
+      <span class="sw" style="background:${COLORS[rl.role]}"></span><b>${rl.label}</b>${rl.role===MULTI?' <span style="color:#fc8;font-size:11px">×3帧</span>':''}
+      <div class="sub">${rl.name} · ${doneCams}/${task.cameras.length} 视角${extra}</div></div>`;
   }).join('');
 }
-function setActive(role){ if(!present[role])present[role]=true; activeRole=role; renderRoles(); task.cameras.forEach(c=>renderTile(c.camera)); }
-function togglePresent(role){ present[role]=!present[role]; if(present[role])activeRole=role; renderRoles(); task.cameras.forEach(c=>renderTile(c.camera)); }
+function setActive(role){ if(!present[role])present[role]=true; activeRole=role; renderRoles(); renderBars(); task.cameras.forEach(c=>renderTile(c.camera)); }
+function togglePresent(role){ present[role]=!present[role]; if(present[role])activeRole=role; renderRoles(); renderBars(); task.cameras.forEach(c=>renderTile(c.camera)); }
 
-function undo(){ for(const c of [...task.cameras].reverse()){ const a=ann[c.camera][activeRole];
-  if(a.points.length){ a.points.pop(); a.labels.pop(); a.overlay=null; renderTile(c.camera); renderRoles(); return; } } }
-function clearRoleAll(){ task.cameras.forEach(c=>{ const a=ann[c.camera][activeRole]; a.points=[];a.labels=[];a.iou=null;a.overlay=null; renderTile(c.camera); }); renderRoles(); }
+function undo(){ for(const c of [...task.cameras].reverse()){ const d=ann[c.camera][activeRole].byFrame[ann[c.camera][activeRole].cur];
+  if(d&&d.points.length){ d.points.pop(); d.labels.pop(); d.overlay=null; renderTile(c.camera); renderRoles(); renderBars(); return; } } }
+function clearRoleAll(){ task.cameras.forEach(c=>{ ann[c.camera][activeRole].byFrame={}; renderTile(c.camera); }); renderRoles(); renderBars(); }
 
-async function previewRole(){
-  const todo=task.cameras.filter(c=>ann[c.camera][activeRole].points.length);
-  if(!todo.length){ setStatus('当前角色还没在任何视角打点'); return; }
+async function previewRole(){   // preview active role's CURRENT frame across views
+  const todo=task.cameras.filter(c=>{ const d=ann[c.camera][activeRole].byFrame[ann[c.camera][activeRole].cur]; return d&&d.points.length; });
+  if(!todo.length){ setStatus('当前角色·当前帧还没打点'); return; }
   setStatus(`SAM2 预览 ${activeRole} (${todo.length}视角)…`);
-  await Promise.all(todo.map(async c=>{ const a=ann[c.camera][activeRole];
+  await Promise.all(todo.map(async c=>{ const a=ann[c.camera][activeRole], d=a.byFrame[a.cur];
     const r=await fetch('/api/preview',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({task_id:task.id,camera:c.camera,frame_index:a.frame,role:activeRole,points:a.points,labels:a.labels})});
-    if(!r.ok) return; const j=await r.json(); a.iou=j.iou;
-    const ov=new Image(); ov.onload=()=>renderTile(c.camera); ov.src=j.overlay; a.overlay=ov; }));
+      body:JSON.stringify({task_id:task.id,camera:c.camera,frame_index:a.cur,role:activeRole,points:d.points,labels:d.labels})});
+    if(!r.ok) return; const j=await r.json(); d.iou=j.iou;
+    const ov=new Image(); ov.onload=()=>renderTile(c.camera); ov.src=j.overlay; d.overlay=ov; }));
   renderRoles(); setStatus('预览完成');
 }
 
-function renderBrowse(){
-  $('bcam').textContent=focusCam.replace('_rgb',''); markFocus();
+function renderBrowse(){ $('bcam').textContent=focusCam.replace('_rgb',''); markFocus();
   const cam=camOf(focusCam);
   const frames=[...cam.keyframes.map(f=>({f,kf:true,url:cam.keyframe_urls[f]})),
-                ...Object.keys(cam.thumb_urls||{}).map(f=>({f:+f,kf:false,url:cam.thumb_urls[f]}))]
-                .sort((a,b)=>a.f-b.f);
-  $('strip').innerHTML=frames.map(fr=>`<div class="fr ${fr.kf?'kf':''}" onclick="showBig('${fr.url}')">
-     <img src="${fr.url}"><span class="t">f${fr.f}${fr.kf?'*':''}</span></div>`).join('');
+                ...Object.keys(cam.thumb_urls||{}).map(f=>({f:+f,kf:false,url:cam.thumb_urls[f]}))].sort((a,b)=>a.f-b.f);
+  $('strip').innerHTML=frames.map(fr=>`<div class="fr ${fr.kf?'kf':''}" onclick="showBig('${fr.url}')"><img src="${fr.url}"><span class="t">f${fr.f}${fr.kf?'*':''}</span></div>`).join('');
   if(frames.length) showBig(frames[Math.floor(frames.length/2)].url);
 }
 function showBig(url){ $('bigref').src=url; }
@@ -226,24 +214,23 @@ function showBig(url){ $('bigref').src=url; }
 async function submit(){
   const cameras={}; let nObj=0; const missing=[];
   task.cameras.forEach(c=>{ const objs=[];
-    task.roles.forEach(rl=>{ if(!present[rl.role])return; const a=ann[c.camera][rl.role];
-      if(a.points.length){ objs.push({role:rl.role,name:rl.name,frame_index:a.frame,points:a.points,labels:a.labels,preview_iou:a.iou}); nObj++; } });
+    task.roles.forEach(rl=>{ if(!present[rl.role])return;
+      Object.entries(ann[c.camera][rl.role].byFrame).forEach(([f,d])=>{ if(d.points.length){
+        objs.push({role:rl.role,name:rl.name,frame_index:+f,points:d.points,labels:d.labels,preview_iou:d.iou}); nObj++; } }); });
     if(objs.length) cameras[c.camera]=objs; });
-  task.roles.forEach(rl=>{ if(present[rl.role]&&!task.cameras.some(c=>ann[c.camera][rl.role].points.length)) missing.push(rl.label); });
+  // warn if a present role has no points anywhere (object: warn if not all 3 frames somewhere)
+  task.roles.forEach(rl=>{ if(present[rl.role] && !task.cameras.some(c=>Object.values(ann[c.camera][rl.role].byFrame).some(d=>d.points.length))) missing.push(rl.label); });
   if(missing.length){ setStatus('这些角色已勾选但没打点: '+missing.join(', ')); return; }
   if(!nObj){ setStatus('没有任何标注可提交'); return; }
   const j=await(await fetch('/api/submit',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({task_id:task.id,annotator_id:$('vol').value||'anon',cameras})})).json();
+    body:JSON.stringify({task_id:task.id,annotator_id:vol(),cameras})})).json();
   if(j.ok){ setStatus(`已提交 ${j.cameras_saved.length} 视角 ✓`); setTimeout(loadNext,500); } else setStatus('提交失败: '+JSON.stringify(j));
 }
-async function flagBad(){
-  if(!task) return;
-  const reason=prompt('标记为坏视频的原因?(可留空)\n例: 看不清工具 / 视频损坏花屏 / 物体全程被遮挡 / 角色判断不了','');
-  if(reason===null) return;   // cancelled
+async function flagBad(){ if(!task) return;
+  const reason=prompt('标记为坏视频的原因?(可留空)\n例: 看不清工具 / 视频损坏 / 物体全程被遮挡',''); if(reason===null) return;
   const j=await(await fetch('/api/flag_bad',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({task_id:task.id,annotator_id:$('vol').value||'anon',reason})})).json();
-  if(j.ok){ setStatus('已标记为坏视频 ⚠ ('+j.exp+')'); setTimeout(loadNext,500); } else setStatus('标记失败');
-}
+    body:JSON.stringify({task_id:task.id,annotator_id:vol(),reason})})).json();
+  if(j.ok){ setStatus('已标记为坏视频 ⚠ ('+j.exp+')'); setTimeout(loadNext,500); } else setStatus('标记失败'); }
 
 loadNext();
 </script>

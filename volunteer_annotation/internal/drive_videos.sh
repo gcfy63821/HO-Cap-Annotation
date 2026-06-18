@@ -15,7 +15,7 @@
 #
 # Env knobs:
 #     DATA_ROOT (default /viscam/projects/robotool/data)
-#     BUNDLE    (default /viscam/projects/robotool/_va_bundle)
+#     BUNDLE    (default /viscam/projects/robotool/_va_bundle_v2)
 #     POLL      (default 120s between squeue checks)
 #     SHARDS    (forwarded to the frontend; default = frontend's default)
 set -u
@@ -23,7 +23,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 FRONTEND="$HERE/sbatch_precompute_array.sh"
 DATA_ROOT="${DATA_ROOT:-/viscam/projects/robotool/data}"
-BUNDLE="${BUNDLE:-/viscam/projects/robotool/_va_bundle}"
+BUNDLE="${BUNDLE:-/viscam/projects/robotool/_va_bundle_v2}"
 POLL="${POLL:-120}"
 EXTRA=()
 [[ -n "${SHARDS:-}" ]] && EXTRA+=(--shards "$SHARDS")

@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
 #SBATCH --time=48:00:00
-#SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam4
+#SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam4,viscam14,viscam15,viscam-hgx-1,viscam-hgx-2
 #SBATCH --output=/viscam/u/chenrq/crq_ws/slurm_outs/va_drive_%j.out
 #SBATCH --error=/viscam/u/chenrq/crq_ws/slurm_outs/va_drive_%j.err
 #

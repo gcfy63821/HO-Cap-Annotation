@@ -6,7 +6,7 @@
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=4
 #SBATCH --time=12:00:00
-#SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam4
+#SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam4,viscam14,viscam15,viscam-hgx-1,viscam-hgx-2
 #SBATCH --output=/viscam/u/chenrq/crq_ws/slurm_outs/precompute_%A_%a.out
 #SBATCH --error=/viscam/u/chenrq/crq_ws/slurm_outs/precompute_%A_%a.err
 #
@@ -19,17 +19,16 @@
 # THREE modes (auto-detected):
 #
 # (A) FRONTEND  — run with `bash` (NOT sbatch):
-#     bash sbatch_precompute_array.sh \
-#         --data_root /viscam/projects/robotool/data \
-#         --bundle    /viscam/projects/robotool/_va_bundle \
-#         [--videos_root /abs/p1 /abs/p2 ...]  [--shards 4]  [--max_concurrent 16]
-#         [--refmask] [--keyframe_fracs 0,0.1,0.2] [--thumb_fracs 0.4,0.6] [--force]
-#     --force: recompute everything, ignoring existing _manifest.json (no resume skip).
-#         [--manifest_out /abs/path.txt] [--dry_run]
-#     Scans for exps (dirs with cam0_rgb.mp4 or data00000000.h5), writes a
-#     one-exp-dir-per-line manifest, then submits
-#       sbatch --array=0-(N-1)%MAX <self> --manifest <m> --bundle <b> ...
-#     and a dependent merge job that runs after the array.
+#     bash sbatch_precompute_array.sh                       # ALL videos_* folders
+#     bash sbatch_precompute_array.sh --videos_root A B C   # just these folders
+#     [--shards 4] [--bundle ...] [--refmask] [--keyframe_fracs ...] [--force] [--dry_run]
+#   Submits ONE sharded array PER videos_* folder (so multiple folders run in
+#   PARALLEL). With no --videos_root it auto-discovers every videos_* under
+#   --data_root and launches one array each. Each folder uses <=--shards workers
+#   (default 4); the cluster's MaxJobs limit caps how many folders run at once
+#   (e.g. 16 slots = ~4 folders x 4 shards). RESUMES automatically (re-run same
+#   cmd; done exps/folders skipped). One dependent merge job rebuilds
+#   <bundle>/manifest.json after all arrays finish.
 #
 # (B) ARRAY CHILD  (auto via $SLURM_ARRAY_TASK_ID): runs precompute_embeddings.py
 #     --exp_list <manifest> --shard <id>/<SHARDS> --no_merge --skip_existing,
@@ -62,9 +61,9 @@ MANIFEST=""
 MANIFEST_OUT=""
 DATA_ROOT="/viscam/projects/robotool/data"          # default; override with --data_root
 VIDEOS_ROOTS=()
-BUNDLE="/viscam/projects/robotool/_va_bundle"        # default; override with --bundle
-MAX_CONCURRENT=16
-SHARDS=4                                             # # array elements (parallel workers); override with --shards
+BUNDLE="/viscam/projects/robotool/_va_bundle_v2"        # default; override with --bundle
+MAX_CONCURRENT=16                                    # cluster cap on concurrent array tasks
+SHARDS=""                                            # # parallel workers; default = MAX_CONCURRENT (use all slots)
 REFMASK=0
 KEYFRAME_FRACS="0,0.1,0.2"
 THUMB_FRACS="0.4,0.6"
@@ -72,6 +71,7 @@ DO_MERGE=0
 DRY_RUN=0
 FORCE=0
 ADD=0
+NO_MERGE_DEP=0   # skip submitting the dependent merge job (orchestrator merges once at the end)
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -88,6 +88,7 @@ while [[ "$#" -gt 0 ]]; do
         --add_frames)     KEYFRAME_FRACS="$2"; THUMB_FRACS=""; ADD=1; shift 2;;
         --merge)          DO_MERGE=1; shift;;
         --force)          FORCE=1; shift;;
+        --no_merge_dep)   NO_MERGE_DEP=1; shift;;
         --dry_run)        DRY_RUN=1; shift;;
         -h|--help)        sed -n '2,55p' "$0"; exit 0;;
         *) echo "Unknown option $1"; exit 1;;
@@ -141,118 +142,92 @@ if ! mkdir -p "$BUNDLE" 2>/dev/null; then
     exit 1
 fi
 
-if [[ -z "$MANIFEST" || ! -f "$MANIFEST" ]]; then
-    if [[ -z "$DATA_ROOT" && "${#VIDEOS_ROOTS[@]}" -eq 0 ]]; then
-        echo "Error: provide --data_root or --videos_root ... or --manifest <txt>"; exit 1
-    fi
-    if [[ -z "$MANIFEST_OUT" ]]; then
-        # MUST be on shared storage (NOT /tmp, which is node-local) so array
-        # children on compute nodes can read it. Prefer writing it INTO the
-        # videos_root folder it describes (co-located with the data); fall back
-        # to the bundle dir for multi-root / --data_root scans or if unwritable.
-        TS="$(date +%Y%m%d_%H%M%S)"
-        if [[ "${#VIDEOS_ROOTS[@]}" -eq 1 && -w "${VIDEOS_ROOTS[0]}" ]]; then
-            MANIFEST_OUT="${VIDEOS_ROOTS[0]}/_va_exp_list_${TS}.txt"
-        else
-            MANIFEST_OUT="$BUNDLE/_exp_list_${TS}.txt"
-        fi
-    fi
-    echo "[scan] writing exp manifest -> $MANIFEST_OUT  (skipping done exps for resume)"
-    # --force/--add_frames: don't drop exps in the scan (precompute then skips
-    # per-frame, so add-frames revisits already-precomputed exps to add new ones).
-    SCAN_BUNDLE=$([[ "$FORCE" == "1" || "$ADD" == "1" ]] && echo "" || echo "$BUNDLE")
-    DATA_ROOT_ARG="$DATA_ROOT" MANIFEST_OUT="$MANIFEST_OUT" BUNDLE_ARG="$SCAN_BUNDLE" \
-    python3 - "${VIDEOS_ROOTS[@]}" <<'PY'
-import os, sys
-from pathlib import Path
-data_root = (os.environ.get("DATA_ROOT_ARG") or "").strip()
-bundle = (os.environ.get("BUNDLE_ARG") or "").strip()
-out = Path(os.environ["MANIFEST_OUT"])
-roots = [Path(p) for p in sys.argv[1:]]
-# Explicit --videos_root scopes the run; only fall back to scanning the whole
-# data_root when NO --videos_root was given (avoids the default data_root
-# silently pulling in every videos_* dir).
-if data_root and not roots:
-    dr = Path(data_root).expanduser()
-    if not dr.is_dir():
-        print(f"[scan][ERR] --data_root not found: {dr}"); sys.exit(2)
-    for p in sorted(dr.iterdir()):
-        if p.is_dir() and p.name.startswith("videos_") and not p.name.endswith("_annotated"):
-            roots.append(p)
-
-# Bounded-depth scan (NOT rglob — that walks the whole NFS subtree incl. depth
-# videos / calibration_debug and is very slow). Exps live at videos_root/<exp>
-# or videos_root/<task>/<exp>; just stat the marker file in candidate dirs.
-def is_exp(d):
-    return (d / "cam0_rgb.mp4").exists() or (d / "data00000000.h5").exists()
-
-def subdirs(d):
-    try:
-        return sorted(x for x in d.iterdir() if x.is_dir())
-    except OSError:
-        return []
-
-exps, seen = [], set()
-for r in roots:
-    for c in subdirs(r):                 # videos_root/<exp>
-        cands = [c] if is_exp(c) else subdirs(c)   # else try videos_root/<task>/<exp>
-        for d in cands:
-            rd = d.resolve()
-            if rd not in seen and is_exp(d):
-                seen.add(rd); exps.append(rd)
-exps.sort()
-total = len(exps)
-def frag_path(b, d):   # mirrors precompute task_exp_from_path nesting
-    rel = None
-    for anc in d.parents:
-        if anc.name.startswith("videos_"):
-            rel = d.relative_to(anc.parent); break
-    if rel is None:
-        rel = Path(d.parent.name) / d.name
-    return b / rel / "_manifest.json"
-if bundle:  # resume: drop exps already done (per-exp _manifest.json present)
-    b = Path(bundle)
-    exps = [d for d in exps if not frag_path(b, d).is_file()]
-out.write_text("\n".join(str(e) for e in exps) + ("\n" if exps else ""))
-print(f"[scan] {total} exp(s) found, {total - len(exps)} already done, {len(exps)} pending")
-PY
-    MANIFEST="$MANIFEST_OUT"
-fi
-
-N=$(grep -cve '^\s*$' "$MANIFEST")
-[[ "$N" -ge 1 ]] || { echo "manifest empty: $MANIFEST"; exit 0; }
-
-# Array elements = SHARDS workers (NOT one per exp): each loads SAM2 once and
-# processes ~N/SHARDS exps, so the model-load + job overhead is amortized.
-NSHARDS=${SHARDS:-4}
-(( NSHARDS > N )) && NSHARDS=$N        # no point having more shards than exps
-
-# One consolidated log for the whole run (all array children + the merge job
-# append stdout+stderr here) instead of per-exp .out/.err. Each child prints an
-# "ARRAY CHILD ... exp_dir: ..." banner so you can still grep a specific exp.
 RUN_TS="$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$SLURM_OUTS"
-LOG="$SLURM_OUTS/precompute_${RUN_TS}.log"
-LOG_ARGS=(--output="$LOG" --error="$LOG" --open-mode=append)
+SCAN_BUNDLE=$([[ "$FORCE" == "1" || "$ADD" == "1" ]] && echo "" || echo "$BUNDLE")
+ARRAY_JIDS=()
 
-SUBMIT_ARGS=(--array=0-$((NSHARDS-1))%${MAX_CONCURRENT} "${LOG_ARGS[@]}"
-             "$0" --manifest "$MANIFEST" --bundle "$BUNDLE" --shards "$NSHARDS"
+# scan ONE videos_root's exps -> manifest file (drops done exps for resume,
+# unless --force/--add_frames). Bounded-depth (no rglob; NFS-fast).
+scan_one() {   # $1=videos_root  $2=out_manifest  $3=label
+    MANIFEST_OUT="$2" BUNDLE_ARG="$SCAN_BUNDLE" LABEL="$3" python3 - "$1" <<'PY'
+import os, sys
+from pathlib import Path
+out = Path(os.environ["MANIFEST_OUT"]); bundle=(os.environ.get("BUNDLE_ARG") or "").strip(); lbl=os.environ.get("LABEL","")
+root = Path(sys.argv[1])
+def is_exp(d): return (d/"cam0_rgb.mp4").exists() or (d/"data00000000.h5").exists()
+def subdirs(d):
+    try: return sorted(x for x in d.iterdir() if x.is_dir())
+    except OSError: return []
+exps, seen = [], set()
+for c in subdirs(root):                       # videos_root/<exp> or videos_root/<task>/<exp>
+    for d in ([c] if is_exp(c) else subdirs(c)):
+        rd = d.resolve()
+        if rd not in seen and is_exp(d): seen.add(rd); exps.append(rd)
+exps.sort(); total = len(exps)
+def frag(b, d):   # mirrors precompute task_exp_from_path nesting
+    rel = None
+    for anc in d.parents:
+        if anc.name.startswith("videos_"): rel = d.relative_to(anc.parent); break
+    if rel is None: rel = Path(d.parent.name)/d.name
+    return b/rel/"_manifest.json"
+if bundle:
+    b = Path(bundle); exps = [d for d in exps if not frag(b, d).is_file()]
+out.write_text("\n".join(str(e) for e in exps) + ("\n" if exps else ""))
+print(f"[scan {lbl}] {total} found, {total-len(exps)} done, {len(exps)} pending")
+PY
+}
+
+# submit ONE folder's sharded array (each folder caps at its own shard count;
+# the cluster's MaxJobs limit caps how many folders run AT ONCE).
+submit_one() {   # $1=manifest  $2=label
+    local M="$1" LBL="$2" N NS LOG JID
+    N=$(grep -cve '^[[:space:]]*$' "$M" 2>/dev/null || echo 0)
+    [[ "$N" -ge 1 ]] || { echo "[$LBL] 0 pending — skip"; return; }
+    NS=${SHARDS:-4}; (( NS > N )) && NS=$N
+    LOG="$SLURM_OUTS/precompute_${LBL}_${RUN_TS}.log"
+    local A=(--array=0-$((NS-1))%${NS} --output="$LOG" --error="$LOG" --open-mode=append
+             "$0" --manifest "$M" --bundle "$BUNDLE" --shards "$NS"
              --keyframe_fracs "$KEYFRAME_FRACS" --thumb_fracs "$THUMB_FRACS")
-[[ "$REFMASK" == "1" ]] && SUBMIT_ARGS+=(--refmask)
-[[ "$FORCE" == "1" ]] && SUBMIT_ARGS+=(--force)
+    [[ "$REFMASK" == "1" ]] && A+=(--refmask)
+    [[ "$FORCE" == "1" ]] && A+=(--force)
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "[$LBL] would submit: $N exps over $NS shards  (log $LOG)"; return
+    fi
+    JID=$(sbatch --parsable "${A[@]}")
+    echo "[$LBL] $N exps over $NS shards -> array job: $JID  (log $LOG)"
+    ARRAY_JIDS+=("$JID")
+}
 
-if [[ "$DRY_RUN" == "1" ]]; then
-    echo "would submit: sbatch ${SUBMIT_ARGS[*]}"
-    echo "  -> $N exp(s) over $NSHARDS shard(s) (~$(( (N + NSHARDS - 1) / NSHARDS )) exp/shard, model loaded once per shard)"
-    echo "consolidated log: $LOG"
-    exit 0
+if [[ -n "$MANIFEST" && -f "$MANIFEST" ]]; then
+    submit_one "$MANIFEST" "manual"                 # advanced: pre-built exp list
+else
+    # Resolve folder list: explicit --videos_root, else ALL videos_* under data_root.
+    ROOTS=()
+    if [[ "${#VIDEOS_ROOTS[@]}" -gt 0 ]]; then
+        ROOTS=("${VIDEOS_ROOTS[@]}")
+    elif [[ -n "$DATA_ROOT" && -d "$DATA_ROOT" ]]; then
+        while IFS= read -r d; do ROOTS+=("${d%/}"); done \
+            < <(ls -d "$DATA_ROOT"/videos_*/ 2>/dev/null | grep -v _annotated)
+    else
+        echo "Error: provide --data_root or --videos_root ... or --manifest <txt>"; exit 1
+    fi
+    [[ "${#ROOTS[@]}" -ge 1 ]] || { echo "no videos_* folders under $DATA_ROOT"; exit 0; }
+    echo "[frontend] $(date) ${#ROOTS[@]} folder(s); ONE array per folder (<=${SHARDS:-4} shards each; cluster runs up to its MaxJobs concurrently)"
+    for VR in "${ROOTS[@]}"; do
+        [[ -d "$VR" ]] || { echo "[$(basename "$VR")] not a dir — skip"; continue; }
+        name=$(basename "$VR")
+        if [[ -w "$VR" ]]; then M="$VR/_va_exp_list_${RUN_TS}.txt"; else M="$BUNDLE/_exp_list_${name}_${RUN_TS}.txt"; fi
+        scan_one "$VR" "$M" "$name"
+        submit_one "$M" "$name"
+    done
 fi
 
-echo "submitting $NSHARDS shard(s) for $N exp(s) (~$(( (N + NSHARDS - 1) / NSHARDS )) exp/shard, concurrency=${MAX_CONCURRENT})"
-ARRAY_JID=$(sbatch --parsable "${SUBMIT_ARGS[@]}")
-echo "  array job: $ARRAY_JID"
-MERGE_JID=$(sbatch --parsable --dependency=afterany:"$ARRAY_JID" "${LOG_ARGS[@]}" \
-            --job-name precompute_merge "$0" --merge --bundle "$BUNDLE")
-echo "  merge job: $MERGE_JID (runs after array)"
-echo "log:    $LOG   (single file, all exps + merge; tail -f to watch)"
-echo "output: $BUNDLE/manifest.json   (ready once merge finishes)"
+# ONE merge after ALL arrays finish (rebuilds <bundle>/manifest.json from fragments).
+if [[ "$DRY_RUN" != "1" && "$NO_MERGE_DEP" != "1" && "${#ARRAY_JIDS[@]}" -gt 0 ]]; then
+    DEP="afterany:$(IFS=:; echo "${ARRAY_JIDS[*]}")"
+    MLOG="$SLURM_OUTS/precompute_merge_${RUN_TS}.log"
+    MJID=$(sbatch --parsable --dependency="$DEP" --output="$MLOG" --error="$MLOG" \
+           --job-name precompute_merge "$0" --merge --bundle "$BUNDLE")
+    echo "[frontend] merge job: $MJID  (after ${#ARRAY_JIDS[@]} array(s)) -> $BUNDLE/manifest.json"
+fi
