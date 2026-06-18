@@ -182,47 +182,67 @@ def process_exp(predictor, exp_dir, bundle_root, mesh_map, kf_fracs, th_fracs,
     task, exp = task_exp_from_path(exp_dir)
     out_dir = bundle_root / task / exp
     frag_path = out_dir / FRAGMENT
-    if skip_existing and not force and frag_path.is_file():
-        print(f"  [skip] {task}/{exp} (done: {FRAGMENT} present)")
-        return "skipped"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    primary = derive_primary_name(exp, mesh_map)
+    existing = json.loads(frag_path.read_text()) if frag_path.is_file() else None
+    existing_cams = {c["camera"]: c for c in existing["cameras"]} if existing else {}
+
     n_frames, n_cams, kind = video_info(exp_dir)
     kf_idxs = fracs_to_idx(kf_fracs, n_frames)
     th_idxs = fracs_to_idx(th_fracs, n_frames)
+    kf_file = lambda stem, i: Path(f"{stem}.kf{i}.embed.npz")
+    th_file = lambda stem, i: Path(f"{stem}.th{i}.jpg")
+
+    # ADDITIVE + resumable: skip the exp only if every REQUESTED frame is already
+    # on disk (so re-runs and the add-frames pass both no-op when complete).
+    if skip_existing and not force and existing and all(
+            kf_file(out_dir / cam_name(c), i).is_file() for c in range(n_cams) for i in kf_idxs) and all(
+            th_file(out_dir / cam_name(c), i).is_file() for c in range(n_cams) for i in th_idxs):
+        print(f"  [skip] {task}/{exp} (requested frames already present)")
+        return "skipped"
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    primary = derive_primary_name(exp, mesh_map)
     print(f"  {task}/{exp} [{kind}]: {n_frames}f x {n_cams}cam | primary={primary} "
-          f"| keyframes={kf_idxs} thumbs={th_idxs}")
+          f"| keyframes+={kf_idxs} thumbs+={th_idxs}{' (additive)' if existing else ''}")
     entries = []
 
     for c in range(n_cams):
         t0 = time.time()
-        frames = read_frames(exp_dir, kind, c, set(kf_idxs) | set(th_idxs))
         stem = out_dir / cam_name(c)
-        H = W = None
-        for idx in kf_idxs:
-            img = frames[idx]; H, W = img.shape[:2]
-            with torch.inference_mode(), torch.autocast(
-                    device.type, dtype=torch.bfloat16, enabled=(device.type == "cuda")):
-                predictor.set_image(img)
-                dump_embedding(predictor, f"{stem}.kf{idx}.embed.npz")
-                if want_refmask:
-                    dump_reference_masks(predictor, H, W, f"{stem}.kf{idx}.refmask.npz")
-            cv2.imwrite(f"{stem}.kf{idx}.jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
-                        [cv2.IMWRITE_JPEG_QUALITY, 95])
-        for idx in th_idxs:
-            img = frames[idx]
-            th = cv2.resize(img, (THUMB_W, int(THUMB_W * img.shape[0] / img.shape[1])))
-            cv2.imwrite(f"{stem}.th{idx}.jpg", cv2.cvtColor(th, cv2.COLOR_RGB2BGR),
-                        [cv2.IMWRITE_JPEG_QUALITY, 82])
+        ex = existing_cams.get(cam_name(c), {})
+        ex_kf, ex_th = set(ex.get("keyframes", [])), set(ex.get("thumbs", []))
+        do_kf = [i for i in kf_idxs if force or not kf_file(stem, i).is_file()]
+        do_th = [i for i in th_idxs if force or not th_file(stem, i).is_file()]
+        H, W, sha1 = ex.get("height"), ex.get("width"), ex.get("image_sha1")
+        if do_kf or do_th:
+            frames = read_frames(exp_dir, kind, c, set(do_kf) | set(do_th))
+            for idx in do_kf:
+                img = frames[idx]; H, W = img.shape[:2]
+                with torch.inference_mode(), torch.autocast(
+                        device.type, dtype=torch.bfloat16, enabled=(device.type == "cuda")):
+                    predictor.set_image(img)
+                    dump_embedding(predictor, f"{stem}.kf{idx}.embed.npz")
+                    if want_refmask:
+                        dump_reference_masks(predictor, H, W, f"{stem}.kf{idx}.refmask.npz")
+                cv2.imwrite(f"{stem}.kf{idx}.jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
+                            [cv2.IMWRITE_JPEG_QUALITY, 95])
+            for idx in do_th:
+                img = frames[idx]
+                th = cv2.resize(img, (THUMB_W, int(THUMB_W * img.shape[0] / img.shape[1])))
+                cv2.imwrite(f"{stem}.th{idx}.jpg", cv2.cvtColor(th, cv2.COLOR_RGB2BGR),
+                            [cv2.IMWRITE_JPEG_QUALITY, 82])
+            if sha1 is None:
+                f0 = frames[do_kf[0]] if do_kf else frames[do_th[0]]
+                H, W = f0.shape[:2]
+                sha1 = hashlib.sha1(np.ascontiguousarray(f0).tobytes()).hexdigest()
         entries.append({
             "task": task, "exp": exp, "camera": cam_name(c), "cam_index": c,
             "width": int(W), "height": int(H), "n_frames": int(n_frames),
-            "primary_name": primary, "keyframes": kf_idxs, "thumbs": th_idxs,
-            "image_sha1": hashlib.sha1(frames[kf_idxs[0]].tobytes()).hexdigest(),
+            "primary_name": primary,
+            "keyframes": sorted(ex_kf | set(kf_idxs)), "thumbs": sorted(ex_th | set(th_idxs)),
+            "image_sha1": sha1,
         })
-        print(f"    {cam_name(c)}: {len(kf_idxs)} kf + {len(th_idxs)} thumb in {time.time()-t0:.2f}s")
-    # per-exp manifest fragment = this exp's cameras + a "done" marker (written
-    # LAST so an interrupted exp has no fragment and is re-done on resume).
+        print(f"    {cam_name(c)}: +{len(do_kf)} kf +{len(do_th)} thumb in {time.time()-t0:.2f}s")
+    # per-exp fragment = union of all keyframes/thumbs (written LAST = done marker).
     frag_path.write_text(json.dumps(
         {"sam2_model": sam2_model, "embed_dtype": "float16", "cameras": entries}, indent=2))
     return entries

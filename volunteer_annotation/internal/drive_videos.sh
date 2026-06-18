@@ -30,12 +30,16 @@ EXTRA=()
 
 command -v squeue >/dev/null 2>&1 || { echo "[drive] ERROR: squeue not on PATH — run this on the cluster (interactive env)"; exit 1; }
 
-# Self-log so you don't need tmux or output redirection: just `nohup bash drive_videos.sh &`
-SLURM_OUTS="${SLURM_OUTS:-/viscam/u/chenrq/crq_ws/slurm_outs}"
-DRIVE_LOG="${DRIVE_LOG:-$SLURM_OUTS/drive_$(date +%Y%m%d_%H%M%S).log}"
-mkdir -p "$(dirname "$DRIVE_LOG")"
-echo "[drive] running in background; full log -> $DRIVE_LOG"
-exec >"$DRIVE_LOG" 2>&1
+# When NOT under SLURM (i.e. run with nohup/bash), self-log to a file so you
+# don't need tmux/redirection. Under sbatch, output already goes to the job's
+# --output file, so skip self-logging.
+if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+    SLURM_OUTS="${SLURM_OUTS:-/viscam/u/chenrq/crq_ws/slurm_outs}"
+    DRIVE_LOG="${DRIVE_LOG:-$SLURM_OUTS/drive_$(date +%Y%m%d_%H%M%S).log}"
+    mkdir -p "$(dirname "$DRIVE_LOG")"
+    echo "[drive] running in background; full log -> $DRIVE_LOG"
+    exec >"$DRIVE_LOG" 2>&1
+fi
 
 # Resolve folder list: args (names or abs paths) or all videos_* under DATA_ROOT.
 ROOTS=()

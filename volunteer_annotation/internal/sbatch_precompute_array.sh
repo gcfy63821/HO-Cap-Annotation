@@ -71,6 +71,7 @@ THUMB_FRACS="0.4,0.6"
 DO_MERGE=0
 DRY_RUN=0
 FORCE=0
+ADD=0
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -84,6 +85,7 @@ while [[ "$#" -gt 0 ]]; do
         --refmask)        REFMASK=1; shift;;
         --keyframe_fracs) KEYFRAME_FRACS="$2"; shift 2;;
         --thumb_fracs)    THUMB_FRACS="$2"; shift 2;;
+        --add_frames)     KEYFRAME_FRACS="$2"; THUMB_FRACS=""; ADD=1; shift 2;;
         --merge)          DO_MERGE=1; shift;;
         --force)          FORCE=1; shift;;
         --dry_run)        DRY_RUN=1; shift;;
@@ -156,7 +158,9 @@ if [[ -z "$MANIFEST" || ! -f "$MANIFEST" ]]; then
         fi
     fi
     echo "[scan] writing exp manifest -> $MANIFEST_OUT  (skipping done exps for resume)"
-    SCAN_BUNDLE=$([[ "$FORCE" == "1" ]] && echo "" || echo "$BUNDLE")   # --force: don't skip done exps
+    # --force/--add_frames: don't drop exps in the scan (precompute then skips
+    # per-frame, so add-frames revisits already-precomputed exps to add new ones).
+    SCAN_BUNDLE=$([[ "$FORCE" == "1" || "$ADD" == "1" ]] && echo "" || echo "$BUNDLE")
     DATA_ROOT_ARG="$DATA_ROOT" MANIFEST_OUT="$MANIFEST_OUT" BUNDLE_ARG="$SCAN_BUNDLE" \
     python3 - "${VIDEOS_ROOTS[@]}" <<'PY'
 import os, sys
