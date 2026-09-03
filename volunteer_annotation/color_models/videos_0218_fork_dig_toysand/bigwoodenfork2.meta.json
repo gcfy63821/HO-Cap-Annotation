@@ -1,0 +1,34 @@
+{
+  "template_exp": "20260218_bigwoodenfork_dig_toy_from_large_sand_in_largeshallowcontainer_13",
+  "keyword": "bigwoodenfork2",
+  "roles": {
+    "primary_tool": {
+      "npz": "bigwoodenfork2.primary_tool.npz",
+      "n_fg_px": 223616,
+      "n_bg_px": 126897,
+      "n_samples": 23,
+      "mean_cx": 0.489183506600592,
+      "mean_cy": 0.5189754656741176,
+      "std_cx": 0.20469936204671543,
+      "std_cy": 0.24039860218277245,
+      "shape": {
+        "solidity": {
+          "mean": 0.8638292551040649,
+          "std": 0.28893178701400757
+        },
+        "compactness": {
+          "mean": 3.6758339405059814,
+          "std": 1.7950382232666016
+        },
+        "aspect": {
+          "mean": 2.5451977252960205,
+          "std": 1.2099628448486328
+        },
+        "extent": {
+          "mean": 0.2924065887928009,
+          "std": 0.11978822201490402
+        }
+      }
+    }
+  }
+}

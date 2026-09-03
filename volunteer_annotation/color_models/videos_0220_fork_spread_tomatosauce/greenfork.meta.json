@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260210_greenfork_flip_naan_in_blackpan_1",
+  "keyword": "greenfork",
+  "roles": {
+    "primary_tool": {
+      "npz": "greenfork.primary_tool.npz",
+      "n_fg_px": 72186,
+      "n_bg_px": 66606,
+      "n_samples": 20,
+      "mean_cx": 0.4351862173491269,
+      "mean_cy": 0.6093544121719022,
+      "std_cx": 0.26727106305269593,
+      "std_cy": 0.21831461603441973,
+      "shape": {
+        "solidity": {
+          "mean": 0.771459698677063,
+          "std": 0.19628193974494934
+        },
+        "compactness": {
+          "mean": 4.416784763336182,
+          "std": 1.666369080543518
+        },
+        "aspect": {
+          "mean": 3.009767532348633,
+          "std": 1.7160148620605469
+        },
+        "extent": {
+          "mean": 0.32681968808174133,
+          "std": 0.15212370455265045
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "greenfork.manipulated_object.npz",
+      "n_fg_px": 368417,
+      "n_bg_px": 91221,
+      "n_samples": 22,
+      "mean_cx": 0.46126589730959,
+      "mean_cy": 0.5358772315735467,
+      "std_cx": 0.09802883805733612,
+      "std_cy": 0.18445757950160743,
+      "shape": {
+        "solidity": {
+          "mean": 0.9844902157783508,
+          "std": 0.03937249258160591
+        },
+        "compactness": {
+          "mean": 1.8415660858154297,
+          "std": 1.1209640502929688
+        },
+        "aspect": {
+          "mean": 2.4297521114349365,
+          "std": 2.0505120754241943
+        },
+        "extent": {
+          "mean": 0.6932476162910461,
+          "std": 0.10911928117275238
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "greenfork.auxiliary_tool.npz",
+      "n_fg_px": 345586,
+      "n_bg_px": 102041,
+      "n_samples": 8,
+      "mean_cx": 0.46673226577113036,
+      "mean_cy": 0.5517788528619485,
+      "std_cx": 0.10347632183962248,
+      "std_cy": 0.2057288668660498,
+      "shape": {
+        "solidity": {
+          "mean": 0.6511382460594177,
+          "std": 0.1228635162115097
+        },
+        "compactness": {
+          "mean": 3.2284421920776367,
+          "std": 1.2059375047683716
+        },
+        "aspect": {
+          "mean": 2.2045741081237793,
+          "std": 1.2417089939117432
+        },
+        "extent": {
+          "mean": 0.4098348021507263,
+          "std": 0.11789996922016144
+        }
+      }
+    }
+  },
+  "template_task": "videos_0210/fork_flip_naan"
+}

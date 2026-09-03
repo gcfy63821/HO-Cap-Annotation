@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260105_plasticspoon_scoop_almond_nuts_from_deepbowl_10",
+  "keyword": "plasticspoon",
+  "roles": {
+    "primary_tool": {
+      "npz": "plasticspoon.primary_tool.npz",
+      "n_fg_px": 208829,
+      "n_bg_px": 249358,
+      "n_samples": 77,
+      "mean_cx": 0.4465002987776724,
+      "mean_cy": 0.5357293820213234,
+      "std_cx": 0.21204410158752118,
+      "std_cy": 0.22631514095113323,
+      "shape": {
+        "solidity": {
+          "mean": 0.8604851365089417,
+          "std": 0.2921130061149597
+        },
+        "compactness": {
+          "mean": 4.296423435211182,
+          "std": 2.4715092182159424
+        },
+        "aspect": {
+          "mean": 2.7843923568725586,
+          "std": 2.2404708862304688
+        },
+        "extent": {
+          "mean": 0.26853567361831665,
+          "std": 0.16152773797512054
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "plasticspoon.manipulated_object.npz",
+      "n_fg_px": 684376,
+      "n_bg_px": 314019,
+      "n_samples": 57,
+      "mean_cx": 0.4292539660190277,
+      "mean_cy": 0.48457588313976463,
+      "std_cx": 0.20013828709620338,
+      "std_cy": 0.22011461741289293,
+      "shape": {
+        "solidity": {
+          "mean": 1.0303361415863037,
+          "std": 0.1504753679037094
+        },
+        "compactness": {
+          "mean": 1.8931844234466553,
+          "std": 0.7070485353469849
+        },
+        "aspect": {
+          "mean": 2.1849145889282227,
+          "std": 1.1044316291809082
+        },
+        "extent": {
+          "mean": 0.4998692274093628,
+          "std": 0.2029426246881485
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "plasticspoon.auxiliary_tool.npz",
+      "n_fg_px": 530340,
+      "n_bg_px": 196140,
+      "n_samples": 31,
+      "mean_cx": 0.45911833211895925,
+      "mean_cy": 0.5590217067410731,
+      "std_cx": 0.30319659475193644,
+      "std_cy": 0.26887870345602755,
+      "shape": {
+        "solidity": {
+          "mean": 0.7657374143600464,
+          "std": 0.26297712326049805
+        },
+        "compactness": {
+          "mean": 2.5552010536193848,
+          "std": 1.8879374265670776
+        },
+        "aspect": {
+          "mean": 1.8237029314041138,
+          "std": 1.0049762725830078
+        },
+        "extent": {
+          "mean": 0.5835466980934143,
+          "std": 0.19309861958026886
+        }
+      }
+    }
+  },
+  "template_task": "videos_0106/spoon_scoop_nuts"
+}

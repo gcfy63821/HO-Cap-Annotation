@@ -1,0 +1,34 @@
+{
+  "template_exp": "20260219_rollingpin_roll_small_sand_in_cuttingboard_100",
+  "keyword": "rollingpin_roll_small_sand_in_cuttingboard",
+  "roles": {
+    "primary_tool": {
+      "npz": "rollingpin_roll_small_sand_in_cuttingboard.primary_tool.npz",
+      "n_fg_px": 51376,
+      "n_bg_px": 27499,
+      "n_samples": 7,
+      "mean_cx": 0.4560907002565725,
+      "mean_cy": 0.513207585160897,
+      "std_cx": 0.09763093673091226,
+      "std_cy": 0.14296601661179073,
+      "shape": {
+        "solidity": {
+          "mean": 1.0376734733581543,
+          "std": 0.11639618873596191
+        },
+        "compactness": {
+          "mean": 1.744559407234192,
+          "std": 0.5186392664909363
+        },
+        "aspect": {
+          "mean": 2.540452480316162,
+          "std": 1.087550401687622
+        },
+        "extent": {
+          "mean": 0.5106955766677856,
+          "std": 0.15439912676811218
+        }
+      }
+    }
+  }
+}

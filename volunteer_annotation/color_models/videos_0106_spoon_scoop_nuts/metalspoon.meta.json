@@ -1,0 +1,35 @@
+{
+  "template_exp": "20260106_metalspoon_scoop_cashew_nuts_from_transparent_bowl_10",
+  "keyword": "metalspoon",
+  "roles": {
+    "primary_tool": {
+      "npz": "metalspoon.primary_tool.npz",
+      "n_fg_px": 420954,
+      "n_bg_px": 145338,
+      "n_samples": 34,
+      "mean_cx": 0.4836899250709256,
+      "mean_cy": 0.5316843230533742,
+      "std_cx": 0.3041764459917908,
+      "std_cy": 0.29090059151119374,
+      "shape": {
+        "solidity": {
+          "mean": 0.7603816986083984,
+          "std": 0.1436031609773636
+        },
+        "compactness": {
+          "mean": 4.042766094207764,
+          "std": 1.8297743797302246
+        },
+        "aspect": {
+          "mean": 2.5716941356658936,
+          "std": 1.412744164466858
+        },
+        "extent": {
+          "mean": 0.3518356680870056,
+          "std": 0.13846927881240845
+        }
+      }
+    }
+  },
+  "template_task": "videos_0106/spoon_scoop_nuts"
+}

@@ -1,0 +1,34 @@
+{
+  "template_exp": "20260302_book_push_toy_rightup_faraway_10",
+  "keyword": "book",
+  "roles": {
+    "primary_tool": {
+      "npz": "book.primary_tool.npz",
+      "n_fg_px": 1924877,
+      "n_bg_px": 236418,
+      "n_samples": 24,
+      "mean_cx": 0.4419749010730547,
+      "mean_cy": 0.5528378336154295,
+      "std_cx": 0.20251024574169496,
+      "std_cy": 0.2055076442219391,
+      "shape": {
+        "solidity": {
+          "mean": 0.9382713437080383,
+          "std": 0.09397862106561661
+        },
+        "compactness": {
+          "mean": 2.4140520095825195,
+          "std": 1.6558841466903687
+        },
+        "aspect": {
+          "mean": 2.0311639308929443,
+          "std": 1.0731245279312134
+        },
+        "extent": {
+          "mean": 0.6636388301849365,
+          "std": 0.13500277698040009
+        }
+      }
+    }
+  }
+}

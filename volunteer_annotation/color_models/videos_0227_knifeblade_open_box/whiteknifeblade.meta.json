@@ -1,0 +1,63 @@
+{
+  "template_exp": "20260222_whiteknifeblade_open_cardboard_box_bluetape_11",
+  "keyword": "whiteknifeblade",
+  "roles": {
+    "primary_tool": {
+      "npz": "whiteknifeblade.primary_tool.npz",
+      "n_fg_px": 272742,
+      "n_bg_px": 77694,
+      "n_samples": 24,
+      "mean_cx": 0.48501551228361706,
+      "mean_cy": 0.5085513887934591,
+      "std_cx": 0.28696567895140435,
+      "std_cy": 0.3046236506539484,
+      "shape": {
+        "solidity": {
+          "mean": 0.9459232687950134,
+          "std": 0.10273629426956177
+        },
+        "compactness": {
+          "mean": 2.381373167037964,
+          "std": 1.3996495008468628
+        },
+        "aspect": {
+          "mean": 3.029498338699341,
+          "std": 3.0563104152679443
+        },
+        "extent": {
+          "mean": 0.6006680130958557,
+          "std": 0.17732879519462585
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "whiteknifeblade.manipulated_object.npz",
+      "n_fg_px": 942990,
+      "n_bg_px": 212675,
+      "n_samples": 24,
+      "mean_cx": 0.4665143733747204,
+      "mean_cy": 0.5177958412179501,
+      "std_cx": 0.0882107590181681,
+      "std_cy": 0.18640470077668564,
+      "shape": {
+        "solidity": {
+          "mean": 0.9644743800163269,
+          "std": 0.3450714945793152
+        },
+        "compactness": {
+          "mean": 3.5513248443603516,
+          "std": 3.189743995666504
+        },
+        "aspect": {
+          "mean": 2.323016881942749,
+          "std": 1.4382777214050293
+        },
+        "extent": {
+          "mean": 0.4835864305496216,
+          "std": 0.24455933272838593
+        }
+      }
+    }
+  },
+  "template_task": "videos_0222/knifeblade_open_box"
+}

@@ -1,0 +1,34 @@
+{
+  "template_exp": "20260302_mallet_push_toy_rightup_faraway_10",
+  "keyword": "mallet",
+  "roles": {
+    "primary_tool": {
+      "npz": "mallet.primary_tool.npz",
+      "n_fg_px": 263468,
+      "n_bg_px": 96726,
+      "n_samples": 15,
+      "mean_cx": 0.4572532277428335,
+      "mean_cy": 0.5914757564750835,
+      "std_cx": 0.2053835977540016,
+      "std_cy": 0.20873874259625674,
+      "shape": {
+        "solidity": {
+          "mean": 0.7039886713027954,
+          "std": 0.09351814538240433
+        },
+        "compactness": {
+          "mean": 3.2340567111968994,
+          "std": 0.8418225646018982
+        },
+        "aspect": {
+          "mean": 2.186269521713257,
+          "std": 0.9258947372436523
+        },
+        "extent": {
+          "mean": 0.3515588045120239,
+          "std": 0.11533533036708832
+        }
+      }
+    }
+  }
+}

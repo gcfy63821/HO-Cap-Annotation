@@ -1,0 +1,90 @@
+{
+  "template_exp": "20260309_smallwoodenspoon_dig_holes_in_soil_plantingpot_1",
+  "keyword": "smallwoodenspoon",
+  "roles": {
+    "primary_tool": {
+      "npz": "smallwoodenspoon.primary_tool.npz",
+      "n_fg_px": 174475,
+      "n_bg_px": 122368,
+      "n_samples": 24,
+      "mean_cx": 0.49663305782578676,
+      "mean_cy": 0.47964677745530676,
+      "std_cx": 0.25285356459470054,
+      "std_cy": 0.3023901634471018,
+      "shape": {
+        "solidity": {
+          "mean": 0.8956000804901123,
+          "std": 0.24946534633636475
+        },
+        "compactness": {
+          "mean": 4.460367202758789,
+          "std": 2.228123188018799
+        },
+        "aspect": {
+          "mean": 3.8648464679718018,
+          "std": 2.701993465423584
+        },
+        "extent": {
+          "mean": 0.31068432331085205,
+          "std": 0.19608008861541748
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "smallwoodenspoon.manipulated_object.npz",
+      "n_fg_px": 319072,
+      "n_bg_px": 91948,
+      "n_samples": 14,
+      "mean_cx": 0.5395560871148471,
+      "mean_cy": 0.4120674433159804,
+      "std_cx": 0.19910855789208062,
+      "std_cy": 0.27718008725655324,
+      "shape": {
+        "solidity": {
+          "mean": 0.99223792552948,
+          "std": 0.10382694005966187
+        },
+        "compactness": {
+          "mean": 2.536111354827881,
+          "std": 1.0503320693969727
+        },
+        "aspect": {
+          "mean": 3.231797456741333,
+          "std": 2.251965284347534
+        },
+        "extent": {
+          "mean": 0.6278771162033081,
+          "std": 0.1283106952905655
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "smallwoodenspoon.auxiliary_tool.npz",
+      "n_fg_px": 80782,
+      "n_bg_px": 17707,
+      "n_samples": 5,
+      "mean_cx": 0.5234994177847738,
+      "mean_cy": 0.4666930528358561,
+      "std_cx": 0.39393651001051627,
+      "std_cy": 0.27327730943026435,
+      "shape": {
+        "solidity": {
+          "mean": 0.9619097709655762,
+          "std": 0.05682101845741272
+        },
+        "compactness": {
+          "mean": 1.6010106801986694,
+          "std": 0.33474257588386536
+        },
+        "aspect": {
+          "mean": 1.8298091888427734,
+          "std": 0.6060546040534973
+        },
+        "extent": {
+          "mean": 0.7405362129211426,
+          "std": 0.08416176587343216
+        }
+      }
+    }
+  }
+}

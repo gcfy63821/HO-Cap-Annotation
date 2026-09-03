@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260119_greenstraw_stir_coffee_shallowcontainer_9",
+  "keyword": "greenstraw_stir_coffee_shallowcontainer",
+  "roles": {
+    "primary_tool": {
+      "npz": "greenstraw_stir_coffee_shallowcontainer.primary_tool.npz",
+      "n_fg_px": 118860,
+      "n_bg_px": 107730,
+      "n_samples": 23,
+      "mean_cx": 0.44605163438251927,
+      "mean_cy": 0.5443423546512078,
+      "std_cx": 0.16366712169478168,
+      "std_cy": 0.1885859783652024,
+      "shape": {
+        "solidity": {
+          "mean": 1.0597113370895386,
+          "std": 0.16968874633312225
+        },
+        "compactness": {
+          "mean": 4.4629669189453125,
+          "std": 1.5207685232162476
+        },
+        "aspect": {
+          "mean": 3.447436571121216,
+          "std": 1.949910283088684
+        },
+        "extent": {
+          "mean": 0.24686697125434875,
+          "std": 0.1263495534658432
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "greenstraw_stir_coffee_shallowcontainer.manipulated_object.npz",
+      "n_fg_px": 77902,
+      "n_bg_px": 34837,
+      "n_samples": 12,
+      "mean_cx": 0.44480439602087457,
+      "mean_cy": 0.48612176174087435,
+      "std_cx": 0.08261306320645943,
+      "std_cy": 0.1670936297785941,
+      "shape": {
+        "solidity": {
+          "mean": 0.9782136082649231,
+          "std": 0.04527566209435463
+        },
+        "compactness": {
+          "mean": 1.7443078756332397,
+          "std": 0.4447746276855469
+        },
+        "aspect": {
+          "mean": 1.8146978616714478,
+          "std": 0.8581451177597046
+        },
+        "extent": {
+          "mean": 0.6082776188850403,
+          "std": 0.1378224939107895
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "greenstraw_stir_coffee_shallowcontainer.auxiliary_tool.npz",
+      "n_fg_px": 96433,
+      "n_bg_px": 44127,
+      "n_samples": 8,
+      "mean_cx": 0.46603724503139954,
+      "mean_cy": 0.5347384820009872,
+      "std_cx": 0.08515931208747209,
+      "std_cy": 0.1638224043048725,
+      "shape": {
+        "solidity": {
+          "mean": 0.784953773021698,
+          "std": 0.21486803889274597
+        },
+        "compactness": {
+          "mean": 2.387894630432129,
+          "std": 2.2835471630096436
+        },
+        "aspect": {
+          "mean": 1.3511196374893188,
+          "std": 0.27431896328926086
+        },
+        "extent": {
+          "mean": 0.6378915309906006,
+          "std": 0.18644575774669647
+        }
+      }
+    }
+  },
+  "template_task": "videos_0119/straw_stir_coffee"
+}

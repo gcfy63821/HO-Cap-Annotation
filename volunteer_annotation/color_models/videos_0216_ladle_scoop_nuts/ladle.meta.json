@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260216_ladle_scoop_smallamount_peanuts_nuts_in_mediumshallowcontainer_1",
+  "keyword": "ladle",
+  "roles": {
+    "primary_tool": {
+      "npz": "ladle.primary_tool.npz",
+      "n_fg_px": 876545,
+      "n_bg_px": 356114,
+      "n_samples": 47,
+      "mean_cx": 0.44551936080164883,
+      "mean_cy": 0.5230884925268398,
+      "std_cx": 0.21802497064239235,
+      "std_cy": 0.2046007662747955,
+      "shape": {
+        "solidity": {
+          "mean": 0.7153270244598389,
+          "std": 0.2124093472957611
+        },
+        "compactness": {
+          "mean": 3.576721429824829,
+          "std": 1.8151706457138062
+        },
+        "aspect": {
+          "mean": 2.048029661178589,
+          "std": 1.1403007507324219
+        },
+        "extent": {
+          "mean": 0.35085001587867737,
+          "std": 0.1786419302225113
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "ladle.manipulated_object.npz",
+      "n_fg_px": 274758,
+      "n_bg_px": 194222,
+      "n_samples": 27,
+      "mean_cx": 0.4511239405420804,
+      "mean_cy": 0.49629586076396714,
+      "std_cx": 0.08602386987364961,
+      "std_cy": 0.17146936076872438,
+      "shape": {
+        "solidity": {
+          "mean": 1.0884406566619873,
+          "std": 0.30620312690734863
+        },
+        "compactness": {
+          "mean": 1.981464147567749,
+          "std": 0.7711278200149536
+        },
+        "aspect": {
+          "mean": 1.9220885038375854,
+          "std": 1.0230159759521484
+        },
+        "extent": {
+          "mean": 0.36603057384490967,
+          "std": 0.1897653341293335
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "ladle.auxiliary_tool.npz",
+      "n_fg_px": 340241,
+      "n_bg_px": 110262,
+      "n_samples": 16,
+      "mean_cx": 0.4676030860875711,
+      "mean_cy": 0.5122583459500633,
+      "std_cx": 0.10886902755741941,
+      "std_cy": 0.18479322934393078,
+      "shape": {
+        "solidity": {
+          "mean": 0.8380937576293945,
+          "std": 0.18552540242671967
+        },
+        "compactness": {
+          "mean": 1.777276873588562,
+          "std": 1.2591625452041626
+        },
+        "aspect": {
+          "mean": 1.341233730316162,
+          "std": 0.23134665191173553
+        },
+        "extent": {
+          "mean": 0.6471883058547974,
+          "std": 0.14141727983951569
+        }
+      }
+    }
+  },
+  "template_task": "videos_0216/ladle_scoop_nuts"
+}

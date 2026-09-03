@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260202_smallwoodenspoon_press_sponge_in_largeshallowcontainer_1",
+  "keyword": "smallwoodenspoon_press_sponge_in_largeshallowcontainer",
+  "roles": {
+    "primary_tool": {
+      "npz": "smallwoodenspoon_press_sponge_in_largeshallowcontainer.primary_tool.npz",
+      "n_fg_px": 197088,
+      "n_bg_px": 128802,
+      "n_samples": 24,
+      "mean_cx": 0.4360524920456217,
+      "mean_cy": 0.5821514115505182,
+      "std_cx": 0.2682370394649265,
+      "std_cy": 0.22498204356395954,
+      "shape": {
+        "solidity": {
+          "mean": 0.8987647891044617,
+          "std": 0.4535455107688904
+        },
+        "compactness": {
+          "mean": 4.52792501449585,
+          "std": 2.0782113075256348
+        },
+        "aspect": {
+          "mean": 2.6713809967041016,
+          "std": 1.9129952192306519
+        },
+        "extent": {
+          "mean": 0.2238457202911377,
+          "std": 0.1543036848306656
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "smallwoodenspoon_press_sponge_in_largeshallowcontainer.manipulated_object.npz",
+      "n_fg_px": 175147,
+      "n_bg_px": 70992,
+      "n_samples": 18,
+      "mean_cx": 0.44437074065619175,
+      "mean_cy": 0.5098613697428418,
+      "std_cx": 0.08773684721065336,
+      "std_cy": 0.18703127205538014,
+      "shape": {
+        "solidity": {
+          "mean": 0.8884148001670837,
+          "std": 0.11207526177167892
+        },
+        "compactness": {
+          "mean": 1.9542783498764038,
+          "std": 0.7304953336715698
+        },
+        "aspect": {
+          "mean": 1.7483607530593872,
+          "std": 0.5562236309051514
+        },
+        "extent": {
+          "mean": 0.5824139714241028,
+          "std": 0.15462227165699005
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "smallwoodenspoon_press_sponge_in_largeshallowcontainer.auxiliary_tool.npz",
+      "n_fg_px": 255325,
+      "n_bg_px": 72752,
+      "n_samples": 8,
+      "mean_cx": 0.46584495504563367,
+      "mean_cy": 0.5353164765845284,
+      "std_cx": 0.09610644005426337,
+      "std_cy": 0.18411428716664932,
+      "shape": {
+        "solidity": {
+          "mean": 0.8109227418899536,
+          "std": 0.11160163581371307
+        },
+        "compactness": {
+          "mean": 1.5771558284759521,
+          "std": 0.07609041035175323
+        },
+        "aspect": {
+          "mean": 1.6781278848648071,
+          "std": 0.5365935564041138
+        },
+        "extent": {
+          "mean": 0.6379551887512207,
+          "std": 0.09822116047143936
+        }
+      }
+    }
+  },
+  "template_task": "videos_0202/spoon_press_sponge"
+}

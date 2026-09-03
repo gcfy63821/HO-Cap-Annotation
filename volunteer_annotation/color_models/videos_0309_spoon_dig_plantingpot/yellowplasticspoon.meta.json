@@ -1,0 +1,34 @@
+{
+  "template_exp": "20260309_yellowplasticspoon_dig_holes_in_soil_plantingpot_6",
+  "keyword": "yellowplasticspoon",
+  "roles": {
+    "primary_tool": {
+      "npz": "yellowplasticspoon.primary_tool.npz",
+      "n_fg_px": 77759,
+      "n_bg_px": 54393,
+      "n_samples": 18,
+      "mean_cx": 0.46334242836568834,
+      "mean_cy": 0.5362755594277664,
+      "std_cx": 0.24712115010057142,
+      "std_cy": 0.27446805443197847,
+      "shape": {
+        "solidity": {
+          "mean": 0.9318395256996155,
+          "std": 0.3039942979812622
+        },
+        "compactness": {
+          "mean": 3.0037736892700195,
+          "std": 1.3670223951339722
+        },
+        "aspect": {
+          "mean": 2.8709170818328857,
+          "std": 1.928917646408081
+        },
+        "extent": {
+          "mean": 0.4046030342578888,
+          "std": 0.1458040028810501
+        }
+      }
+    }
+  }
+}

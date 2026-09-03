@@ -1,0 +1,35 @@
+{
+  "template_exp": "20260106_squeegee_sweep_almond_nuts_from_table_2",
+  "keyword": "squeegee_sweep_almond_nuts_from_table",
+  "roles": {
+    "primary_tool": {
+      "npz": "squeegee_sweep_almond_nuts_from_table.primary_tool.npz",
+      "n_fg_px": 334002,
+      "n_bg_px": 134453,
+      "n_samples": 24,
+      "mean_cx": 0.43671558824268847,
+      "mean_cy": 0.5720009370357145,
+      "std_cx": 0.25916711655752916,
+      "std_cy": 0.23572748004542038,
+      "shape": {
+        "solidity": {
+          "mean": 0.7168375849723816,
+          "std": 0.16950273513793945
+        },
+        "compactness": {
+          "mean": 3.571432113647461,
+          "std": 1.5333797931671143
+        },
+        "aspect": {
+          "mean": 1.8692859411239624,
+          "std": 0.7039565443992615
+        },
+        "extent": {
+          "mean": 0.4064714014530182,
+          "std": 0.18272601068019867
+        }
+      }
+    }
+  },
+  "template_task": "videos_0106/squeegee_sweep_nuts"
+}

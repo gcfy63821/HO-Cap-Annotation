@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260205_bigwoodenspatula_flip_eggtoy_in_blackpan_1",
+  "keyword": "bigwoodenspatula",
+  "roles": {
+    "primary_tool": {
+      "npz": "bigwoodenspatula.primary_tool.npz",
+      "n_fg_px": 699778,
+      "n_bg_px": 329359,
+      "n_samples": 68,
+      "mean_cx": 0.4976018250799817,
+      "mean_cy": 0.5463448293002925,
+      "std_cx": 0.25831948281185024,
+      "std_cy": 0.24392269041005707,
+      "shape": {
+        "solidity": {
+          "mean": 0.8384423851966858,
+          "std": 0.14047196507453918
+        },
+        "compactness": {
+          "mean": 3.7405974864959717,
+          "std": 1.40802001953125
+        },
+        "aspect": {
+          "mean": 2.931406021118164,
+          "std": 1.685759425163269
+        },
+        "extent": {
+          "mean": 0.3626558780670166,
+          "std": 0.18675202131271362
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "bigwoodenspatula.manipulated_object.npz",
+      "n_fg_px": 244179,
+      "n_bg_px": 115118,
+      "n_samples": 46,
+      "mean_cx": 0.46622464940950076,
+      "mean_cy": 0.5356056373201183,
+      "std_cx": 0.10532726823977803,
+      "std_cy": 0.1788411227655752,
+      "shape": {
+        "solidity": {
+          "mean": 1.0072981119155884,
+          "std": 0.047291941940784454
+        },
+        "compactness": {
+          "mean": 1.653210997581482,
+          "std": 0.8073375821113586
+        },
+        "aspect": {
+          "mean": 2.306037664413452,
+          "std": 1.5771067142486572
+        },
+        "extent": {
+          "mean": 0.6612026691436768,
+          "std": 0.1754164844751358
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "bigwoodenspatula.auxiliary_tool.npz",
+      "n_fg_px": 1408165,
+      "n_bg_px": 314872,
+      "n_samples": 24,
+      "mean_cx": 0.47345844502851353,
+      "mean_cy": 0.5381757306908872,
+      "std_cx": 0.10687063391606333,
+      "std_cy": 0.18166356347536383,
+      "shape": {
+        "solidity": {
+          "mean": 0.7640252113342285,
+          "std": 0.05997204780578613
+        },
+        "compactness": {
+          "mean": 2.6405115127563477,
+          "std": 0.7866494655609131
+        },
+        "aspect": {
+          "mean": 2.3224704265594482,
+          "std": 1.34759521484375
+        },
+        "extent": {
+          "mean": 0.50589519739151,
+          "std": 0.07111329585313797
+        }
+      }
+    }
+  },
+  "template_task": "videos_0204/fork_flip_egg"
+}

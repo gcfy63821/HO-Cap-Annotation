@@ -1,0 +1,90 @@
+{
+  "template_exp": "20260206_greenknife_spread_largeamount_tomatosauce_in_purpleplate_1",
+  "keyword": "greenknife",
+  "roles": {
+    "primary_tool": {
+      "npz": "greenknife.primary_tool.npz",
+      "n_fg_px": 107400,
+      "n_bg_px": 71199,
+      "n_samples": 22,
+      "mean_cx": 0.4550199890783773,
+      "mean_cy": 0.5767523042987944,
+      "std_cx": 0.2885117174587205,
+      "std_cy": 0.25592852407121586,
+      "shape": {
+        "solidity": {
+          "mean": 0.9306913614273071,
+          "std": 0.07562798261642456
+        },
+        "compactness": {
+          "mean": 3.333496332168579,
+          "std": 1.298088550567627
+        },
+        "aspect": {
+          "mean": 3.063326120376587,
+          "std": 1.9234645366668701
+        },
+        "extent": {
+          "mean": 0.4150445759296417,
+          "std": 0.1521725058555603
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "greenknife.manipulated_object.npz",
+      "n_fg_px": 557031,
+      "n_bg_px": 150245,
+      "n_samples": 24,
+      "mean_cx": 0.467781243345895,
+      "mean_cy": 0.5597488891139079,
+      "std_cx": 0.08140043966303862,
+      "std_cy": 0.1578124769695919,
+      "shape": {
+        "solidity": {
+          "mean": 0.9653469920158386,
+          "std": 0.027076734229922295
+        },
+        "compactness": {
+          "mean": 2.0917608737945557,
+          "std": 0.9037674069404602
+        },
+        "aspect": {
+          "mean": 2.707534074783325,
+          "std": 1.9590785503387451
+        },
+        "extent": {
+          "mean": 0.5980026721954346,
+          "std": 0.11072427779436111
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "greenknife.auxiliary_tool.npz",
+      "n_fg_px": 331594,
+      "n_bg_px": 93315,
+      "n_samples": 8,
+      "mean_cx": 0.46661032029177374,
+      "mean_cy": 0.5604274417311088,
+      "std_cx": 0.08218694600026123,
+      "std_cy": 0.16820143871085913,
+      "shape": {
+        "solidity": {
+          "mean": 0.8049734830856323,
+          "std": 0.07882675528526306
+        },
+        "compactness": {
+          "mean": 1.719846248626709,
+          "std": 0.32522329688072205
+        },
+        "aspect": {
+          "mean": 2.00355863571167,
+          "std": 0.8965848088264465
+        },
+        "extent": {
+          "mean": 0.6289448738098145,
+          "std": 0.062417078763246536
+        }
+      }
+    }
+  }
+}

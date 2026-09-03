@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260203_curvedwoodenspatula_flip_eggtoy_in_blackpan_1",
+  "keyword": "curvedwoodenspatula",
+  "roles": {
+    "primary_tool": {
+      "npz": "curvedwoodenspatula.primary_tool.npz",
+      "n_fg_px": 295215,
+      "n_bg_px": 129851,
+      "n_samples": 24,
+      "mean_cx": 0.4404750316889728,
+      "mean_cy": 0.593285895082148,
+      "std_cx": 0.24594442148405904,
+      "std_cy": 0.21098617785840382,
+      "shape": {
+        "solidity": {
+          "mean": 0.8636042475700378,
+          "std": 0.16800203919410706
+        },
+        "compactness": {
+          "mean": 3.936107635498047,
+          "std": 1.5552620887756348
+        },
+        "aspect": {
+          "mean": 3.129068613052368,
+          "std": 2.0312206745147705
+        },
+        "extent": {
+          "mean": 0.3349100351333618,
+          "std": 0.13414472341537476
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "curvedwoodenspatula.manipulated_object.npz",
+      "n_fg_px": 150925,
+      "n_bg_px": 66528,
+      "n_samples": 22,
+      "mean_cx": 0.46261925342017896,
+      "mean_cy": 0.5364846449304962,
+      "std_cx": 0.09840508414837677,
+      "std_cy": 0.17501702901057054,
+      "shape": {
+        "solidity": {
+          "mean": 0.9739626049995422,
+          "std": 0.07546406984329224
+        },
+        "compactness": {
+          "mean": 1.7449737787246704,
+          "std": 0.9217811226844788
+        },
+        "aspect": {
+          "mean": 2.297955274581909,
+          "std": 1.6533277034759521
+        },
+        "extent": {
+          "mean": 0.6455196738243103,
+          "std": 0.16048137843608856
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "curvedwoodenspatula.auxiliary_tool.npz",
+      "n_fg_px": 473694,
+      "n_bg_px": 110543,
+      "n_samples": 8,
+      "mean_cx": 0.47282007799520953,
+      "mean_cy": 0.5394011454637566,
+      "std_cx": 0.10093802174366776,
+      "std_cy": 0.18312797698939173,
+      "shape": {
+        "solidity": {
+          "mean": 0.7657877206802368,
+          "std": 0.0447298064827919
+        },
+        "compactness": {
+          "mean": 2.575270414352417,
+          "std": 0.6913709044456482
+        },
+        "aspect": {
+          "mean": 2.1879665851593018,
+          "std": 1.410201907157898
+        },
+        "extent": {
+          "mean": 0.4678170680999756,
+          "std": 0.05995435640215874
+        }
+      }
+    }
+  },
+  "template_task": "videos_0204/spatula_flip_egg"
+}

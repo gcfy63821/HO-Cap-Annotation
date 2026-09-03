@@ -1,0 +1,90 @@
+{
+  "template_exp": "20260304_redrubberspatula_lift_egg_from_blackpan_to_navyplate_1",
+  "keyword": "redrubberspatula",
+  "roles": {
+    "primary_tool": {
+      "npz": "redrubberspatula.primary_tool.npz",
+      "n_fg_px": 155243,
+      "n_bg_px": 76364,
+      "n_samples": 15,
+      "mean_cx": 0.4533255628429228,
+      "mean_cy": 0.47909121390159953,
+      "std_cx": 0.2747748101594924,
+      "std_cy": 0.278127602410565,
+      "shape": {
+        "solidity": {
+          "mean": 1.0451217889785767,
+          "std": 0.2981948256492615
+        },
+        "compactness": {
+          "mean": 2.5696096420288086,
+          "std": 0.9880532026290894
+        },
+        "aspect": {
+          "mean": 2.201645612716675,
+          "std": 1.4639757871627808
+        },
+        "extent": {
+          "mean": 0.3078424334526062,
+          "std": 0.20881009101867676
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "redrubberspatula.manipulated_object.npz",
+      "n_fg_px": 59587,
+      "n_bg_px": 27061,
+      "n_samples": 12,
+      "mean_cx": 0.46951797029345693,
+      "mean_cy": 0.5186824330281722,
+      "std_cx": 0.09036160501444804,
+      "std_cy": 0.15084018649729927,
+      "shape": {
+        "solidity": {
+          "mean": 1.0084370374679565,
+          "std": 0.0077506136149168015
+        },
+        "compactness": {
+          "mean": 1.2472895383834839,
+          "std": 0.11394038051366806
+        },
+        "aspect": {
+          "mean": 1.5445194244384766,
+          "std": 0.3421759605407715
+        },
+        "extent": {
+          "mean": 0.7390391826629639,
+          "std": 0.03967156633734703
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "redrubberspatula.auxiliary_tool.npz",
+      "n_fg_px": 886645,
+      "n_bg_px": 171269,
+      "n_samples": 8,
+      "mean_cx": 0.4572962205758499,
+      "mean_cy": 0.5765232439895112,
+      "std_cx": 0.09187417455206745,
+      "std_cy": 0.17242340498418732,
+      "shape": {
+        "solidity": {
+          "mean": 1.3047360181808472,
+          "std": 0.44723406434059143
+        },
+        "compactness": {
+          "mean": 2.5673294067382812,
+          "std": 2.38921856880188
+        },
+        "aspect": {
+          "mean": 2.9504611492156982,
+          "std": 1.8330295085906982
+        },
+        "extent": {
+          "mean": 0.4776197075843811,
+          "std": 0.05598334223031998
+        }
+      }
+    }
+  }
+}

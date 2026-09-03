@@ -1,0 +1,63 @@
+{
+  "template_exp": "20260302_book_push_toy_leftup_faraway_100",
+  "keyword": "book",
+  "roles": {
+    "primary_tool": {
+      "npz": "book.primary_tool.npz",
+      "n_fg_px": 4018338,
+      "n_bg_px": 464200,
+      "n_samples": 48,
+      "mean_cx": 0.48226246152724483,
+      "mean_cy": 0.49441570308789684,
+      "std_cx": 0.24421897059264142,
+      "std_cy": 0.2394817286745663,
+      "shape": {
+        "solidity": {
+          "mean": 0.9642274379730225,
+          "std": 0.0860237404704094
+        },
+        "compactness": {
+          "mean": 1.982277274131775,
+          "std": 0.6220374703407288
+        },
+        "aspect": {
+          "mean": 2.0064480304718018,
+          "std": 0.852497398853302
+        },
+        "extent": {
+          "mean": 0.6524307727813721,
+          "std": 0.18323896825313568
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "book.manipulated_object.npz",
+      "n_fg_px": 88443,
+      "n_bg_px": 59532,
+      "n_samples": 32,
+      "mean_cx": 0.4767035289500008,
+      "mean_cy": 0.5341850637155378,
+      "std_cx": 0.14732434877493322,
+      "std_cy": 0.18174105143124353,
+      "shape": {
+        "solidity": {
+          "mean": 0.9545357823371887,
+          "std": 0.03731948137283325
+        },
+        "compactness": {
+          "mean": 1.432936668395996,
+          "std": 0.25073686242103577
+        },
+        "aspect": {
+          "mean": 1.3162177801132202,
+          "std": 0.20312198996543884
+        },
+        "extent": {
+          "mean": 0.6746420860290527,
+          "std": 0.08108217269182205
+        }
+      }
+    }
+  },
+  "template_task": "videos_0227/book_push_toy"
+}

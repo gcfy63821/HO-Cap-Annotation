@@ -1,0 +1,62 @@
+{
+  "template_exp": "20260220_greyplasticknife_open_cardboard_box_bluetape_19",
+  "keyword": "greyplasticknife",
+  "roles": {
+    "primary_tool": {
+      "npz": "greyplasticknife.primary_tool.npz",
+      "n_fg_px": 139232,
+      "n_bg_px": 80807,
+      "n_samples": 23,
+      "mean_cx": 0.4824585101919292,
+      "mean_cy": 0.5121373799049093,
+      "std_cx": 0.23914458783974937,
+      "std_cy": 0.2892652217048924,
+      "shape": {
+        "solidity": {
+          "mean": 0.9550423622131348,
+          "std": 0.04780528321862221
+        },
+        "compactness": {
+          "mean": 3.30570650100708,
+          "std": 1.5444709062576294
+        },
+        "aspect": {
+          "mean": 3.1246438026428223,
+          "std": 1.5055561065673828
+        },
+        "extent": {
+          "mean": 0.4578101933002472,
+          "std": 0.20219877362251282
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "greyplasticknife.manipulated_object.npz",
+      "n_fg_px": 2873091,
+      "n_bg_px": 271995,
+      "n_samples": 24,
+      "mean_cx": 0.46319679901779454,
+      "mean_cy": 0.4938955165058383,
+      "std_cx": 0.09751063209572629,
+      "std_cy": 0.22949294239064907,
+      "shape": {
+        "solidity": {
+          "mean": 0.9729192852973938,
+          "std": 0.03765449300408363
+        },
+        "compactness": {
+          "mean": 1.825107216835022,
+          "std": 0.7463807463645935
+        },
+        "aspect": {
+          "mean": 1.57208251953125,
+          "std": 0.3716723918914795
+        },
+        "extent": {
+          "mean": 0.736456573009491,
+          "std": 0.15141955018043518
+        }
+      }
+    }
+  }
+}

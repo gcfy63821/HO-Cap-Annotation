@@ -14,7 +14,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-LOCK_TTL_SEC = 30 * 60  # a locked task returns to the pool after 30 min idle
+LOCK_TTL_SEC = 15 * 60  # a locked task returns to the pool after 15 min idle
 
 # Fixed semantic roles, in the order that determines masks.h5 object ids.
 # (object_id is assigned contiguously by prompts_to_masks.py per exp; primary,
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     note         TEXT,
     UNIQUE(task, exp)
 );
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 """
 
 
@@ -64,10 +65,12 @@ def connect(db_path):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
-    try:  # migrate older DBs that predate the note column
-        conn.execute("ALTER TABLE tasks ADD COLUMN note TEXT")
-    except sqlite3.OperationalError:
-        pass
+    for col, typedef in [("note", "TEXT"), ("first_point_at", "TEXT"), ("annotation_time_sec", "REAL")]:
+        try:
+            conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {typedef}")
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
     return conn
 
 
@@ -102,19 +105,27 @@ def seed_from_manifest(conn, manifest_path):
 
 
 def next_task(conn, annotator_id):
-    """Atomically lock and return the next available task, or None."""
+    """Atomically lock and return the next available task, or None.
+    BEGIN IMMEDIATE acquires a write lock before SELECT so two concurrent
+    callers cannot read the same row and both proceed to lock it."""
     now = time.time()
-    cur = conn.execute(
-        "SELECT * FROM tasks WHERE status='unassigned' "
-        "   OR (status='locked' AND locked_until < ?) "
-        "ORDER BY id LIMIT 1", (now,))
-    row = cur.fetchone()
-    if row is None:
-        return None
-    conn.execute(
-        "UPDATE tasks SET status='locked', annotator_id=?, locked_until=? WHERE id=?",
-        (annotator_id, now + LOCK_TTL_SEC, row["id"]))
-    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cur = conn.execute(
+            "SELECT * FROM tasks WHERE status='unassigned' "
+            "   OR (status='locked' AND locked_until < ?) "
+            "ORDER BY id LIMIT 1", (now,))
+        row = cur.fetchone()
+        if row is None:
+            conn.execute("ROLLBACK")
+            return None
+        conn.execute(
+            "UPDATE tasks SET status='locked', annotator_id=?, locked_until=? WHERE id=?",
+            (annotator_id, now + LOCK_TTL_SEC, row["id"]))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     return dict(row)
 
 
@@ -145,6 +156,23 @@ def list_tasks(conn, annotator_id):
              "mine": r["annotator_id"] == annotator_id} for r in rows]
 
 
+def list_tasks_window(conn, annotator_id, near_id=0, window=40):
+    """Return up to `window` tasks centred around near_id."""
+    half = window // 2
+    if near_id <= 0:
+        rows = conn.execute(
+            "SELECT id, exp, status, annotator_id FROM tasks ORDER BY id LIMIT ?",
+            (window,)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, exp, status, annotator_id FROM tasks "
+            "WHERE id >= (SELECT MAX(id) FROM (SELECT id FROM tasks WHERE id<=? ORDER BY id DESC LIMIT ?)) "
+            "ORDER BY id LIMIT ?",
+            (near_id, half, window)).fetchall()
+    return [{"id": r["id"], "exp": r["exp"], "status": r["status"],
+             "mine": r["annotator_id"] == annotator_id} for r in rows]
+
+
 def progress(conn, annotator_id):
     rows = conn.execute("SELECT status, annotator_id FROM tasks").fetchall()
     total = len(rows)
@@ -155,12 +183,37 @@ def progress(conn, annotator_id):
             "remaining": total - submitted - bad}
 
 
-def submit_task(conn, task_id, annotator_id, preview_iou):
+def submit_task(conn, task_id, annotator_id, preview_iou, first_point_at=None):
+    annotation_time_sec = None
+    if first_point_at:
+        try:
+            import datetime
+            t0 = datetime.datetime.fromisoformat(first_point_at.replace("Z", "+00:00"))
+            t1 = datetime.datetime.now(datetime.timezone.utc)
+            annotation_time_sec = round((t1 - t0).total_seconds(), 1)
+        except Exception:
+            pass
     conn.execute(
-        "UPDATE tasks SET status='submitted', annotator_id=?, preview_iou=?, submitted_at=? "
-        "WHERE id=?",
-        (annotator_id, preview_iou, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), task_id))
+        "UPDATE tasks SET status='submitted', annotator_id=?, preview_iou=?, submitted_at=?, "
+        "first_point_at=?, annotation_time_sec=? WHERE id=?",
+        (annotator_id, preview_iou, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+         first_point_at, annotation_time_sec, task_id))
     conn.commit()
+
+
+def annotator_stats(conn, annotator_id):
+    rows = conn.execute(
+        "SELECT id, exp, annotation_time_sec, submitted_at FROM tasks "
+        "WHERE annotator_id=? AND status='submitted' ORDER BY submitted_at DESC",
+        (annotator_id,)).fetchall()
+    tasks = [dict(r) for r in rows]
+    times = [r["annotation_time_sec"] for r in tasks if r["annotation_time_sec"] is not None]
+    return {
+        "annotator_id": annotator_id,
+        "total_submitted": len(tasks),
+        "avg_annotation_time_sec": round(sum(times) / len(times), 1) if times else None,
+        "recent": tasks[:20],
+    }
 
 
 def flag_bad(conn, task_id, annotator_id, reason):
@@ -174,3 +227,57 @@ def flag_bad(conn, task_id, annotator_id, reason):
 def stats(conn):
     rows = conn.execute("SELECT status, COUNT(*) c FROM tasks GROUP BY status").fetchall()
     return {r["status"]: r["c"] for r in rows}
+
+
+def list_tasks_for_push(conn, limit=20):
+    """Return tasks that might need embeddings pushed: locked/unassigned, not submitted/bad.
+    Locked (in-progress) first, then unassigned (prefetch)."""
+    now = time.time()
+    rows = conn.execute(
+        "SELECT * FROM tasks WHERE status IN ('locked','unassigned') "
+        "ORDER BY CASE status WHEN 'locked' THEN 0 ELSE 1 END, id "
+        "LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_submitted_tasks(conn):
+    """Return submitted/bad tasks whose embeddings can be cleaned up from cloud."""
+    rows = conn.execute(
+        "SELECT task, exp FROM tasks WHERE status IN ('submitted','bad')"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_annotators(conn):
+    """Return all annotators with submission counts, total time, avg time."""
+    rows = conn.execute(
+        "SELECT annotator_id, COUNT(*) cnt, "
+        "SUM(annotation_time_sec) total_sec, AVG(annotation_time_sec) avg_sec "
+        "FROM tasks WHERE status='submitted' "
+        "GROUP BY annotator_id ORDER BY cnt DESC"
+    ).fetchall()
+    result = []
+    for r in rows:
+        avg_min = round(r["avg_sec"] / 60, 2) if r["avg_sec"] else None
+        total_h = round(r["total_sec"] / 3600, 2) if r["total_sec"] else None
+        price = 1.5 if (avg_min and avg_min >= 3) else 1.0
+        result.append({
+            "annotator_id": r["annotator_id"],
+            "count": r["cnt"],
+            "total_hours": total_h,
+            "avg_min": avg_min,
+            "price_per_item": price,
+            "amount": round(r["cnt"] * price, 1),
+        })
+    return result
+
+
+def list_submitted_by_annotator(conn, annotator_id, limit=500):
+    """Return tasks submitted by this annotator, newest first."""
+    rows = conn.execute(
+        "SELECT id, task, exp, submitted_at, annotation_time_sec "
+        "FROM tasks WHERE status='submitted' AND annotator_id=? "
+        "ORDER BY submitted_at DESC LIMIT ?",
+        (annotator_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]

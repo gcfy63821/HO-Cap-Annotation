@@ -1,0 +1,90 @@
+{
+  "template_exp": "20260219_openscooper_dig_toy_from_large_sand_in_largeshallowcontainer_1",
+  "keyword": "openscooper_dig_toy",
+  "roles": {
+    "primary_tool": {
+      "npz": "openscooper_dig_toy.primary_tool.npz",
+      "n_fg_px": 61540,
+      "n_bg_px": 29082,
+      "n_samples": 8,
+      "mean_cx": 0.46916849252220716,
+      "mean_cy": 0.45744525975325667,
+      "std_cx": 0.09588715313258347,
+      "std_cy": 0.223386826933728,
+      "shape": {
+        "solidity": {
+          "mean": 1.0209689140319824,
+          "std": 0.06267783045768738
+        },
+        "compactness": {
+          "mean": 1.4194449186325073,
+          "std": 0.20419573783874512
+        },
+        "aspect": {
+          "mean": 1.8934414386749268,
+          "std": 0.70112544298172
+        },
+        "extent": {
+          "mean": 0.509430468082428,
+          "std": 0.12555985152721405
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "openscooper_dig_toy.manipulated_object.npz",
+      "n_fg_px": 175848,
+      "n_bg_px": 54037,
+      "n_samples": 8,
+      "mean_cx": 0.4582780760732417,
+      "mean_cy": 0.5260335279754171,
+      "std_cx": 0.08807550570623002,
+      "std_cy": 0.19219530896152318,
+      "shape": {
+        "solidity": {
+          "mean": 0.8307957053184509,
+          "std": 0.09185346215963364
+        },
+        "compactness": {
+          "mean": 2.977266311645508,
+          "std": 0.8217810988426208
+        },
+        "aspect": {
+          "mean": 2.4521031379699707,
+          "std": 1.7896536588668823
+        },
+        "extent": {
+          "mean": 0.5861340165138245,
+          "std": 0.0840330496430397
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "openscooper_dig_toy.auxiliary_tool.npz",
+      "n_fg_px": 91963,
+      "n_bg_px": 63230,
+      "n_samples": 7,
+      "mean_cx": 0.4488015741050031,
+      "mean_cy": 0.5212246362835182,
+      "std_cx": 0.10355611996134019,
+      "std_cy": 0.1730267251059085,
+      "shape": {
+        "solidity": {
+          "mean": 0.5930820107460022,
+          "std": 0.23115220665931702
+        },
+        "compactness": {
+          "mean": 5.3607916831970215,
+          "std": 3.0770230293273926
+        },
+        "aspect": {
+          "mean": 1.7648725509643555,
+          "std": 0.4815928339958191
+        },
+        "extent": {
+          "mean": 0.3699689507484436,
+          "std": 0.20591102540493011
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>标注管理员视图</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#111;color:#ddd;height:100vh;display:flex;flex-direction:column}
+header{background:#1a1a2e;padding:10px 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #333;flex-shrink:0}
+header h1{font-size:16px;color:#7eb8f7}
+#status-bar{font-size:12px;color:#888;margin-left:auto}
+
+/* Layout */
+#main{display:flex;flex:1;overflow:hidden}
+#sidebar{width:280px;background:#161622;border-right:1px solid #2a2a40;display:flex;flex-direction:column;flex-shrink:0}
+#content{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* Sidebar */
+#annotator-list{flex:1;overflow-y:auto;padding:8px}
+.ann-card{padding:8px 10px;border-radius:6px;cursor:pointer;border:1px solid transparent;margin-bottom:4px;transition:background .15s}
+.ann-card:hover{background:#252540}
+.ann-card.active{background:#1e2f4a;border-color:#4a7fc1}
+.ann-name{font-size:13px;font-weight:600;color:#c8d8f0}
+.ann-meta{font-size:11px;color:#888;margin-top:2px}
+.ann-amount{font-size:11px;color:#5dba7d;float:right}
+.ann-warn{color:#f0a050}
+
+/* Task list panel */
+#task-panel{display:flex;height:100%}
+#task-list-col{width:280px;border-right:1px solid #2a2a40;display:flex;flex-direction:column;flex-shrink:0}
+#task-list-header{padding:8px 12px;font-size:12px;color:#888;border-bottom:1px solid #222;background:#151520}
+#task-list{flex:1;overflow-y:auto;padding:4px}
+.task-row{padding:6px 8px;font-size:11px;cursor:pointer;border-radius:4px;border-left:2px solid transparent;margin-bottom:2px}
+.task-row:hover{background:#1e1e30}
+.task-row.active{background:#1a2a3a;border-left-color:#4a7fc1}
+.task-exp{color:#c8d8f0;font-size:11px}
+.task-date{color:#666;font-size:10px;margin-top:1px}
+.task-time{color:#888;font-size:10px;float:right}
+
+/* Viewer */
+#viewer{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#viewer-header{padding:8px 14px;font-size:12px;color:#888;background:#151520;border-bottom:1px solid #222;display:flex;gap:12px;align-items:center;flex-shrink:0}
+#viewer-header select{background:#222;color:#ddd;border:1px solid #333;padding:2px 6px;font-size:11px;border-radius:3px}
+#cam-grid{flex:1;overflow-y:auto;padding:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:8px;align-content:start}
+.cam-card{background:#1a1a28;border:1px solid #2a2a40;border-radius:6px;overflow:hidden}
+.cam-title{font-size:11px;color:#888;padding:4px 8px;background:#151520;border-bottom:1px solid #222}
+.cam-imgs{display:flex;gap:4px;padding:6px;flex-wrap:wrap}
+.cam-imgs img{height:120px;border-radius:3px;cursor:pointer;border:1px solid #333;object-fit:cover}
+.cam-imgs img:hover{border-color:#7eb8f7}
+
+/* Overlay canvas popup */
+#popup{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100;align-items:center;justify-content:center}
+#popup.show{display:flex}
+#popup-wrap{position:relative;max-width:95vw;max-height:95vh}
+#popup canvas{display:block;max-width:95vw;max-height:95vh;object-fit:contain}
+#popup-close{position:absolute;top:6px;right:6px;background:#333;color:#ddd;border:none;cursor:pointer;font-size:18px;width:28px;height:28px;border-radius:4px;line-height:1}
+#popup-label{position:absolute;bottom:6px;left:6px;background:rgba(0,0,0,.7);color:#ddd;font-size:11px;padding:2px 6px;border-radius:3px}
+
+/* Role colors matching frontend */
+.role-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.role-primary{background:#ff6b35}
+.role-auxiliary{background:#4ecdc4}
+.role-manipulated{background:#a8e6cf}
+
+#empty-hint{display:flex;align-items:center;justify-content:center;flex:1;color:#555;font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>标注管理员视图</h1>
+  <span id="status-bar">加载中…</span>
+  <a href="/" style="color:#7eb8f7;font-size:12px;text-decoration:none;margin-left:12px">← 返回标注</a>
+</header>
+
+<div id="main">
+  <!-- Left: annotator list -->
+  <div id="sidebar">
+    <div style="padding:8px 12px;font-size:11px;color:#666;border-bottom:1px solid #222;background:#151520">
+      标注者列表（共 <span id="ann-count">0</span> 人）
+    </div>
+    <div id="annotator-list"></div>
+  </div>
+
+  <!-- Right: task list + viewer -->
+  <div id="content">
+    <div id="task-panel">
+      <div id="task-list-col">
+        <div id="task-list-header">选择标注者查看记录</div>
+        <div id="task-list"></div>
+      </div>
+      <div id="viewer">
+        <div id="viewer-header" style="display:none">
+          <span id="viewer-exp" style="color:#c8d8f0;font-weight:600"></span>
+          <span id="viewer-time" style="color:#888"></span>
+          <span style="margin-left:auto;color:#666">相机视角：</span>
+          <select id="cam-filter" onchange="filterCams()">
+            <option value="all">全部</option>
+          </select>
+        </div>
+        <div id="cam-grid"></div>
+        <div id="empty-hint">← 从左侧选择标注者，再选择一条记录</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Image popup with annotation overlay -->
+<div id="popup" onclick="closePopup()">
+  <div id="popup-wrap" onclick="event.stopPropagation()">
+    <canvas id="popup-canvas"></canvas>
+    <button id="popup-close" onclick="closePopup()">✕</button>
+    <div id="popup-label"></div>
+  </div>
+</div>
+
+<script>
+const ROLE_COLORS = {
+  primary_tool:       {r:255,g:107,b:53},
+  auxiliary_tool:     {r:78, g:205,b:196},
+  manipulated_object: {r:168,g:230,b:207},
+};
+
+let currentAnnotator = null;
+let currentTaskId = null;
+let currentPrompts = null;  // camera -> objects[]
+let allCams = [];
+
+// ── Annotator list ──────────────────────────────────────────────────────────
+async function loadAnnotators() {
+  const r = await fetch('/api/annotators');
+  const d = await r.json();
+  const total = d.annotators.reduce((s,a)=>s+a.count,0);
+  const totalAmt = d.annotators.reduce((s,a)=>s+a.amount,0);
+  document.getElementById('ann-count').textContent = d.annotators.length;
+  document.getElementById('status-bar').textContent =
+    `总 ${total} 条 · ¥${totalAmt.toFixed(0)} 元`;
+  const el = document.getElementById('annotator-list');
+  el.innerHTML = d.annotators.map(a => {
+    const warn = a.avg_min && a.avg_min < 1.0 ? ' ann-warn' : '';
+    const debugUrl = '/?debug_as=' + encodeURIComponent(a.annotator_id);
+    return `<div class="ann-card${warn}" data-aid="${escHtml(a.annotator_id)}">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="ann-name" style="flex:1">${escHtml(a.annotator_id)}</span>
+        <span class="ann-amount">¥${a.amount}</span>
+        <a href="${debugUrl}" target="_blank" title="以此志愿者身份进入补充标注界面"
+           style="font-size:10px;padding:2px 7px;background:#1a3a5a;color:#8cf;border:1px solid #336;
+                  border-radius:4px;text-decoration:none;white-space:nowrap;flex-shrink:0"
+           onclick="event.stopPropagation()">🔍 调试</a>
+      </div>
+      <div class="ann-meta">
+        ${a.count} 条
+        ${a.avg_min ? '· 均 ' + a.avg_min + 'min' : ''}
+        ${a.price_per_item === 1.5 ? '· <span style="color:#f0d060">1.5元档</span>' : ''}
+        ${a.avg_min && a.avg_min < 1.0 ? ' ⚠速度异常' : ''}
+      </div>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('.ann-card').forEach(card => {
+    card.addEventListener('click', () => selectAnnotator(card.dataset.aid, card));
+  });
+}
+
+async function selectAnnotator(annotatorId, card) {
+  document.querySelectorAll('.ann-card').forEach(c=>c.classList.remove('active'));
+  card.classList.add('active');
+  currentAnnotator = annotatorId;
+
+  document.getElementById('task-list-header').textContent = `${annotatorId} 的标注记录`;
+  document.getElementById('task-list').innerHTML = '<div style="padding:8px;font-size:11px;color:#666">加载中…</div>';
+
+  const r = await fetch('/api/my_submissions?annotator_id=' + encodeURIComponent(annotatorId));
+  const d = await r.json();
+  const tasks = d.submissions || [];
+  const el = document.getElementById('task-list');
+  if (!tasks.length) {
+    el.innerHTML = '<div style="padding:8px;font-size:11px;color:#666">无记录</div>';
+    return;
+  }
+  el.innerHTML = tasks.map((t,i) => {
+    const mins = t.annotation_time_sec ? (t.annotation_time_sec/60).toFixed(1)+'min' : '';
+    const date = t.submitted_at ? t.submitted_at.replace('T',' ').replace('Z','') : '';
+    return `<div class="task-row" data-id="${t.id}" onclick="selectTask(${t.id}, this)">
+      <span class="task-time">${mins}</span>
+      <div class="task-exp">[${i+1}] ${escHtml(t.exp)}</div>
+      <div class="task-date">${date}</div>
+    </div>`;
+  }).join('');
+  clearViewer();
+}
+
+// ── Task viewer ─────────────────────────────────────────────────────────────
+async function selectTask(taskId, row) {
+  document.querySelectorAll('.task-row').forEach(r=>r.classList.remove('active'));
+  row.classList.add('active');
+  currentTaskId = taskId;
+
+  // Load task metadata and prompts in parallel
+  const [taskRes, promptRes] = await Promise.all([
+    fetch(`/api/task/${taskId}?annotator_id=${encodeURIComponent(currentAnnotator||'admin')}`),
+    fetch(`/api/prompts/${taskId}`),
+  ]);
+  const taskData = await taskRes.json();
+  const promptData = await promptRes.json();
+  if (!taskData.task) { setStatus('任务加载失败'); return; }
+
+  currentPrompts = promptData.cameras || {};
+  renderViewer(taskData.task);
+}
+
+function renderViewer(task) {
+  const header = document.getElementById('viewer-header');
+  header.style.display = 'flex';
+  document.getElementById('empty-hint').style.display = 'none';
+
+  document.getElementById('viewer-exp').textContent = `${task.task} / ${task.exp}`;
+
+  allCams = task.cameras;
+  const camSel = document.getElementById('cam-filter');
+  camSel.innerHTML = '<option value="all">全部</option>' +
+    allCams.map(c=>`<option value="${c.camera}">${c.camera}</option>`).join('');
+
+  renderCamGrid(allCams, task, currentPrompts);
+}
+
+function filterCams() {
+  if (!currentTaskId) return;
+  const val = document.getElementById('cam-filter').value;
+  const cams = val === 'all' ? allCams : allCams.filter(c=>c.camera===val);
+  // Re-fetch task to get the data (already in allCams)
+  renderCamGrid(cams, {id: currentTaskId}, currentPrompts);
+}
+
+function renderCamGrid(cams, task, prompts) {
+  const grid = document.getElementById('cam-grid');
+  window._imgMeta = {};
+  grid.innerHTML = cams.map(cam => {
+    const kfUrls = cam.keyframe_urls || {};
+    const kfFrames = Object.keys(kfUrls).sort((a,b)=>+a-+b);
+    const camObjs = prompts[cam.camera] || [];
+
+    const roleSummary = camObjs.map(o => {
+      const cls = o.role === 'primary_tool' ? 'role-primary' :
+                  o.role === 'auxiliary_tool' ? 'role-auxiliary' : 'role-manipulated';
+      const pts = (o.points||[]).length;
+      return `<span class="role-dot ${cls}"></span>${escHtml(o.name||o.role)} ${pts}点`;
+    }).join(' &nbsp;');
+
+    const imgs = kfFrames.map(kf => {
+      const url = kfUrls[kf];
+      const dataKey = `img_${task.id}_${cam.camera}_${kf}`.replace(/[^a-zA-Z0-9_]/g,'_');
+      window._imgMeta = window._imgMeta || {};
+      window._imgMeta[dataKey] = {taskId: task.id, camera: cam.camera, frame: +kf, camObjs};
+      return `<img src="${url}" loading="lazy" title="帧 ${kf}" data-meta="${dataKey}">`;
+    }).join('');
+
+    return `<div class="cam-card">
+      <div class="cam-title">
+        📷 ${cam.camera}
+        <span style="float:right;font-size:10px">${roleSummary || '<span style="color:#c05050">未标注</span>'}</span>
+      </div>
+      <div class="cam-imgs">${imgs}</div>
+    </div>`;
+  }).join('');
+
+  grid.querySelectorAll('img[data-meta]').forEach(img => {
+    img.addEventListener('click', () => {
+      const meta = window._imgMeta[img.dataset.meta];
+      if (meta) openPopup(meta);
+    });
+  });
+}
+
+// ── Popup with annotation points overlay ────────────────────────────────────
+async function openPopup(info) {
+  const {taskId, camera, frame, camObjs} = info;
+  const canvas = document.getElementById('popup-canvas');
+  const ctx = canvas.getContext('2d');
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.src = `/api/image/${taskId}/${camera}/${frame}`;
+  await new Promise((res,rej) => { img.onload=res; img.onerror=rej; });
+
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  ctx.drawImage(img, 0, 0);
+
+  // Draw annotation points for objects annotated on this frame
+  for (const obj of camObjs) {
+    if ((obj.frame_index || 0) !== frame) continue;
+    const color = ROLE_COLORS[obj.role] || {r:200,g:200,b:200};
+    const pts = obj.points || [];
+    const labels = obj.labels || [];
+
+    for (let i = 0; i < pts.length; i++) {
+      const [x, y] = pts[i];
+      const isPos = labels[i] !== 0;
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0, Math.PI*2);
+      ctx.fillStyle = isPos
+        ? `rgba(${color.r},${color.g},${color.b},0.9)`
+        : `rgba(220,50,50,0.9)`;
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // +/- label
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(isPos?'+':'−', x, y);
+    }
+
+    // Draw box if present
+    if (obj.box && obj.box.length === 4) {
+      const [x1,y1,x2,y2] = obj.box;
+      ctx.strokeStyle = `rgba(${color.r},${color.g},${color.b},0.8)`;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x1, y1, x2-x1, y2-y1);
+    }
+  }
+
+  const labelParts = camObjs
+    .filter(o=>(o.frame_index||0)===frame)
+    .map(o=>`${o.name||o.role}: ${(o.points||[]).length}点`);
+  document.getElementById('popup-label').textContent =
+    `${camera} · 帧${frame}` + (labelParts.length ? ' · ' + labelParts.join(', ') : ' · 此帧无标注');
+
+  document.getElementById('popup').classList.add('show');
+}
+
+function closePopup() {
+  document.getElementById('popup').classList.remove('show');
+}
+
+function clearViewer() {
+  document.getElementById('viewer-header').style.display = 'none';
+  document.getElementById('cam-grid').innerHTML = '';
+  document.getElementById('empty-hint').style.display = 'flex';
+}
+
+function setStatus(msg) {
+  document.getElementById('status-bar').textContent = msg;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closePopup();
+});
+
+loadAnnotators();
+</script>
+</body>
+</html>

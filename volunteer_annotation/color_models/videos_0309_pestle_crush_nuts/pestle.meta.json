@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260305_pestle_crush_nuts_on_mortar_1",
+  "keyword": "pestle",
+  "roles": {
+    "primary_tool": {
+      "npz": "pestle.primary_tool.npz",
+      "n_fg_px": 240341,
+      "n_bg_px": 88151,
+      "n_samples": 23,
+      "mean_cx": 0.45519283055177323,
+      "mean_cy": 0.49632835746520065,
+      "std_cx": 0.25933188594768086,
+      "std_cy": 0.2891231042675557,
+      "shape": {
+        "solidity": {
+          "mean": 0.9728227853775024,
+          "std": 0.15199090540409088
+        },
+        "compactness": {
+          "mean": 2.037524461746216,
+          "std": 0.9301309585571289
+        },
+        "aspect": {
+          "mean": 2.0724663734436035,
+          "std": 0.7254464030265808
+        },
+        "extent": {
+          "mean": 0.5411701202392578,
+          "std": 0.15774862468242645
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "pestle.manipulated_object.npz",
+      "n_fg_px": 68442,
+      "n_bg_px": 32643,
+      "n_samples": 14,
+      "mean_cx": 0.45480867612005493,
+      "mean_cy": 0.4843478500992709,
+      "std_cx": 0.08239475197851344,
+      "std_cy": 0.1893673275171472,
+      "shape": {
+        "solidity": {
+          "mean": 0.9447351694107056,
+          "std": 0.10977553576231003
+        },
+        "compactness": {
+          "mean": 1.974614143371582,
+          "std": 0.6901554465293884
+        },
+        "aspect": {
+          "mean": 2.2088897228240967,
+          "std": 0.9464921355247498
+        },
+        "extent": {
+          "mean": 0.68109530210495,
+          "std": 0.09946347773075104
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "pestle.auxiliary_tool.npz",
+      "n_fg_px": 180240,
+      "n_bg_px": 44791,
+      "n_samples": 8,
+      "mean_cx": 0.4666620735677992,
+      "mean_cy": 0.5098501296830871,
+      "std_cx": 0.08702964996705592,
+      "std_cy": 0.18179713005756207,
+      "shape": {
+        "solidity": {
+          "mean": 0.9371286630630493,
+          "std": 0.08519145846366882
+        },
+        "compactness": {
+          "mean": 1.2642936706542969,
+          "std": 0.09680447727441788
+        },
+        "aspect": {
+          "mean": 1.2169442176818848,
+          "std": 0.2260967642068863
+        },
+        "extent": {
+          "mean": 0.7196085453033447,
+          "std": 0.0750415027141571
+        }
+      }
+    }
+  },
+  "template_task": "videos_0304/malletpestle_crush_nuts"
+}

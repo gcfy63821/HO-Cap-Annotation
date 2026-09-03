@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260202_bigwoodenspoon_press_sponge_in_largeshallowcontainer_1",
+  "keyword": "bigwoodenspoon",
+  "roles": {
+    "primary_tool": {
+      "npz": "bigwoodenspoon.primary_tool.npz",
+      "n_fg_px": 1058558,
+      "n_bg_px": 504828,
+      "n_samples": 93,
+      "mean_cx": 0.4444503751162823,
+      "mean_cy": 0.5626118267803024,
+      "std_cx": 0.19324744977263372,
+      "std_cy": 0.20153710366645236,
+      "shape": {
+        "solidity": {
+          "mean": 0.9163376092910767,
+          "std": 0.2290150225162506
+        },
+        "compactness": {
+          "mean": 3.4519104957580566,
+          "std": 1.4981964826583862
+        },
+        "aspect": {
+          "mean": 2.8570632934570312,
+          "std": 1.8290746212005615
+        },
+        "extent": {
+          "mean": 0.30355265736579895,
+          "std": 0.1534752994775772
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "bigwoodenspoon.manipulated_object.npz",
+      "n_fg_px": 705394,
+      "n_bg_px": 270082,
+      "n_samples": 72,
+      "mean_cx": 0.44357618642862295,
+      "mean_cy": 0.50783871665084,
+      "std_cx": 0.08979996014265912,
+      "std_cy": 0.18634202316304554,
+      "shape": {
+        "solidity": {
+          "mean": 0.9300041198730469,
+          "std": 0.16163034737110138
+        },
+        "compactness": {
+          "mean": 1.8682643175125122,
+          "std": 0.7281705141067505
+        },
+        "aspect": {
+          "mean": 1.90543794631958,
+          "std": 0.4588693380355835
+        },
+        "extent": {
+          "mean": 0.6419658064842224,
+          "std": 0.13872219622135162
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "bigwoodenspoon.auxiliary_tool.npz",
+      "n_fg_px": 989439,
+      "n_bg_px": 279727,
+      "n_samples": 31,
+      "mean_cx": 0.4647110833951283,
+      "mean_cy": 0.5351084959205233,
+      "std_cx": 0.08981349535292812,
+      "std_cy": 0.18678838761304595,
+      "shape": {
+        "solidity": {
+          "mean": 0.8051514625549316,
+          "std": 0.10920587927103043
+        },
+        "compactness": {
+          "mean": 1.6592180728912354,
+          "std": 0.46959713101387024
+        },
+        "aspect": {
+          "mean": 1.6727206707000732,
+          "std": 0.5629341006278992
+        },
+        "extent": {
+          "mean": 0.6229366064071655,
+          "std": 0.08651711046695709
+        }
+      }
+    }
+  },
+  "template_task": "videos_0202/spoon_press_sponge"
+}

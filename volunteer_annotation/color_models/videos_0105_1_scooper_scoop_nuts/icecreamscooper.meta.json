@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260305_icecreamscooper_scoop_oneball_icecream_from_plasticcup_into_purpleplate_1",
+  "keyword": "icecreamscooper",
+  "roles": {
+    "primary_tool": {
+      "npz": "icecreamscooper.primary_tool.npz",
+      "n_fg_px": 188103,
+      "n_bg_px": 88252,
+      "n_samples": 24,
+      "mean_cx": 0.4523158025765907,
+      "mean_cy": 0.5390669598592494,
+      "std_cx": 0.2530069117295445,
+      "std_cy": 0.2578509699420371,
+      "shape": {
+        "solidity": {
+          "mean": 0.8361949920654297,
+          "std": 0.09410221129655838
+        },
+        "compactness": {
+          "mean": 2.7574493885040283,
+          "std": 1.0381876230239868
+        },
+        "aspect": {
+          "mean": 2.2218832969665527,
+          "std": 1.0522726774215698
+        },
+        "extent": {
+          "mean": 0.49206551909446716,
+          "std": 0.16763196885585785
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "icecreamscooper.manipulated_object.npz",
+      "n_fg_px": 10223,
+      "n_bg_px": 5115,
+      "n_samples": 2,
+      "mean_cx": 0.6053883997519658,
+      "mean_cy": 0.5875709133530199,
+      "std_cx": 0.11517253898713006,
+      "std_cy": 0.04302980036625048,
+      "shape": {
+        "solidity": {
+          "mean": 0.986613929271698,
+          "std": 0.007576644420623779
+        },
+        "compactness": {
+          "mean": 1.3181586265563965,
+          "std": 0.1133161187171936
+        },
+        "aspect": {
+          "mean": 1.4466667175292969,
+          "std": 0.11333328485488892
+        },
+        "extent": {
+          "mean": 0.6009068489074707,
+          "std": 0.04575979709625244
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "icecreamscooper.auxiliary_tool.npz",
+      "n_fg_px": 385403,
+      "n_bg_px": 54747,
+      "n_samples": 8,
+      "mean_cx": 0.47024510859071933,
+      "mean_cy": 0.5630103307576186,
+      "std_cx": 0.08438043635979411,
+      "std_cy": 0.18154206237363035,
+      "shape": {
+        "solidity": {
+          "mean": 0.9733213782310486,
+          "std": 0.0739758089184761
+        },
+        "compactness": {
+          "mean": 1.4384558200836182,
+          "std": 0.3281426727771759
+        },
+        "aspect": {
+          "mean": 1.8644802570343018,
+          "std": 0.7636986374855042
+        },
+        "extent": {
+          "mean": 0.7589064836502075,
+          "std": 0.08160576224327087
+        }
+      }
+    }
+  },
+  "template_task": "videos_0304/scooper_scoop_icecream"
+}

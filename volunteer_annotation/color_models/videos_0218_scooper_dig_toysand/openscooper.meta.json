@@ -1,0 +1,34 @@
+{
+  "template_exp": "20260219_openscooper_dig_toy_from_large_sand_in_largeshallowcontainer_15",
+  "keyword": "openscooper",
+  "roles": {
+    "primary_tool": {
+      "npz": "openscooper.primary_tool.npz",
+      "n_fg_px": 48950,
+      "n_bg_px": 26280,
+      "n_samples": 8,
+      "mean_cx": 0.46326960504174614,
+      "mean_cy": 0.5019899788090714,
+      "std_cx": 0.08381810726285785,
+      "std_cy": 0.20601134086947243,
+      "shape": {
+        "solidity": {
+          "mean": 0.9457459449768066,
+          "std": 0.0645967647433281
+        },
+        "compactness": {
+          "mean": 1.7052407264709473,
+          "std": 0.5272708535194397
+        },
+        "aspect": {
+          "mean": 1.7788364887237549,
+          "std": 0.7605336308479309
+        },
+        "extent": {
+          "mean": 0.5243895649909973,
+          "std": 0.16298452019691467
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "template_exp": "20260219_icecreamscooper_dig_toy_from_small_sand_in_largeshallowcontainer_1",
+  "keyword": "icecreamscooper",
+  "roles": {
+    "primary_tool": {
+      "npz": "icecreamscooper.primary_tool.npz",
+      "n_fg_px": 37604,
+      "n_bg_px": 26297,
+      "n_samples": 7,
+      "mean_cx": 0.4821022334912675,
+      "mean_cy": 0.5131345014184535,
+      "std_cx": 0.08478834188451742,
+      "std_cy": 0.2307954662852319,
+      "shape": {
+        "solidity": {
+          "mean": 0.7435402870178223,
+          "std": 0.049184106290340424
+        },
+        "compactness": {
+          "mean": 3.2678890228271484,
+          "std": 1.0002583265304565
+        },
+        "aspect": {
+          "mean": 1.5408875942230225,
+          "std": 0.5085887908935547
+        },
+        "extent": {
+          "mean": 0.3288133442401886,
+          "std": 0.06857475638389587
+        }
+      }
+    }
+  }
+}

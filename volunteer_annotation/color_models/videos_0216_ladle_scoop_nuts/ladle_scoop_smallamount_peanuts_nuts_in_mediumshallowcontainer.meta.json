@@ -1,0 +1,90 @@
+{
+  "template_exp": "20260216_ladle_scoop_smallamount_peanuts_nuts_in_mediumshallowcontainer_2",
+  "keyword": "ladle_scoop_smallamount_peanuts_nuts_in_mediumshallowcontainer",
+  "roles": {
+    "primary_tool": {
+      "npz": "ladle_scoop_smallamount_peanuts_nuts_in_mediumshallowcontainer.primary_tool.npz",
+      "n_fg_px": 404904,
+      "n_bg_px": 179266,
+      "n_samples": 24,
+      "mean_cx": 0.4461501857554777,
+      "mean_cy": 0.5373183691331314,
+      "std_cx": 0.21923364127964204,
+      "std_cy": 0.19023601897542852,
+      "shape": {
+        "solidity": {
+          "mean": 0.6752991080284119,
+          "std": 0.18604011833667755
+        },
+        "compactness": {
+          "mean": 4.116073131561279,
+          "std": 1.9200314283370972
+        },
+        "aspect": {
+          "mean": 2.209916830062866,
+          "std": 1.3664870262145996
+        },
+        "extent": {
+          "mean": 0.34335294365882874,
+          "std": 0.18305888772010803
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "ladle_scoop_smallamount_peanuts_nuts_in_mediumshallowcontainer.manipulated_object.npz",
+      "n_fg_px": 190023,
+      "n_bg_px": 134373,
+      "n_samples": 15,
+      "mean_cx": 0.4492280669947635,
+      "mean_cy": 0.5167831452040014,
+      "std_cx": 0.07404521500156815,
+      "std_cy": 0.15424568844290606,
+      "shape": {
+        "solidity": {
+          "mean": 1.1819950342178345,
+          "std": 0.35500866174697876
+        },
+        "compactness": {
+          "mean": 1.7710241079330444,
+          "std": 0.6761983633041382
+        },
+        "aspect": {
+          "mean": 1.6995247602462769,
+          "std": 0.7667840123176575
+        },
+        "extent": {
+          "mean": 0.29018086194992065,
+          "std": 0.19565068185329437
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "ladle_scoop_smallamount_peanuts_nuts_in_mediumshallowcontainer.auxiliary_tool.npz",
+      "n_fg_px": 168528,
+      "n_bg_px": 55816,
+      "n_samples": 8,
+      "mean_cx": 0.4684948943000788,
+      "mean_cy": 0.5128493147517956,
+      "std_cx": 0.11537388167708577,
+      "std_cy": 0.18850336393372658,
+      "shape": {
+        "solidity": {
+          "mean": 0.8287563920021057,
+          "std": 0.19289305806159973
+        },
+        "compactness": {
+          "mean": 2.0673861503601074,
+          "std": 1.702623724937439
+        },
+        "aspect": {
+          "mean": 1.340425729751587,
+          "std": 0.23152054846286774
+        },
+        "extent": {
+          "mean": 0.6407397389411926,
+          "std": 0.1482228934764862
+        }
+      }
+    }
+  }
+}

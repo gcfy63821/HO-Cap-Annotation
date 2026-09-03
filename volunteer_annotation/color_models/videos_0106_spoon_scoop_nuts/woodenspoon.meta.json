@@ -1,0 +1,35 @@
+{
+  "template_exp": "20260106_woodenspoon_scoop_peanut_nuts_from_blackpan_1",
+  "keyword": "woodenspoon",
+  "roles": {
+    "primary_tool": {
+      "npz": "woodenspoon.primary_tool.npz",
+      "n_fg_px": 525720,
+      "n_bg_px": 269488,
+      "n_samples": 39,
+      "mean_cx": 0.40647552267715653,
+      "mean_cy": 0.5876049726535404,
+      "std_cx": 0.3289549700987375,
+      "std_cy": 0.25693320331047803,
+      "shape": {
+        "solidity": {
+          "mean": 0.8346320986747742,
+          "std": 0.15558257699012756
+        },
+        "compactness": {
+          "mean": 5.172375202178955,
+          "std": 2.0385189056396484
+        },
+        "aspect": {
+          "mean": 3.443455219268799,
+          "std": 2.5870652198791504
+        },
+        "extent": {
+          "mean": 0.3208175003528595,
+          "std": 0.15507374703884125
+        }
+      }
+    }
+  },
+  "template_task": "videos_0106/spoon_scoop_nuts"
+}

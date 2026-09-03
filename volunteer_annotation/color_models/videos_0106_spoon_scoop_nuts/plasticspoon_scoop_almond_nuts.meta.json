@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260105_plasticspoon_scoop_almond_nuts_from_deepbowl_10",
+  "keyword": "plasticspoon_scoop_almond_nuts",
+  "roles": {
+    "primary_tool": {
+      "npz": "plasticspoon_scoop_almond_nuts.primary_tool.npz",
+      "n_fg_px": 24463,
+      "n_bg_px": 23159,
+      "n_samples": 8,
+      "mean_cx": 0.42737878707773685,
+      "mean_cy": 0.5611249450153519,
+      "std_cx": 0.3301048587397476,
+      "std_cy": 0.302344998800164,
+      "shape": {
+        "solidity": {
+          "mean": 0.818545401096344,
+          "std": 0.1581798940896988
+        },
+        "compactness": {
+          "mean": 4.1337761878967285,
+          "std": 1.4554060697555542
+        },
+        "aspect": {
+          "mean": 3.1781303882598877,
+          "std": 2.081939697265625
+        },
+        "extent": {
+          "mean": 0.350287526845932,
+          "std": 0.11200166493654251
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "plasticspoon_scoop_almond_nuts.manipulated_object.npz",
+      "n_fg_px": 8431,
+      "n_bg_px": 7744,
+      "n_samples": 5,
+      "mean_cx": 0.3849996312223265,
+      "mean_cy": 0.41990537825287644,
+      "std_cx": 0.3273165682227988,
+      "std_cy": 0.2830521486180158,
+      "shape": {
+        "solidity": {
+          "mean": 1.015683889389038,
+          "std": 0.029770951718091965
+        },
+        "compactness": {
+          "mean": 1.9922428131103516,
+          "std": 0.6415413022041321
+        },
+        "aspect": {
+          "mean": 3.3857531547546387,
+          "std": 1.7095204591751099
+        },
+        "extent": {
+          "mean": 0.6644658446311951,
+          "std": 0.08071515709161758
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "plasticspoon_scoop_almond_nuts.auxiliary_tool.npz",
+      "n_fg_px": 114707,
+      "n_bg_px": 41470,
+      "n_samples": 7,
+      "mean_cx": 0.4568689338136868,
+      "mean_cy": 0.553878851484658,
+      "std_cx": 0.33073976193086774,
+      "std_cy": 0.3065077559736378,
+      "shape": {
+        "solidity": {
+          "mean": 0.7960756421089172,
+          "std": 0.2539134919643402
+        },
+        "compactness": {
+          "mean": 2.2325613498687744,
+          "std": 1.0171843767166138
+        },
+        "aspect": {
+          "mean": 2.2038543224334717,
+          "std": 1.3717010021209717
+        },
+        "extent": {
+          "mean": 0.6008217930793762,
+          "std": 0.18147781491279602
+        }
+      }
+    }
+  },
+  "template_task": "videos_0106/spoon_scoop_nuts"
+}

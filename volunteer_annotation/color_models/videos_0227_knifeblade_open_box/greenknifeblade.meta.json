@@ -1,0 +1,62 @@
+{
+  "template_exp": "20260227_greenknifeblade_open_cardboard_box_bluetape_1",
+  "keyword": "greenknifeblade",
+  "roles": {
+    "primary_tool": {
+      "npz": "greenknifeblade.primary_tool.npz",
+      "n_fg_px": 310731,
+      "n_bg_px": 99287,
+      "n_samples": 24,
+      "mean_cx": 0.468865093718515,
+      "mean_cy": 0.5145207820176235,
+      "std_cx": 0.18213320617937862,
+      "std_cy": 0.23456837518835802,
+      "shape": {
+        "solidity": {
+          "mean": 0.9194852709770203,
+          "std": 0.11477937549352646
+        },
+        "compactness": {
+          "mean": 1.963741421699524,
+          "std": 0.5813089609146118
+        },
+        "aspect": {
+          "mean": 2.0390894412994385,
+          "std": 0.9550822973251343
+        },
+        "extent": {
+          "mean": 0.6064249277114868,
+          "std": 0.125696063041687
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "greenknifeblade.manipulated_object.npz",
+      "n_fg_px": 1612095,
+      "n_bg_px": 280171,
+      "n_samples": 24,
+      "mean_cx": 0.46426516263993883,
+      "mean_cy": 0.5252092851214272,
+      "std_cx": 0.08272534504150175,
+      "std_cy": 0.18548669793026631,
+      "shape": {
+        "solidity": {
+          "mean": 0.9519060254096985,
+          "std": 0.16261717677116394
+        },
+        "compactness": {
+          "mean": 2.5580859184265137,
+          "std": 2.44976806640625
+        },
+        "aspect": {
+          "mean": 1.6855692863464355,
+          "std": 0.45413246750831604
+        },
+        "extent": {
+          "mean": 0.65952068567276,
+          "std": 0.12371895462274551
+        }
+      }
+    }
+  }
+}

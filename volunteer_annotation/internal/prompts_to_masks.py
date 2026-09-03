@@ -81,10 +81,18 @@ def cam_idx_from_name(cam):
     return int("".join(ch for ch in cam.replace("cam", "").replace("_rgb", "") if ch.isdigit()))
 
 
-def video_meta(exp_dir):
-    """(n_frames, n_cams, H, W, kind) from data00000000.h5 or raw cam*_rgb.mp4."""
+def video_meta(exp_dir, from_video=False):
+    """(n_frames, n_cams, H, W, kind) from data00000000.h5 or raw cam*_rgb.mp4.
+
+    ``from_video`` forces the mp4 path even when an h5 is present. That matters
+    for the volunteer pipeline: volunteers annotate ABSOLUTE mp4 frame indices,
+    so masks.h5 must span the whole clip. A data00000000.h5 left behind by an
+    earlier pipeline run may only cover [start_frame, end_frame), which would
+    silently truncate/misalign the masks. generate_meta.py slices the full
+    masks.h5 down to the h5's range via --masks_h5_source.
+    """
     exp_dir = Path(exp_dir)
-    if (exp_dir / H5_NAME).is_file():
+    if not from_video and (exp_dir / H5_NAME).is_file():
         with h5py.File(exp_dir / H5_NAME, "r") as f:
             s = f["imgs"].shape                       # (N, C, H, W, 3)
         return s[0], s[1], s[2], s[3], "h5"
@@ -147,7 +155,7 @@ def _logit_to_mask(logit, H, W):
 
 
 def process_camera(predictor, exp_dir, kind, H, W, cam, objects, role_to_id,
-                   mask_ds, device, max_frames):
+                   mask_ds, device, max_frames, tmp_dir=None):
     """Propagate one camera's prompts and write its label masks into mask_ds.
 
     Each object may be prompted on its OWN frame (obj['frame_index'], default 0)
@@ -156,7 +164,9 @@ def process_camera(predictor, exp_dir, kind, H, W, cam, objects, role_to_id,
     BACKWARD (from the latest prompt); the forward label wins, the reverse pass
     only fills frames an object hadn't reached yet."""
     cam_index = cam_idx_from_name(cam)
-    with tempfile.TemporaryDirectory() as td:
+    if tmp_dir:
+        os.makedirs(tmp_dir, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=tmp_dir) as td:
         img_paths = extract_camera_frames(exp_dir, cam_index, Path(td), kind, max_frames)
         n = len(img_paths)
         state = predictor.init_state(img_paths=img_paths,
@@ -207,6 +217,25 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--exp", type=str, required=True,
                     help="experiment dir (data00000000.h5 or cam*_rgb.mp4, + tool_masks/prompts/)")
+    ap.add_argument("--prompts_dir", type=str, default=None,
+                    help="where the volunteer prompt JSONs live. Default <exp>/tool_masks/prompts. "
+                         "Use this when the prompts were rsynced back into a separate tree "
+                         "(e.g. /data/robotool/_va_bundle_v2_prompts/<videos_X>/<task>/<exp>/tool_masks/prompts).")
+    ap.add_argument("--out_dir", type=str, default=None,
+                    help="where to write masks.h5 / objects.yaml / roles.yaml. Default <exp>/tool_masks. "
+                         "For the annotation pipeline this is "
+                         "<base>/<videos_X>_annotated/<task>/<exp>/tool_masks.")
+    ap.add_argument("--resume", action="store_true",
+                    help="skip entirely if out_dir/masks.h5 already has the right shape "
+                         "and objects.yaml exists")
+    ap.add_argument("--tmp_dir", type=str, default=None,
+                    help="scratch dir for the per-camera JPEG dump (default $TMPDIR). "
+                         "On the cluster point this at /dev/shm/$USER/$SLURM_JOB_ID.")
+    ap.add_argument("--from_video", action="store_true",
+                    help="always read frames from cam*_rgb.mp4, ignoring any "
+                         "data00000000.h5 in the exp dir. Use this in the pipeline: "
+                         "volunteers annotate absolute mp4 frame indices, and a "
+                         "leftover h5 may only cover a sub-range.")
     ap.add_argument("--max_frames", type=int, default=None,
                     help="propagate only the first N frames (quick test)")
     ap.add_argument("--sam2_checkpoint", type=str, default=None,
@@ -215,10 +244,30 @@ def main():
     args = ap.parse_args()
 
     exp_dir = Path(args.exp)
-    prompts_dir = exp_dir / "tool_masks" / "prompts"
-    prompt_files = sorted(prompts_dir.glob("*.json"))
+    prompts_dir = Path(args.prompts_dir) if args.prompts_dir \
+        else exp_dir / "tool_masks" / "prompts"
+    out_dir = Path(args.out_dir) if args.out_dir else exp_dir / "tool_masks"
+    prompt_files = sorted(prompts_dir.glob("cam*.json"))
     if not prompt_files:
         raise SystemExit(f"no prompt JSON in {prompts_dir}")
+    if (prompts_dir.parent / "BAD.json").is_file():
+        raise SystemExit(f"[skip] exp flagged bad by the annotator: "
+                         f"{prompts_dir.parent / 'BAD.json'}")
+
+    # --max_frames only fills a prefix, so an existing file can't be judged
+    # complete by shape alone; never resume-skip in that (test-only) mode.
+    if args.resume and args.max_frames is None \
+            and (out_dir / "masks.h5").is_file() and (out_dir / "objects.yaml").is_file():
+        want = video_meta(exp_dir, args.from_video)[:4]
+        try:
+            with h5py.File(out_dir / "masks.h5", "r") as f:
+                got = f["masks"].shape
+        except Exception:
+            got = None
+        if got == tuple(want):
+            print(f"[resume] {out_dir}/masks.h5 {got} already complete — skipping")
+            return
+        print(f"[resume] existing masks.h5 shape {got} != expected {tuple(want)}; regenerating")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ckpt = resolve_ckpt(args.sam2_checkpoint)
@@ -240,19 +289,19 @@ def main():
           ", ".join(f"{r}={role_to_id[r]}({role_name[r]})" for r in present_roles))
 
     t_start = time.time()
-    n_frames, n_cams, H, W, kind = video_meta(exp_dir)
+    n_frames, n_cams, H, W, kind = video_meta(exp_dir, args.from_video)
     out_n = n_frames if args.max_frames is None else min(args.max_frames, n_frames)
     print(f"  sequence [{kind}]: {n_frames} frames, {n_cams} cams, {H}x{W}; "
           f"{n_objects} object(s); propagating {out_n} frame(s)")
-    mask_h5 = open_mask_writer(exp_dir / "tool_masks" / "masks.h5",
-                               n_frames, n_cams, H, W)
+    mask_h5 = open_mask_writer(out_dir / "masks.h5", n_frames, n_cams, H, W)
     mask_ds = mask_h5["masks"]
     for pf in prompt_files:
         data = json.loads(pf.read_text())
         cam = data["camera"]
         t0 = time.time()
         n = process_camera(predictor, exp_dir, kind, H, W, cam, data["objects"],
-                           role_to_id, mask_ds, device, args.max_frames)
+                           role_to_id, mask_ds, device, args.max_frames,
+                           tmp_dir=args.tmp_dir)
         print(f"    {cam}: {n} frame(s) propagated in {time.time()-t0:.1f}s")
     mask_h5.close()
 
@@ -261,14 +310,14 @@ def main():
     # masks.h5 (labels 2,3) but are NOT tracked; roles.yaml documents the mapping.
     tracked = [role_name[r] for r in present_roles if r == "primary_tool"] \
         or objects_list[:1]
-    (exp_dir / "tool_masks" / "objects.yaml").write_text(
+    (out_dir / "objects.yaml").write_text(
         yaml.safe_dump({"objects": tracked}, default_flow_style=False))
     roles_doc = [{"role": r, "object_id": role_to_id[r], "name": role_name[r],
                   "tracked": (r == "primary_tool")} for r in present_roles]
-    (exp_dir / "tool_masks" / "roles.yaml").write_text(
+    (out_dir / "roles.yaml").write_text(
         yaml.safe_dump({"roles": roles_doc}, default_flow_style=False, allow_unicode=True))
     print(f"[done] masks.h5 (labels for {objects_list}) + objects.yaml (tracked={tracked}) "
-          f"+ roles.yaml in {time.time()-t_start:.1f}s -> {exp_dir / 'tool_masks'}")
+          f"+ roles.yaml in {time.time()-t_start:.1f}s -> {out_dir}")
 
 
 if __name__ == "__main__":

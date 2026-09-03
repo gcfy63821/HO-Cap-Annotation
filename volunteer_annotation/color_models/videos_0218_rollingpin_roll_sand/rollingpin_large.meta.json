@@ -1,0 +1,90 @@
+{
+  "template_exp": "20260219_rollingpin_roll_large_sand_in_cuttingboard_10",
+  "keyword": "rollingpin_large",
+  "roles": {
+    "primary_tool": {
+      "npz": "rollingpin_large.primary_tool.npz",
+      "n_fg_px": 288758,
+      "n_bg_px": 111902,
+      "n_samples": 22,
+      "mean_cx": 0.4332686278084017,
+      "mean_cy": 0.5785432518917032,
+      "std_cx": 0.24847124704661713,
+      "std_cy": 0.20041713105585912,
+      "shape": {
+        "solidity": {
+          "mean": 0.9312897324562073,
+          "std": 0.13370203971862793
+        },
+        "compactness": {
+          "mean": 2.5619428157806396,
+          "std": 0.8139182329177856
+        },
+        "aspect": {
+          "mean": 2.5934817790985107,
+          "std": 1.1802520751953125
+        },
+        "extent": {
+          "mean": 0.501433789730072,
+          "std": 0.14444099366664886
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "rollingpin_large.manipulated_object.npz",
+      "n_fg_px": 345375,
+      "n_bg_px": 127771,
+      "n_samples": 24,
+      "mean_cx": 0.46520057275910326,
+      "mean_cy": 0.5546490293371406,
+      "std_cx": 0.07709242976951251,
+      "std_cy": 0.1560655676945569,
+      "shape": {
+        "solidity": {
+          "mean": 0.9251134991645813,
+          "std": 0.0606335811316967
+        },
+        "compactness": {
+          "mean": 2.39259934425354,
+          "std": 0.9480599164962769
+        },
+        "aspect": {
+          "mean": 2.387845993041992,
+          "std": 1.2240760326385498
+        },
+        "extent": {
+          "mean": 0.5901857018470764,
+          "std": 0.10623720288276672
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "rollingpin_large.auxiliary_tool.npz",
+      "n_fg_px": 323133,
+      "n_bg_px": 58572,
+      "n_samples": 8,
+      "mean_cx": 0.46572262985398216,
+      "mean_cy": 0.567774014492496,
+      "std_cx": 0.07727027213465264,
+      "std_cy": 0.16252564059222066,
+      "shape": {
+        "solidity": {
+          "mean": 0.9900000095367432,
+          "std": 0.00928047951310873
+        },
+        "compactness": {
+          "mean": 1.8850408792495728,
+          "std": 0.6761601567268372
+        },
+        "aspect": {
+          "mean": 2.310633659362793,
+          "std": 1.141324520111084
+        },
+        "extent": {
+          "mean": 0.6650229096412659,
+          "std": 0.15369564294815063
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "template_exp": "20260223_measuringscooper_shape_kineticsand_in_purpleplate_into_triangle_1",
+  "keyword": "measuringscooper",
+  "roles": {
+    "primary_tool": {
+      "npz": "measuringscooper.primary_tool.npz",
+      "n_fg_px": 201391,
+      "n_bg_px": 80359,
+      "n_samples": 23,
+      "mean_cx": 0.4427445606095121,
+      "mean_cy": 0.5863462067955801,
+      "std_cx": 0.2533326950772029,
+      "std_cy": 0.24131081511773797,
+      "shape": {
+        "solidity": {
+          "mean": 0.8715602159500122,
+          "std": 0.0785534456372261
+        },
+        "compactness": {
+          "mean": 2.0076701641082764,
+          "std": 0.5822543501853943
+        },
+        "aspect": {
+          "mean": 1.714085340499878,
+          "std": 0.5768005847930908
+        },
+        "extent": {
+          "mean": 0.5562230348587036,
+          "std": 0.10959021002054214
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "measuringscooper.manipulated_object.npz",
+      "n_fg_px": 188263,
+      "n_bg_px": 88736,
+      "n_samples": 23,
+      "mean_cx": 0.46670373012333677,
+      "mean_cy": 0.5543922347566359,
+      "std_cx": 0.13592634162350178,
+      "std_cy": 0.2115741341025828,
+      "shape": {
+        "solidity": {
+          "mean": 0.9025336503982544,
+          "std": 0.0845707431435585
+        },
+        "compactness": {
+          "mean": 2.244670867919922,
+          "std": 0.7822452187538147
+        },
+        "aspect": {
+          "mean": 2.1487889289855957,
+          "std": 1.0713565349578857
+        },
+        "extent": {
+          "mean": 0.5655880570411682,
+          "std": 0.12392709404230118
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "measuringscooper.auxiliary_tool.npz",
+      "n_fg_px": 368364,
+      "n_bg_px": 78644,
+      "n_samples": 8,
+      "mean_cx": 0.466613674730078,
+      "mean_cy": 0.5699556122441285,
+      "std_cx": 0.10724037597065378,
+      "std_cy": 0.20345017425674103,
+      "shape": {
+        "solidity": {
+          "mean": 0.8714852333068848,
+          "std": 0.03208577632904053
+        },
+        "compactness": {
+          "mean": 1.6174325942993164,
+          "std": 0.37661343812942505
+        },
+        "aspect": {
+          "mean": 2.034522533416748,
+          "std": 0.9492676258087158
+        },
+        "extent": {
+          "mean": 0.6799280643463135,
+          "std": 0.01872589811682701
+        }
+      }
+    }
+  },
+  "template_task": "videos_0222/scooper_shape_kineticsand"
+}

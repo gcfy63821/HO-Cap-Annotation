@@ -1,0 +1,90 @@
+{
+  "template_exp": "20260219_rollingpin_roll_large_sand_in_cuttingboard_11",
+  "keyword": "rollingpin_roll_large_sand_in_cuttingboard",
+  "roles": {
+    "primary_tool": {
+      "npz": "rollingpin_roll_large_sand_in_cuttingboard.primary_tool.npz",
+      "n_fg_px": 292267,
+      "n_bg_px": 115565,
+      "n_samples": 23,
+      "mean_cx": 0.43511879367219886,
+      "mean_cy": 0.5728191293950742,
+      "std_cx": 0.24328458777683454,
+      "std_cy": 0.19653021627886108,
+      "shape": {
+        "solidity": {
+          "mean": 0.9439702033996582,
+          "std": 0.12562932074069977
+        },
+        "compactness": {
+          "mean": 2.551534414291382,
+          "std": 0.9908487200737
+        },
+        "aspect": {
+          "mean": 2.7543795108795166,
+          "std": 1.269787311553955
+        },
+        "extent": {
+          "mean": 0.4778629243373871,
+          "std": 0.10869882255792618
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "rollingpin_roll_large_sand_in_cuttingboard.manipulated_object.npz",
+      "n_fg_px": 469763,
+      "n_bg_px": 135161,
+      "n_samples": 24,
+      "mean_cx": 0.46641422737963883,
+      "mean_cy": 0.560555642251959,
+      "std_cx": 0.07564947500571916,
+      "std_cy": 0.1600266006176136,
+      "shape": {
+        "solidity": {
+          "mean": 1.0032213926315308,
+          "std": 0.18015159666538239
+        },
+        "compactness": {
+          "mean": 1.9887186288833618,
+          "std": 0.7927265167236328
+        },
+        "aspect": {
+          "mean": 2.36507248878479,
+          "std": 1.2509121894836426
+        },
+        "extent": {
+          "mean": 0.5978459119796753,
+          "std": 0.14432337880134583
+        }
+      }
+    },
+    "auxiliary_tool": {
+      "npz": "rollingpin_roll_large_sand_in_cuttingboard.auxiliary_tool.npz",
+      "n_fg_px": 322715,
+      "n_bg_px": 59182,
+      "n_samples": 8,
+      "mean_cx": 0.46554159649574933,
+      "mean_cy": 0.5681744404427379,
+      "std_cx": 0.07758928444734929,
+      "std_cy": 0.162417555148979,
+      "shape": {
+        "solidity": {
+          "mean": 0.9908066987991333,
+          "std": 0.011060166172683239
+        },
+        "compactness": {
+          "mean": 1.8980669975280762,
+          "std": 0.6817061901092529
+        },
+        "aspect": {
+          "mean": 2.3102290630340576,
+          "std": 1.1555461883544922
+        },
+        "extent": {
+          "mean": 0.6616942882537842,
+          "std": 0.15171243250370026
+        }
+      }
+    }
+  }
+}

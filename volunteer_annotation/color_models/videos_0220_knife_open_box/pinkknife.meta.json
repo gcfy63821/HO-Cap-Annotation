@@ -1,0 +1,62 @@
+{
+  "template_exp": "20260220_pinkknife_open_cardboard_box_bluetape_1",
+  "keyword": "pinkknife",
+  "roles": {
+    "primary_tool": {
+      "npz": "pinkknife.primary_tool.npz",
+      "n_fg_px": 273979,
+      "n_bg_px": 113393,
+      "n_samples": 23,
+      "mean_cx": 0.4436970124333908,
+      "mean_cy": 0.5493071264138351,
+      "std_cx": 0.26458016370693,
+      "std_cy": 0.26549111949041226,
+      "shape": {
+        "solidity": {
+          "mean": 0.9394196271896362,
+          "std": 0.06376137584447861
+        },
+        "compactness": {
+          "mean": 3.843660354614258,
+          "std": 1.9102355241775513
+        },
+        "aspect": {
+          "mean": 3.4158382415771484,
+          "std": 2.4997446537017822
+        },
+        "extent": {
+          "mean": 0.4051511585712433,
+          "std": 0.1673932820558548
+        }
+      }
+    },
+    "manipulated_object": {
+      "npz": "pinkknife.manipulated_object.npz",
+      "n_fg_px": 1879762,
+      "n_bg_px": 269187,
+      "n_samples": 24,
+      "mean_cx": 0.4655976621509362,
+      "mean_cy": 0.5183779028697518,
+      "std_cx": 0.0928280871320921,
+      "std_cy": 0.2008562303384373,
+      "shape": {
+        "solidity": {
+          "mean": 0.9929344654083252,
+          "std": 0.14422260224819183
+        },
+        "compactness": {
+          "mean": 1.8540525436401367,
+          "std": 0.818612813949585
+        },
+        "aspect": {
+          "mean": 1.404956340789795,
+          "std": 0.2325272411108017
+        },
+        "extent": {
+          "mean": 0.690509021282196,
+          "std": 0.1749931424856186
+        }
+      }
+    }
+  }
+}

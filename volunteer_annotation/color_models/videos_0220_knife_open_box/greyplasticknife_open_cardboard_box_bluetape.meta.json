@@ -1,0 +1,34 @@
+{
+  "template_exp": "20260220_greyplasticknife_open_cardboard_box_bluetape_27",
+  "keyword": "greyplasticknife_open_cardboard_box_bluetape",
+  "roles": {
+    "primary_tool": {
+      "npz": "greyplasticknife_open_cardboard_box_bluetape.primary_tool.npz",
+      "n_fg_px": 148084,
+      "n_bg_px": 86003,
+      "n_samples": 24,
+      "mean_cx": 0.47668446115569624,
+      "mean_cy": 0.49777520246396456,
+      "std_cx": 0.22267279078046517,
+      "std_cy": 0.28814857695281215,
+      "shape": {
+        "solidity": {
+          "mean": 0.9351474642753601,
+          "std": 0.05492252856492996
+        },
+        "compactness": {
+          "mean": 3.2955658435821533,
+          "std": 1.4303960800170898
+        },
+        "aspect": {
+          "mean": 2.8918673992156982,
+          "std": 1.7129452228546143
+        },
+        "extent": {
+          "mean": 0.4408968985080719,
+          "std": 0.18014179170131683
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>实验浏览器</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#111;color:#ddd;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+/* header */
+header{background:#1a1a2e;padding:8px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #333;flex-shrink:0}
+header h1{font-size:15px;color:#7eb8f7;white-space:nowrap}
+.hdr-sep{color:#444}
+
+/* filter bar */
+#filter-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+select,input[type=text]{background:#222;color:#ddd;border:1px solid #444;padding:3px 8px;font-size:12px;border-radius:4px;outline:none}
+select:focus,input:focus{border-color:#5a8fc0}
+label{font-size:12px;color:#888}
+
+/* main layout */
+#main{display:flex;flex:1;overflow:hidden}
+
+/* group panel */
+#group-panel{width:220px;border-right:1px solid #2a2a40;display:flex;flex-direction:column;flex-shrink:0;background:#161622}
+#group-search{padding:6px 8px;border-bottom:1px solid #222;background:#141420}
+#group-search input{width:100%;background:#1e1e2e;border:1px solid #333;color:#ddd;padding:4px 8px;font-size:11px;border-radius:4px}
+#group-list{flex:1;overflow-y:auto;padding:4px}
+.group-row{padding:6px 8px;border-radius:5px;cursor:pointer;margin-bottom:2px;border-left:3px solid transparent;transition:background .1s}
+.group-row:hover{background:#1e1e30}
+.group-row.active{background:#1a2a3a;border-left-color:#4a7fc1}
+.group-name{font-size:12px;color:#c8d8f0;font-weight:500;word-break:break-all}
+.group-meta{font-size:10px;color:#666;margin-top:2px;display:flex;gap:6px}
+.g-total{color:#888}
+.g-sub{color:#5dba7d}
+.g-lock{color:#d4a017}
+.g-none{color:#666}
+
+/* exp panel */
+#exp-panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#exp-header{padding:7px 12px;background:#151520;border-bottom:1px solid #222;font-size:12px;color:#888;display:flex;align-items:center;gap:8px;flex-shrink:0}
+#exp-header span{color:#c8d8f0;font-weight:600}
+#exp-counts{margin-left:auto;font-size:11px;color:#666;display:flex;gap:10px}
+
+#exp-filter-bar{padding:5px 10px;background:#141420;border-bottom:1px solid #1e1e2e;display:flex;gap:8px;align-items:center;flex-shrink:0}
+#exp-filter-bar input{background:#1e1e2e;border:1px solid #333;color:#ddd;padding:3px 8px;font-size:11px;border-radius:4px;width:180px}
+.filter-btn{background:#1e2e40;color:#7eb8f7;border:1px solid #336;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;white-space:nowrap}
+.filter-btn.active{background:#2a4a6a;border-color:#5a8fc0}
+
+#exp-list{flex:1;overflow-y:auto;padding:4px 8px}
+.exp-row{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:5px;margin-bottom:2px;border-left:3px solid transparent;cursor:default;font-size:11px}
+.exp-row:hover{background:#1a1a28}
+.exp-row.human{border-left-color:#5dba7d}
+.exp-row.auto-only{border-left-color:#7eb8f7}
+.exp-row.none-ann{border-left-color:#333}
+
+.exp-num{color:#555;width:30px;flex-shrink:0;text-align:right;font-size:10px}
+.exp-name{flex:1;color:#b8c8e0;word-break:break-all;line-height:1.3}
+.exp-name small{color:#555;font-size:10px;display:block}
+
+.badge{font-size:9px;padding:1px 5px;border-radius:3px;white-space:nowrap;flex-shrink:0}
+.badge-sub{background:#1a3a1a;color:#5dba7d;border:1px solid #2a6a2a}
+.badge-lock{background:#2a2200;color:#d4a017;border:1px solid #554400}
+.badge-unassign{background:#1e1e1e;color:#555;border:1px solid #333}
+
+.ann-tag{font-size:10px;white-space:nowrap;flex-shrink:0}
+.ann-human{color:#5dba7d}
+.ann-auto{color:#7eb8f7}
+.ann-none{color:#444}
+
+.open-btn{font-size:10px;padding:2px 8px;background:#1a3050;color:#7eb8f7;border:1px solid #2a5080;border-radius:4px;text-decoration:none;white-space:nowrap;flex-shrink:0}
+.open-btn:hover{background:#1e4070;border-color:#4a80c0}
+
+#empty-msg{display:flex;align-items:center;justify-content:center;flex:1;color:#444;font-size:13px}
+
+/* scrollbar */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:#111}
+::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>实验浏览器</h1>
+  <span class="hdr-sep">|</span>
+  <div id="filter-bar">
+    <label>分类方式</label>
+    <select id="by-sel" onchange="loadGroups()">
+      <option value="primary_tool">操作工具</option>
+      <option value="task">任务类型</option>
+      <option value="manipulated_object">操作对象</option>
+      <option value="container">容器/辅助</option>
+    </select>
+    <label>数据集</label>
+    <select id="prefix-sel" onchange="loadGroups()">
+      <option value="">全部</option>
+      <option value="videos_0202">0202</option>
+      <option value="videos_020">2月</option>
+      <option value="videos_01">1月</option>
+    </select>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
+    <a href="/admin" style="color:#888;font-size:11px;text-decoration:none">管理员视图</a>
+    <a href="/" style="color:#7eb8f7;font-size:12px;text-decoration:none">← 标注界面</a>
+  </div>
+</header>
+
+<div id="main">
+
+  <!-- left: group list -->
+  <div id="group-panel">
+    <div id="group-search">
+      <input type="text" id="group-q" placeholder="搜索…" oninput="filterGroups()">
+    </div>
+    <div id="group-list"><div style="padding:8px;font-size:11px;color:#555">加载中…</div></div>
+  </div>
+
+  <!-- right: exp list -->
+  <div id="exp-panel">
+    <div id="exp-header">
+      <span id="exp-group-name">—</span>
+      <div id="exp-counts"></div>
+    </div>
+    <div id="exp-filter-bar">
+      <input type="text" id="exp-q" placeholder="搜索实验…" oninput="filterExps()">
+      <button class="filter-btn active" id="btn-all" onclick="setStatusFilter('all',this)">全部</button>
+      <button class="filter-btn" id="btn-human" onclick="setStatusFilter('human',this)">👤 有人工</button>
+      <button class="filter-btn" id="btn-auto" onclick="setStatusFilter('auto',this)">🤖 有自动</button>
+      <button class="filter-btn" id="btn-none" onclick="setStatusFilter('none',this)">○ 无标注</button>
+    </div>
+    <div id="exp-list"><div id="empty-msg">← 从左侧选择一个分组</div></div>
+  </div>
+
+</div>
+
+<script>
+let allGroups = [];
+let allExps = [];
+let currentBy = 'primary_tool';
+let currentPrefix = '';
+let currentGroup = null;
+let statusFilter = 'all';
+
+// ── Groups ──────────────────────────────────────────────────────────────────
+async function loadGroups() {
+  currentBy = document.getElementById('by-sel').value;
+  currentPrefix = document.getElementById('prefix-sel').value;
+  currentGroup = null;
+  allExps = [];
+
+  document.getElementById('group-list').innerHTML =
+    '<div style="padding:8px;font-size:11px;color:#555">加载中…</div>';
+  document.getElementById('exp-list').innerHTML =
+    '<div id="empty-msg">← 从左侧选择一个分组</div>';
+  document.getElementById('exp-group-name').textContent = '—';
+  document.getElementById('exp-counts').innerHTML = '';
+
+  const url = `/api/browse/groups?by=${currentBy}&task_prefix=${encodeURIComponent(currentPrefix)}`;
+  const r = await fetch(url);
+  const d = await r.json();
+  allGroups = d.groups || [];
+  renderGroups(allGroups);
+}
+
+function renderGroups(groups) {
+  const el = document.getElementById('group-list');
+  if (!groups.length) {
+    el.innerHTML = '<div style="padding:8px;font-size:11px;color:#555">无数据</div>';
+    return;
+  }
+  el.innerHTML = groups.map((g,i) => {
+    const active = g.name === currentGroup ? ' active' : '';
+    return `<div class="group-row${active}" onclick="selectGroup('${esc(g.name)}',this)">
+      <div class="group-name">${esc(g.name)}</div>
+      <div class="group-meta">
+        <span class="g-total">${g.total}条</span>
+        ${g.submitted ? `<span class="g-sub">✓${g.submitted}</span>` : ''}
+        ${g.locked    ? `<span class="g-lock">🔒${g.locked}</span>`    : ''}
+        ${g.unassigned? `<span class="g-none">○${g.unassigned}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filterGroups() {
+  const q = document.getElementById('group-q').value.toLowerCase();
+  const filtered = q ? allGroups.filter(g => g.name.toLowerCase().includes(q)) : allGroups;
+  renderGroups(filtered);
+}
+
+// ── Exps ────────────────────────────────────────────────────────────────────
+async function selectGroup(name, rowEl) {
+  document.querySelectorAll('.group-row').forEach(r => r.classList.remove('active'));
+  rowEl.classList.add('active');
+  currentGroup = name;
+
+  document.getElementById('exp-group-name').textContent = name;
+  document.getElementById('exp-list').innerHTML =
+    '<div style="padding:12px;font-size:11px;color:#555">加载中…</div>';
+  document.getElementById('exp-counts').innerHTML = '';
+
+  const url = `/api/browse/exps?by=${currentBy}&name=${encodeURIComponent(name)}&task_prefix=${encodeURIComponent(currentPrefix)}`;
+  const r = await fetch(url);
+  const d = await r.json();
+  allExps = d.exps || [];
+  renderExps(applyFilters(allExps));
+  updateCounts(allExps);
+}
+
+function applyFilters(exps) {
+  const q = document.getElementById('exp-q').value.toLowerCase();
+  return exps.filter(e => {
+    if (q && !e.exp.toLowerCase().includes(q)) return false;
+    if (statusFilter === 'human' && e.human_cams === 0) return false;
+    if (statusFilter === 'auto'  && e.auto_cams  === 0) return false;
+    if (statusFilter === 'none'  && (e.human_cams > 0 || e.auto_cams > 0)) return false;
+    return true;
+  });
+}
+
+function renderExps(exps) {
+  const el = document.getElementById('exp-list');
+  if (!exps.length) {
+    el.innerHTML = '<div style="padding:12px;font-size:11px;color:#555">无匹配实验</div>';
+    return;
+  }
+
+  el.innerHTML = exps.map((e, i) => {
+    const annClass = e.human_cams > 0 ? 'human' : e.auto_cams > 0 ? 'auto-only' : 'none-ann';
+    const badgeCls = e.status === 'submitted' ? 'badge-sub' :
+                     e.status === 'locked'    ? 'badge-lock' : 'badge-unassign';
+    const badgeText = e.status === 'submitted' ? '✓已提交' :
+                      e.status === 'locked'    ? '🔒锁定' : '○未分配';
+
+    // short exp display: strip date prefix + trailing number + container part
+    const coreName = e.exp
+      .replace(/^\d{8}_/, '')
+      .replace(/_\d+$/, '')
+      .replace(/_in_.+$/, '')
+      .replace(/_from_.+$/, '');
+    const expNum = (e.exp.match(/_(\d+)$/) || [])[1] || '';
+
+    const humanTag = e.human_cams > 0
+      ? `<span class="ann-tag ann-human">👤${e.human_cams}cam</span>`
+      : `<span class="ann-tag ann-none">👤—</span>`;
+    const autoTag = e.auto_cams > 0
+      ? `<span class="ann-tag ann-auto">🤖${e.auto_cams}cam</span>`
+      : `<span class="ann-tag ann-none">🤖—</span>`;
+
+    const openUrl = `/?open_task=${e.id}`;
+
+    return `<div class="exp-row ${annClass}">
+      <span class="exp-num">#${expNum}</span>
+      <span class="exp-name">
+        ${esc(coreName)}
+        <small>${esc(e.task)}</small>
+      </span>
+      <span class="badge ${badgeCls}">${badgeText}</span>
+      ${humanTag}${autoTag}
+      <a class="open-btn" href="${openUrl}" target="_blank">打开标注</a>
+    </div>`;
+  }).join('');
+}
+
+function updateCounts(exps) {
+  const human = exps.filter(e => e.human_cams > 0).length;
+  const auto  = exps.filter(e => e.auto_cams > 0 && e.human_cams === 0).length;
+  const none  = exps.filter(e => e.human_cams === 0 && e.auto_cams === 0).length;
+  document.getElementById('exp-counts').innerHTML =
+    `<span style="color:#5dba7d">👤${human}</span>` +
+    `<span style="color:#7eb8f7">🤖${auto}</span>` +
+    `<span style="color:#555">○${none}</span>`;
+}
+
+function filterExps() {
+  renderExps(applyFilters(allExps));
+}
+
+function setStatusFilter(val, btn) {
+  statusFilter = val;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  filterExps();
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// init
+loadGroups();
+</script>
+</body>
+</html>
