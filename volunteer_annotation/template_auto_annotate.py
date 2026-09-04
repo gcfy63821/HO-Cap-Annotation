@@ -22,6 +22,12 @@ import sys, json, argparse, cv2, re, sqlite3, datetime
 import numpy as np
 from pathlib import Path
 from collections import defaultdict
+try:
+    from depth_utils import (load_depth, depth_png_path, modal_depth, depth_best_point,
+                             depth_cross_camera_iou, depth_reproject_prompts)
+    _DEPTH_AVAILABLE = True
+except ImportError:
+    _DEPTH_AVAILABLE = False
 
 ROOT = Path(__file__).resolve().parents[0]
 CLOUD_DIR = ROOT / "cloud"
@@ -300,6 +306,7 @@ def sam2_verify_refine(
     cx: float, cy: float,
     matcher: "ColorMatcher | None",
     decoder,
+    depth_m: "np.ndarray | None" = None,
 ) -> tuple[np.ndarray | None, str, list[tuple[float, float]], list[tuple[float, float]]]:
     """
     用 SAM2 decode 验证候选点并精炼坐标。
@@ -382,9 +389,27 @@ def sam2_verify_refine(
             cv2.circle(suppressed, (int(cx_ref), int(cy_ref)), 40, 999.0, -1)
             min_val = suppressed.min()
             if min_val < COLOR_MASK_MAX:
-                min_idx = int(np.argmin(suppressed))
-                ey, ex = divmod(min_idx, W)
-                extra_pos_pts.append((float(ex), float(ey)))
+                if _DEPTH_AVAILABLE and depth_m is not None:
+                    # 深度辅助：从颜色好的区域中选深度最接近物体的点
+                    obj_depth = modal_depth(depth_m, mask)
+                    if obj_depth is not None:
+                        candidate_mask = (suppressed < COLOR_MASK_MAX)
+                        pt = depth_best_point(suppressed, depth_m, candidate_mask,
+                                              target_depth=obj_depth)
+                        if pt is not None:
+                            extra_pos_pts.append(pt)
+                        else:
+                            min_idx = int(np.argmin(suppressed))
+                            ey, ex = divmod(min_idx, W)
+                            extra_pos_pts.append((float(ex), float(ey)))
+                    else:
+                        min_idx = int(np.argmin(suppressed))
+                        ey, ex = divmod(min_idx, W)
+                        extra_pos_pts.append((float(ex), float(ey)))
+                else:
+                    min_idx = int(np.argmin(suppressed))
+                    ey, ex = divmod(min_idx, W)
+                    extra_pos_pts.append((float(ex), float(ey)))
     else:
         cx_ref, cy_ref = float(xs.mean()), float(ys.mean())
 
@@ -483,7 +508,8 @@ def get_exp_keyframes(task: str, exp: str) -> dict[str, list[int]]:
 
 def _predict_single_cam_frame(
     task, exp, cam, frame, store, matchers, min_feat_sim, color_threshold,
-    embed_path, img_path, decoder
+    embed_path, img_path, decoder,
+    depth_m=None,
 ) -> dict[str, tuple | None]:
     """
     对单个相机 × 关键帧预测所有 role 的位置。
@@ -502,7 +528,7 @@ def _predict_single_cam_frame(
                 embed, store, role, min_sim=min_feat_sim, cam=cam)
             if raw_pt is not None and embed_path.exists():
                 refined, _, negs, pos = sam2_verify_refine(
-                    embed_path, img, *raw_pt, matcher, decoder)
+                    embed_path, img, *raw_pt, matcher, decoder, depth_m=depth_m)
                 if refined is not None:
                     center, conf, method, extra_negs, extra_pos = refined, feat_conf, "feature", negs, pos
 
@@ -511,7 +537,7 @@ def _predict_single_cam_frame(
             if raw_color is not None and color_conf >= 0.45:
                 if embed_path.exists():
                     refined_c, _, negs_c, pos_c = sam2_verify_refine(
-                        embed_path, img, *raw_color, matcher, decoder)
+                        embed_path, img, *raw_color, matcher, decoder, depth_m=depth_m)
                     if refined_c is not None:
                         center, conf, method, extra_negs, extra_pos = refined_c, color_conf, "color", negs_c, pos_c
                 else:
@@ -562,10 +588,16 @@ def annotate_exp(task: str, exp: str,
         for frame in keyframes:
             embed_path = BUNDLE / task / exp / f"{cam}.kf{frame}.embed.npz"
             img_path   = BUNDLE / task / exp / f"{cam}.kf{frame}.jpg"
+            # Load depth if available (depth PNG uses frame index directly)
+            depth_m = None
+            if _DEPTH_AVAILABLE:
+                dp = depth_png_path(BUNDLE, task, exp, cam_id, frame)
+                depth_m = load_depth(dp)
             all_preds[frame][cam] = _predict_single_cam_frame(
                 task, exp, cam, frame, store, matchers,
                 min_feat_sim, color_threshold,
-                embed_path, img_path, decoder
+                embed_path, img_path, decoder,
+                depth_m=depth_m,
             )
 
     # ── 阶段 2：多视角投票，修正各相机坐标 ────────────────────────────────────
@@ -607,6 +639,122 @@ def annotate_exp(task: str, exp: str,
                     pred = preds.get(role)
                     if pred is not None:
                         voted_centers[frame][role][cam] = pred
+
+    # ── 阶段 2.5：深度多视角筛选 — 用 anchor 相机重投影修正 suspect 相机 ────────
+    # 条件：深度可用 + 标定可用 + decoder 可用
+    if _DEPTH_AVAILABLE and calib_available and decoder is not None:
+        calib = load_calibration(task)
+
+        for frame in all_frames:
+            for role in roles:
+                # 1. 对所有有预测的相机解码 SAM2 mask
+                frame_masks: dict[int, np.ndarray] = {}  # cam_id → bool mask
+                for cam in cam_kfs:
+                    pred = voted_centers.get(frame, {}).get(role, {}).get(cam)
+                    if pred is None:
+                        continue
+                    center = pred[0]
+                    embed_path = BUNDLE / task / exp / f"{cam}.kf{frame}.embed.npz"
+                    if not embed_path.exists():
+                        continue
+                    try:
+                        mask, score = decoder.infer(
+                            embed_path,
+                            [[float(center[0]), float(center[1])]],
+                            [1],
+                        )
+                        if score >= SAM2_SCORE_MIN and int(mask.sum()) >= SAM2_MASK_MIN_PX:
+                            frame_masks[cam_name_to_id(cam)] = mask.astype(bool)
+                    except Exception:
+                        pass
+
+                if len(frame_masks) < 3:
+                    continue
+
+                # 2. 加载深度 + 标定
+                depths: dict[int, np.ndarray] = {}
+                Ks: dict[int, np.ndarray] = {}
+                T_cws: dict[int, np.ndarray] = {}
+                T_wcs: dict[int, np.ndarray] = {}
+                for cam_id in frame_masks:
+                    dp = depth_png_path(BUNDLE, task, exp, cam_id, frame)
+                    d = load_depth(dp)
+                    if d is None or cam_id not in calib:
+                        continue
+                    depths[cam_id] = d
+                    c = calib[cam_id]
+                    Ks[cam_id]    = np.asarray(c["K"],     dtype=np.float32)
+                    T_cws[cam_id] = np.asarray(c["T_c2w"], dtype=np.float32)
+                    T_wcs[cam_id] = np.linalg.inv(c["T_c2w"]).astype(np.float32)
+
+                # 深度必须至少有 3 个相机才做筛选
+                depth_cams = set(frame_masks) & set(depths)
+                if len(depth_cams) < 3:
+                    continue
+
+                masks_d = {c: frame_masks[c] for c in depth_cams}
+
+                # 3. 计算跨相机 depth IoU
+                iou_res = depth_cross_camera_iou(masks_d, depths, Ks, T_cws, T_wcs)
+
+                anchor_ids = {c for c, r in iou_res.items() if r["mean_iou"] > 0.35}
+                suspect_ids = {c for c, r in iou_res.items() if r["mean_iou"] < 0.20}
+                if not anchor_ids or not suspect_ids:
+                    continue
+
+                # 4. 为每个 suspect 相机生成重投影 prompt，重跑 SAM2
+                a_masks  = {c: masks_d[c]    for c in anchor_ids}
+                a_depths = {c: depths[c]     for c in anchor_ids}
+                a_Ks     = {c: Ks[c]         for c in anchor_ids}
+                a_T_cws  = {c: T_cws[c]      for c in anchor_ids}
+                H, W = next(iter(masks_d.values())).shape
+
+                for tgt_id in suspect_ids:
+                    if tgt_id not in depths:
+                        continue
+                    cam = f"cam{tgt_id}_rgb"
+                    if cam not in cam_kfs:
+                        continue
+
+                    pos_pts, neg_pts = depth_reproject_prompts(
+                        a_masks, a_depths, a_Ks, a_T_cws,
+                        T_wcs[tgt_id], Ks[tgt_id], H, W,
+                    )
+                    if not pos_pts:
+                        continue
+
+                    embed_path = BUNDLE / task / exp / f"{cam}.kf{frame}.embed.npz"
+                    if not embed_path.exists():
+                        continue
+
+                    # 构造 SAM2 点列表：pos_pts 正样本 + neg_pts 负样本
+                    all_pts = [[float(x), float(y)] for x, y in pos_pts + neg_pts]
+                    all_lbls = [1] * len(pos_pts) + [0] * len(neg_pts)
+
+                    try:
+                        new_mask, new_score = decoder.infer(embed_path, all_pts, all_lbls)
+                    except Exception:
+                        continue
+
+                    if (new_score < SAM2_SCORE_MIN
+                            or int(new_mask.sum()) < SAM2_MASK_MIN_PX
+                            or int(new_mask.sum()) > H * W * SAM2_MASK_MAX_RT):
+                        continue
+
+                    # 采用第一个正样本点的位置作为新的 center
+                    new_ys, new_xs = np.where(new_mask)
+                    new_cx, new_cy = float(new_xs.mean()), float(new_ys.mean())
+                    new_center = np.array([new_cx, new_cy])
+
+                    existing = voted_centers[frame][role].get(cam)
+                    old_conf = existing[1] if existing is not None else 0.4
+                    voted_centers[frame][role][cam] = (
+                        new_center,
+                        max(old_conf, float(new_score)),
+                        (existing[2] if existing else "depth_reproj") + "+depth_reproj",
+                        neg_pts,   # mask-boundary negatives
+                        pos_pts[1:] if len(pos_pts) > 1 else [],
+                    )
 
     # ── 阶段 3：生成 prompt 并写入文件 ────────────────────────────────────────
     for cam, keyframes in cam_kfs.items():

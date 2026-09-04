@@ -35,6 +35,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "cloud"))
 
+try:
+    from depth_utils import load_depth, depth_png_path, depth_cross_camera_iou
+    _DEPTH_AVAILABLE = True
+except ImportError:
+    _DEPTH_AVAILABLE = False
+
 BUNDLE_DIR = Path("/data/robotool/_va_bundle_v2")
 AUTO_DIR = Path("/data/robotool/_va_bundle_v2_auto_prompts")
 HUMAN_DIR = Path("/data/robotool/_va_bundle_v2_prompts")
@@ -136,6 +142,9 @@ def eval_frame(
     decoder,
     role: str,
     color_matcher=None,
+    bundle_dir: Optional[Path] = None,
+    task: str = "",
+    exp: str = "",
 ) -> dict:
     """
     Returns a quality-metrics dict for one frame across all cameras:
@@ -226,6 +235,31 @@ def eval_frame(
             frac = float((border_sc < 1.05).mean())  # tool-colored border pixels
             border_fracs.append(frac)
 
+    # ── Depth cross-camera IoU ────────────────────────────────────────────────
+    depth_iou_mean = None
+    if _DEPTH_AVAILABLE and bundle_dir is not None and task and exp and calib:
+        depths = {}
+        for cid in cam_ids:
+            if cid not in masks:
+                continue
+            dp = depth_png_path(bundle_dir, task, exp, cid, frame_idx)
+            dm = load_depth(dp)
+            if dm is not None:
+                depths[cid] = dm
+        if len(depths) >= 2:
+            valid_cids = [c for c in cam_ids if c in masks and c in depths and c in calib]
+            if len(valid_cids) >= 2:
+                d_iou = depth_cross_camera_iou(
+                    masks={c: masks[c] for c in valid_cids},
+                    depths={c: depths[c] for c in valid_cids},
+                    Ks={c: calib[c]["K"] for c in valid_cids},
+                    T_cws={c: calib[c]["T_cw"] for c in valid_cids},
+                    T_wcs={c: calib[c]["T_wc"] for c in valid_cids},
+                )
+                if d_iou:
+                    all_ious = [v["mean_iou"] for v in d_iou.values()]
+                    depth_iou_mean = round(float(np.mean(all_ious)), 3)
+
     result = {
         "frame": frame_idx,
         "n_cams": len(cam_ids),
@@ -236,6 +270,8 @@ def eval_frame(
     if proj_inside:
         result["proj_inside_frac"] = round(float(np.mean(proj_inside)), 3)
         result["proj_dist_mean_px"] = round(float(np.mean(proj_dists)), 1) if proj_dists else None
+    if depth_iou_mean is not None:
+        result["depth_iou_mean"] = depth_iou_mean
     if border_fracs:
         result["border_tool_frac_max"] = round(max(border_fracs), 3)
 
@@ -294,7 +330,8 @@ def eval_experiment(
         if len(prompts_by_cam) < 2:
             continue
 
-        m = eval_frame(exp_dir, frame_idx, prompts_by_cam, calib, decoder, role, color_matcher)
+        m = eval_frame(exp_dir, frame_idx, prompts_by_cam, calib, decoder, role, color_matcher,
+                       bundle_dir=BUNDLE_DIR, task=task, exp=exp_name)
         if m:
             frame_results.append(m)
 
@@ -314,6 +351,7 @@ def eval_experiment(
         "sam2_score_mean": _mean("sam2_score_mean"),
         "proj_inside_frac_mean": _mean("proj_inside_frac"),
         "proj_dist_mean_px": _mean("proj_dist_mean_px"),
+        "depth_iou_mean": _mean("depth_iou_mean"),
         "border_tool_frac_max_mean": _mean("border_tool_frac_max"),
         "frames": frame_results,
     }
@@ -322,6 +360,8 @@ def eval_experiment(
     if agg["area_ratio_min_mean"] is not None and agg["area_ratio_min_mean"] < 0.45:
         suspect = True
     if agg["proj_inside_frac_mean"] is not None and agg["proj_inside_frac_mean"] < 0.7:
+        suspect = True
+    if agg["depth_iou_mean"] is not None and agg["depth_iou_mean"] < 0.3:
         suspect = True
     if agg["border_tool_frac_max_mean"] is not None and agg["border_tool_frac_max_mean"] > 0.3:
         suspect = True
@@ -473,7 +513,8 @@ def main():
 
         if all_results:
             for key in ("area_ratio_min_mean", "proj_inside_frac_mean",
-                        "sam2_score_min_mean", "border_tool_frac_max_mean"):
+                        "depth_iou_mean", "sam2_score_min_mean",
+                        "border_tool_frac_max_mean"):
                 vals = [r[key] for r in all_results if r.get(key) is not None]
                 if vals:
                     print(f"  {key:35s}: mean={np.mean(vals):.3f}  min={np.min(vals):.3f}")
