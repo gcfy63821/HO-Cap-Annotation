@@ -107,7 +107,7 @@ mkdir -p "$BUNDLE"
 > "$ALL_MANIFEST"
 for VR in "${ROOTS[@]}"; do
     [[ -d "$VR" ]] || { echo "[skip] not a dir: $VR"; continue; }
-    # Enumerate H5 exp dirs; filter out already-done ones unless --force
+    # Enumerate exp dirs (H5 or mkv); filter out already-done ones unless --force
     python3 - "$VR" "$BUNDLE" $([[ "$FORCE" == "1" ]] && echo "force") << 'PY'
 import sys
 from pathlib import Path
@@ -116,7 +116,12 @@ root = Path(sys.argv[1])
 bundle = Path(sys.argv[2])
 force = len(sys.argv) > 3
 
-exps = sorted({p.parent for p in root.rglob("data00000000.h5")})
+# Support both H5 and raw mkv/mp4 source formats
+exps = {p.parent for p in root.rglob("data00000000.h5")}
+exps |= {p.parent for p in root.rglob("cam0_depth.mkv")}
+exps |= {p.parent for p in root.rglob("cam0_depth.mp4")}
+exps = sorted(exps)
+
 pending = []
 for e in exps:
     rel = None
