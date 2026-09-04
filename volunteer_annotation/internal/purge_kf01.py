@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Remove the 0.1-fraction keyframe files from every experiment in the bundle.
+"""Remove a specific fraction keyframe from every experiment in the bundle.
 
 For each experiment:
-  - reads _manifest.json to find n_frames and the kf index at frac 0.1
+  - reads _manifest.json to find n_frames and the kf index at the given frac
   - deletes cam*_rgb.kf{idx}.jpg and cam*_rgb.kf{idx}.embed.npz (if present)
   - rewrites _manifest.json with that index removed from every camera's keyframes
 
 Safety:
   - dry_run mode (default) only prints what would be deleted
-  - never touches kf0 / kf at frac >= 0.2
+  - never removes kf0 (frame index 0)
 
 Usage:
   # Dry run (safe default):
-  python purge_kf01.py --bundle /data/robotool/_va_bundle_v2
+  python purge_kf01.py --bundle /data/robotool/_va_bundle_v2 --frac 0.2
 
   # Actually delete:
-  python purge_kf01.py --bundle /data/robotool/_va_bundle_v2 --execute
+  python purge_kf01.py --bundle /data/robotool/_va_bundle_v2 --frac 0.2 --execute
 
   # Limit to specific months:
-  python purge_kf01.py --bundle /data/robotool/_va_bundle_v2 --months videos_0204 videos_0209 --execute
+  python purge_kf01.py --bundle /data/robotool/_va_bundle_v2 --frac 0.1 --months videos_0204 --execute
 """
 
 import argparse
@@ -28,20 +28,20 @@ import sys
 from pathlib import Path
 
 
-def kf01_idx(n_frames: int) -> int:
-    return max(0, min(round(0.1 * (n_frames - 1)), n_frames - 1))
+def frac_to_idx(frac: float, n_frames: int) -> int:
+    return max(0, min(round(frac * (n_frames - 1)), n_frames - 1))
 
 
-def purge_exp(manifest_path: Path, execute: bool) -> dict:
+def purge_exp(manifest_path: Path, frac: float, execute: bool) -> dict:
     data = json.loads(manifest_path.read_text())
     cams = data.get("cameras", [])
     if not cams:
         return {"status": "skip_no_cams"}
 
     n_frames = cams[0].get("n_frames", 1)
-    idx = kf01_idx(n_frames)
+    idx = frac_to_idx(frac, n_frames)
 
-    # Safety: never remove frame 0 (and guard against 2-frame edge cases)
+    # Safety: never remove frame 0
     if idx == 0:
         return {"status": "skip_idx0"}
 
@@ -63,7 +63,7 @@ def purge_exp(manifest_path: Path, execute: bool) -> dict:
 
     if not execute:
         print(f"  [dry] {exp_dir.parent.name}/{exp_dir.name}: "
-              f"n={n_frames} kf01={idx}, would delete {len(to_delete)} files")
+              f"n={n_frames} kf{frac}={idx}, would delete {len(to_delete)} files")
         return {"status": "dry", "idx": idx, "n_delete": len(to_delete)}
 
     # Delete files
@@ -82,6 +82,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bundle", required=True, help="bundle root directory")
+    ap.add_argument("--frac", type=float, default=0.1,
+                    help="keyframe fraction to remove (default: 0.1)")
     ap.add_argument("--months", nargs="*", default=None,
                     help="limit to these month folders (e.g. videos_0204 videos_0209)")
     ap.add_argument("--execute", action="store_true",
@@ -93,7 +95,7 @@ def main():
         sys.exit(f"Bundle not found: {bundle}")
 
     mode = "EXECUTE" if args.execute else "DRY-RUN"
-    print(f"[purge_kf01] mode={mode}  bundle={bundle}")
+    print(f"[purge_kf01] mode={mode}  frac={args.frac}  bundle={bundle}")
 
     # Collect manifests
     if args.months:
@@ -113,7 +115,7 @@ def main():
     total_would_delete = 0
 
     for mp in manifests:
-        r = purge_exp(mp, args.execute)
+        r = purge_exp(mp, args.frac, args.execute)
         counts[r["status"]] = counts.get(r["status"], 0) + 1
         if r["status"] == "done":
             total_deleted += r.get("deleted", 0)
