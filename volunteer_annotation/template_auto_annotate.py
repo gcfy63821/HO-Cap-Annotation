@@ -91,8 +91,10 @@ class ColorMatcher:
         self.fg_hsv = z["fg_hsv"].astype(np.float32)   # (N, 3)
         self.bg_lab = z["bg_lab"].astype(np.float32) if len(z["bg_lab"]) > 0 \
                       else np.zeros((0, 3), np.float32)
-        self.mean_cx = meta.get("mean_cx", 0.5)
-        self.mean_cy = meta.get("mean_cy", 0.5)
+        self.mean_cx  = meta.get("mean_cx", 0.5)
+        self.mean_cy  = meta.get("mean_cy", 0.5)
+        self.n_fg_px  = int(meta.get("n_fg_px", 0))
+        self.n_samples = int(meta.get("n_samples", 1))
 
         # 形状统计（可选，旧版 NPZ 没有则禁用形状验证）
         self.shape_stats = None
@@ -110,6 +112,27 @@ class ColorMatcher:
                 "log_hu_std":       z["shape_log_hu_std"].astype(np.float32),
             }
         self._build_stats()
+
+    def bbox_estimate(self, cx: float, cy: float, H: int, W: int,
+                      padding: float = 1.35) -> list[float] | None:
+        """从颜色模型的前景像素数 + 形状长宽比估算目标 bbox [x1,y1,x2,y2]。
+        使用旋转不变的正方形 bbox（对角线半径），适用于任意姿态。"""
+        if self.n_fg_px <= 0 or self.n_samples <= 0:
+            return None
+        area = self.n_fg_px / max(self.n_samples, 1)
+        aspect = 1.0
+        if self.shape_stats is not None:
+            aspect = max(1.0, self.shape_stats["aspect_mean"])
+        long_side  = np.sqrt(area * aspect) * padding
+        short_side = np.sqrt(area / aspect) * padding
+        half_r = 0.5 * float(np.sqrt(long_side ** 2 + short_side ** 2))
+        half_r = max(half_r, 40.0)
+        return [
+            float(max(0,   cx - half_r)),
+            float(max(0,   cy - half_r)),
+            float(min(W-1, cx + half_r)),
+            float(min(H-1, cy + half_r)),
+        ]
 
     def _build_stats(self):
         """计算颜色统计量（HSV + LAB 双通道）。"""
@@ -224,31 +247,39 @@ class ColorMatcher:
 
     def background_points(self, img_bgr: np.ndarray,
                           obj_cx: float, obj_cy: float,
-                          n: int = 2) -> list[tuple[float, float]]:
+                          n: int = 2,
+                          extra_pos_pts: list[tuple[float, float]] | None = None,
+                          ) -> list[tuple[float, float]]:
         """
-        在距目标较远的区域找 n 个背景负样本点（图像边缘 / 距目标 >1/4 图像宽度）。
+        在距所有正样本点均遥远的区域找 n 个背景负样本点。
+
+        候选点需满足：距每个正样本点的最近距离 > W * 0.45。
         """
         H, W = img_bgr.shape[:2]
         score = self.score_image(img_bgr)
-        # 生成候选背景点：远离目标的区域
-        pts = []
-        min_dist = W * 0.25
 
-        # 在图像边缘 1/4 区域内随机采样，找最佳背景点
+        # 所有正样本点位置（中心 + 额外正点）
+        pos_locs = [(obj_cx, obj_cy)]
+        if extra_pos_pts:
+            pos_locs.extend(extra_pos_pts)
+        pos_arr = np.array(pos_locs, dtype=np.float32)  # (M, 2)
+
+        min_dist = W * 0.45
+
         candidates_bg = []
         for y in range(0, H, 40):
             for x in range(0, W, 40):
-                dist = np.sqrt((x - obj_cx)**2 + (y - obj_cy)**2)
-                if dist < min_dist:
+                # 距所有正点的最近距离
+                diffs = pos_arr - np.array([x, y], dtype=np.float32)
+                nearest = float(np.sqrt((diffs ** 2).sum(axis=1)).min())
+                if nearest < min_dist:
                     continue
                 sc = float(score[y, x])
                 candidates_bg.append((sc, x, y))
 
         # score 越高 = 越不像目标 = 越好的负样本
         candidates_bg.sort(reverse=True)
-        for sc, x, y in candidates_bg[:n]:
-            pts.append((float(x), float(y)))
-        return pts
+        return [(float(x), float(y)) for _, x, y in candidates_bg[:n]]
 
 
 # ─── SAM2 验证 ────────────────────────────────────────────────────────────────
@@ -325,8 +356,12 @@ def sam2_verify_refine(
     """
     if decoder is None:
         return np.array([cx, cy]), "unverified", [], []
+    # 从颜色模型估算目标 bbox，作为 SAM2 的 box prompt（与点 prompt 联用）
+    _H = img.shape[0] if img is not None else 720
+    _W = img.shape[1] if img is not None else 1280
+    _box = matcher.bbox_estimate(cx, cy, _H, _W) if matcher is not None else None
     try:
-        mask, score = decoder.infer(embed_path, [[cx, cy]], [1])
+        mask, score = decoder.infer(embed_path, [[cx, cy]], [1], box=_box)
     except Exception:
         return np.array([cx, cy]), "decode_error", [], []
 
@@ -370,15 +405,18 @@ def sam2_verify_refine(
             cx_ref, cy_ref = float(xs.mean()), float(ys.mean())
 
         # 找 mask 内颜色不匹配的区域（可能是误入的邻近工具）→ 加负样本点
+        # 只有当该区域质心距工具质心 > W*0.2 时才加（避免把工具自身的高光/阴影打为负点）
         bad_region = mask & (color_sc > MASK_BAD_COLOR_THRESH)
         if bad_region.sum() >= MASK_BAD_MIN_PX:
-            # 连通分量分析，每个显著区域放一个负样本点
             n_labels, labels = cv2.connectedComponents(bad_region.astype(np.uint8))
             for lbl in range(1, n_labels):
                 comp = labels == lbl
                 if comp.sum() >= MASK_BAD_MIN_PX:
                     comp_ys, comp_xs = np.where(comp)
-                    extra_neg_pts.append((float(comp_xs.mean()), float(comp_ys.mean())))
+                    neg_cx, neg_cy = float(comp_xs.mean()), float(comp_ys.mean())
+                    dist_from_obj = np.sqrt((neg_cx - cx_ref)**2 + (neg_cy - cy_ref)**2)
+                    if dist_from_obj > W * 0.20:
+                        extra_neg_pts.append((neg_cx, neg_cy))
 
         # 在 mask 内找颜色最好的第二个正样本点（距主质心 ≥ 40px，mask 足够大时）
         if mask_px >= 400:
@@ -438,7 +476,8 @@ def existing_role_frames(prompt_data: dict) -> set[tuple]:
 
 def make_prompt_entry(role: str, frame: int, cx: float, cy: float,
                       neg_pts: list[tuple],
-                      extra_pos_pts: list[tuple] | None = None) -> dict:
+                      extra_pos_pts: list[tuple] | None = None,
+                      bbox: list[float] | None = None) -> dict:
     points = [[round(cx, 1), round(cy, 1)]]
     labels = [1]
     for px, py in (extra_pos_pts or []):
@@ -447,7 +486,7 @@ def make_prompt_entry(role: str, frame: int, cx: float, cy: float,
     for nx, ny in neg_pts:
         points.append([round(nx, 1), round(ny, 1)])
         labels.append(0)
-    return {
+    entry = {
         "role": role,
         "frame_index": frame,
         "points": points,
@@ -455,6 +494,9 @@ def make_prompt_entry(role: str, frame: int, cx: float, cy: float,
         "auto_generated": True,
         "generated_at": datetime.datetime.now().isoformat(),
     }
+    if bbox is not None:
+        entry["bbox"] = [round(v, 1) for v in bbox]
+    return entry
 
 
 def write_prompts(pf: Path, cam: str, new_objects: list[dict],
@@ -555,7 +597,8 @@ def annotate_exp(task: str, exp: str,
                  color_threshold: float,
                  dry_run: bool, overwrite: bool,
                  template_header: dict,
-                 decoder=None) -> dict:
+                 decoder=None,
+                 first_frame_only: bool = False) -> dict:
     """
     对 exp 的所有相机×关键帧：
       阶段 1 — 每个相机独立预测（特征匹配 + SAM2 验证 + 颜色 fallback）
@@ -563,6 +606,8 @@ def annotate_exp(task: str, exp: str,
       阶段 3 — 生成 prompt（含互斥 role 负样本），写入文件
     """
     cam_kfs = get_exp_keyframes(task, exp)
+    if first_frame_only:
+        cam_kfs = {cam: kfs[:1] for cam, kfs in cam_kfs.items() if kfs}
     if not cam_kfs:
         return {}
 
@@ -787,15 +832,25 @@ def annotate_exp(task: str, exp: str,
                 cx, cy = float(center[0]), float(center[1])
                 matcher = matchers.get(role)
 
-                # 背景负样本
+                # 背景负样本（距所有正点遥远）
                 if img is not None and matcher is not None:
-                    neg_pts = matcher.background_points(img, cx, cy, N_NEG_POINTS)
+                    neg_pts = matcher.background_points(img, cx, cy, N_NEG_POINTS,
+                                                        extra_pos_pts=extra_pos_pts)
                 else:
                     H, W = (720, 1280) if img is None else img.shape[:2]
                     neg_pts = [(W * 0.05, H * 0.05), (W * 0.95, H * 0.05)]
 
                 # mask 内颜色不匹配的区域（误入的邻近工具等）
-                neg_pts.extend(mask_neg_pts)
+                # 过滤掉距正样本点过近的负点（防止 depth_reproj 边界点落在工具上）
+                H_img = img.shape[0] if img is not None else 720
+                W_img = img.shape[1] if img is not None else 1280
+                all_pos = [(cx, cy)] + list(extra_pos_pts)
+                pos_arr = np.array(all_pos, dtype=np.float32)
+                for nx, ny in mask_neg_pts:
+                    diffs = pos_arr - np.array([nx, ny], dtype=np.float32)
+                    nearest = float(np.sqrt((diffs ** 2).sum(axis=1)).min())
+                    if nearest > W_img * 0.20:
+                        neg_pts.append((nx, ny))
 
                 # 互斥 role 的位置作为额外负样本
                 for excl_role in EXCLUSIVE_ROLES.get(role, set()):
@@ -803,7 +858,8 @@ def annotate_exp(task: str, exp: str,
                     if excl is not None:
                         neg_pts.append((float(excl[0][0]), float(excl[0][1])))
 
-                obj_entry = make_prompt_entry(role, frame, cx, cy, neg_pts, extra_pos_pts)
+                bbox_entry = matcher.bbox_estimate(cx, cy, H_img, W_img) if matcher is not None else None
+                obj_entry = make_prompt_entry(role, frame, cx, cy, neg_pts, extra_pos_pts, bbox=bbox_entry)
                 obj_entry["confidence"] = round(conf, 3)
                 obj_entry["method"] = method
                 new_objects.append(obj_entry)
@@ -833,6 +889,12 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-exps", type=int, default=0,
                         help="最多处理 N 个 exp（0=全部）")
+    parser.add_argument("--exp", default="",
+                        help="只处理指定的单个实验名（覆盖 keyword 匹配）")
+    parser.add_argument("--exp-list", default="",
+                        help="只处理逗号分隔的实验名列表（覆盖 keyword 匹配）")
+    parser.add_argument("--first-frame-only", action="store_true",
+                        help="每个实验只标注第一帧（kf0），用于快速生成 SAM2 起始 prompt")
     args = parser.parse_args()
 
     task_slug = args.task.replace("/", "_")
@@ -903,16 +965,22 @@ def main():
         print(f"[WARN] No calibration found for {args.task}, multiview voting disabled")
 
     # 找匹配关键词的实验列表（从 DB）
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT exp FROM tasks WHERE task=? ORDER BY exp", (args.task,)
-    ).fetchall()
-    all_exps = [r["exp"] for r in rows if args.keyword in exp_keyword(r["exp"])]
-    # 排除 template 自身，并过滤掉没有 embed 的 exp（bundle 已删除的 OK 实验）
-    target_exps = [e for e in all_exps
-                   if e not in template_exps
-                   and (BUNDLE / args.task / e / "_manifest.json").exists()]
+    if args.exp:
+        target_exps = [args.exp] if (BUNDLE / args.task / args.exp / "_manifest.json").exists() else []
+    elif args.exp_list:
+        explicit = [e.strip() for e in args.exp_list.split(",") if e.strip()]
+        target_exps = [e for e in explicit if (BUNDLE / args.task / e / "_manifest.json").exists()]
+    else:
+        conn = sqlite3.connect(DB)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT exp FROM tasks WHERE task=? ORDER BY exp", (args.task,)
+        ).fetchall()
+        all_exps = [r["exp"] for r in rows if args.keyword in exp_keyword(r["exp"])]
+        # 排除 template 自身，并过滤掉没有 embed 的 exp（bundle 已删除的 OK 实验）
+        target_exps = [e for e in all_exps
+                       if e not in template_exps
+                       and (BUNDLE / args.task / e / "_manifest.json").exists()]
 
     if args.max_exps > 0:
         target_exps = target_exps[:args.max_exps]
@@ -931,7 +999,8 @@ def main():
                              getattr(args, "min_sim", 0.65),
                              args.threshold,
                              args.dry_run, args.overwrite, template_header,
-                             decoder=decoder)
+                             decoder=decoder,
+                             first_frame_only=args.first_frame_only)
         for role, s in stats.items():
             total_added[role]     += s.get("added", 0)
             total_not_found[role] += s.get("not_found", 0)

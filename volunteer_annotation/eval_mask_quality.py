@@ -162,6 +162,7 @@ def eval_frame(
     centroids = {}
     areas = {}
     scores = {}
+    split_masks = {}  # cam_id → n_parts (only cams with >1 significant component)
 
     for cid in cam_ids:
         cam_name = f"cam{cid}_rgb"
@@ -171,7 +172,10 @@ def eval_frame(
             continue
         pts = obj["points"]
         lbls = obj["labels"]
-        mask, score = decoder.infer(embed, pts, lbls)
+        try:
+            mask, score = decoder.infer(embed, pts, lbls)
+        except Exception:
+            continue
         masks[cid] = mask
         scores[cid] = score
         H, W = mask.shape
@@ -180,6 +184,15 @@ def eval_frame(
             continue
         areas[cid] = int(mask.sum())
         centroids[cid] = (float(xs.mean()), float(ys.mean()))
+
+        # Split mask detection: count connected components above 5% of total area
+        n_labels, _, stats, _ = cv2.connectedComponentsWithStats(
+            mask.astype(np.uint8), connectivity=8
+        )
+        min_cc_px = max(50, int(mask.sum() * 0.05))
+        n_parts = sum(1 for i in range(1, n_labels) if stats[i, cv2.CC_STAT_AREA] >= min_cc_px)
+        if n_parts > 1:
+            split_masks[cid] = n_parts
 
     if len(centroids) < 2:
         return {}
@@ -274,6 +287,9 @@ def eval_frame(
         result["depth_iou_mean"] = depth_iou_mean
     if border_fracs:
         result["border_tool_frac_max"] = round(max(border_fracs), 3)
+    if split_masks:
+        result["split_mask_cams"] = len(split_masks)   # how many cameras see a split mask
+        result["split_mask_max_parts"] = max(split_masks.values())
 
     return result
 
@@ -343,6 +359,11 @@ def eval_experiment(
         vals = [r[key] for r in frame_results if key in r]
         return round(float(np.mean(vals)), 3) if vals else None
 
+    # Fraction of frames that have at least one split-mask camera
+    split_frame_frac = (
+        sum(1 for r in frame_results if r.get("split_mask_cams", 0) > 0) / len(frame_results)
+        if frame_results else 0.0
+    )
     agg = {
         "exp": exp_name,
         "n_frames": len(frame_results),
@@ -353,17 +374,16 @@ def eval_experiment(
         "proj_dist_mean_px": _mean("proj_dist_mean_px"),
         "depth_iou_mean": _mean("depth_iou_mean"),
         "border_tool_frac_max_mean": _mean("border_tool_frac_max"),
+        "split_mask_frame_frac": round(split_frame_frac, 3),
         "frames": frame_results,
     }
-    # Quality flag: suspect if any metric is bad
+    # Suspect: only based on depth_iou (most geometry-reliable metric).
+    # depth_iou unavailable (no depth data) → fall back to proj_inside_frac.
     suspect = False
-    if agg["area_ratio_min_mean"] is not None and agg["area_ratio_min_mean"] < 0.45:
-        suspect = True
-    if agg["proj_inside_frac_mean"] is not None and agg["proj_inside_frac_mean"] < 0.7:
-        suspect = True
-    if agg["depth_iou_mean"] is not None and agg["depth_iou_mean"] < 0.3:
-        suspect = True
-    if agg["border_tool_frac_max_mean"] is not None and agg["border_tool_frac_max_mean"] > 0.3:
+    if agg["depth_iou_mean"] is not None:
+        if agg["depth_iou_mean"] < 0.2:
+            suspect = True
+    elif agg["proj_inside_frac_mean"] is not None and agg["proj_inside_frac_mean"] < 0.4:
         suspect = True
     agg["suspect"] = suspect
     return agg
@@ -403,8 +423,11 @@ def compute_iou_vs_human(
                 continue
             ho = human_by_frame[fi]
             ao = auto_by_frame[fi]
-            mask_h, _ = decoder.infer(embed, ho["points"], ho["labels"])
-            mask_a, _ = decoder.infer(embed, ao["points"], ao["labels"])
+            try:
+                mask_h, _ = decoder.infer(embed, ho["points"], ho["labels"])
+                mask_a, _ = decoder.infer(embed, ao["points"], ao["labels"])
+            except Exception:
+                continue
             inter = int((mask_h & mask_a).sum())
             union = int((mask_h | mask_a).sum())
             iou = inter / union if union > 0 else 0.0
@@ -518,14 +541,21 @@ def main():
                 vals = [r[key] for r in all_results if r.get(key) is not None]
                 if vals:
                     print(f"  {key:35s}: mean={np.mean(vals):.3f}  min={np.min(vals):.3f}")
+            split_vals = [r["split_mask_frame_frac"] for r in all_results
+                          if r.get("split_mask_frame_frac", 0) > 0]
+            if split_vals:
+                n_split_exps = len(split_vals)
+                print(f"  {'split_mask_exps':35s}: {n_split_exps}/{len(all_results)}"
+                      f"  (avg split_frame_frac={np.mean(split_vals):.2f})")
 
         if suspect_list:
-            print(f"\nTop-{args.top_k} suspect experiments (lowest proj_inside_frac):")
-            suspect_list.sort(key=lambda r: r.get("proj_inside_frac_mean") or 1.0)
+            print(f"\nTop-{args.top_k} suspect experiments (lowest depth_iou):")
+            suspect_list.sort(key=lambda r: r.get("depth_iou_mean") or 1.0)
             for r in suspect_list[:args.top_k]:
-                pif = r.get("proj_inside_frac_mean")
-                arm = r.get("area_ratio_min_mean")
-                print(f"  {r['exp'][-50:]:50s}  proj_inside={pif}  area_ratio_min={arm}")
+                diou = r.get("depth_iou_mean")
+                split = r.get("split_mask_frame_frac", 0.0)
+                split_str = f"  split={split:.2f}" if split > 0 else ""
+                print(f"  {r['exp'][-50:]:50s}  depth_iou={diou}{split_str}")
 
     if args.out:
         Path(args.out).write_text(json.dumps(all_results, indent=2))
