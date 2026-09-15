@@ -215,8 +215,11 @@ def process_camera(predictor, exp_dir, kind, H, W, cam, objects, role_to_id,
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--exp", type=str, required=True,
-                    help="experiment dir (data00000000.h5 or cam*_rgb.mp4, + tool_masks/prompts/)")
+    ap.add_argument("--exp", type=str, default=None,
+                    help="experiment dir (single-exp mode; mutually exclusive with --worklist)")
+    ap.add_argument("--worklist", type=str, default=None,
+                    help="TSV with columns: exp_dir [prompts_dir [out_dir]]; "
+                         "SAM2 loaded once, all experiments processed in sequence")
     ap.add_argument("--prompts_dir", type=str, default=None,
                     help="where the volunteer prompt JSONs live. Default <exp>/tool_masks/prompts. "
                          "Use this when the prompts were rsynced back into a separate tree "
@@ -242,41 +245,86 @@ def main():
                     help="SAM2 .pt; default auto-resolves ($SAM2_CKPT or next to the sam2 package)")
     ap.add_argument("--model_cfg", type=str, default=str(DEFAULT_CFG))
     args = ap.parse_args()
+    if not args.exp and not args.worklist:
+        ap.error("one of --exp or --worklist is required")
+    if args.exp and args.worklist:
+        ap.error("--exp and --worklist are mutually exclusive")
 
-    exp_dir = Path(args.exp)
-    prompts_dir = Path(args.prompts_dir) if args.prompts_dir \
-        else exp_dir / "tool_masks" / "prompts"
-    out_dir = Path(args.out_dir) if args.out_dir else exp_dir / "tool_masks"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ckpt = resolve_ckpt(args.sam2_checkpoint)
+    print(f"[init] device={device}  ckpt={ckpt}")
+    predictor = build_video_predictor(ckpt, args.model_cfg, device)
+
+    if args.worklist:
+        # ── batch mode: SAM2 loaded once, loop over all experiments ──────────
+        rows = []
+        with open(args.worklist) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                exp_d      = Path(parts[0])
+                prompts_d  = Path(parts[1]) if len(parts) > 1 and parts[1] else \
+                             exp_d / "tool_masks" / "prompts"
+                out_d      = Path(parts[2]) if len(parts) > 2 and parts[2] else \
+                             exp_d / "tool_masks"
+                rows.append((exp_d, prompts_d, out_d))
+        print(f"[batch] {len(rows)} experiments")
+        n_ok = n_skip = n_fail = 0
+        for i, (exp_d, prompts_d, out_d) in enumerate(rows):
+            print(f"\n── [{i+1}/{len(rows)}] {exp_d.name} ──")
+            try:
+                ok = _run_one_exp(predictor, device, exp_d, prompts_d, out_d,
+                                  args.from_video, args.tmp_dir,
+                                  args.max_frames, args.resume)
+                if ok:
+                    n_ok += 1
+                else:
+                    n_skip += 1
+            except Exception as exc:
+                print(f"  [FAIL] {exc}")
+                n_fail += 1
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        print(f"\n[batch done] ok={n_ok} skipped={n_skip} failed={n_fail}")
+    else:
+        # ── single-exp mode (backward compat) ────────────────────────────────
+        exp_dir = Path(args.exp)
+        prompts_dir = Path(args.prompts_dir) if args.prompts_dir \
+            else exp_dir / "tool_masks" / "prompts"
+        out_dir = Path(args.out_dir) if args.out_dir else exp_dir / "tool_masks"
+        _run_one_exp(predictor, device, exp_dir, prompts_dir, out_dir,
+                     args.from_video, args.tmp_dir, args.max_frames, args.resume)
+
+
+def _run_one_exp(predictor, device, exp_dir, prompts_dir, out_dir,
+                 from_video, tmp_dir, max_frames, resume) -> bool:
+    """Run SAM2 propagation for one experiment. Returns True if masks were written."""
     prompt_files = sorted(prompts_dir.glob("cam*.json"))
     if not prompt_files:
-        raise SystemExit(f"no prompt JSON in {prompts_dir}")
+        print(f"[skip] no prompt JSON in {prompts_dir}")
+        return False
     if (prompts_dir.parent / "BAD.json").is_file():
-        raise SystemExit(f"[skip] exp flagged bad by the annotator: "
-                         f"{prompts_dir.parent / 'BAD.json'}")
+        print(f"[skip] exp flagged bad: {prompts_dir.parent / 'BAD.json'}")
+        return False
 
-    # --max_frames only fills a prefix, so an existing file can't be judged
-    # complete by shape alone; never resume-skip in that (test-only) mode.
-    if args.resume and args.max_frames is None \
+    if resume and max_frames is None \
             and (out_dir / "masks.h5").is_file() and (out_dir / "objects.yaml").is_file():
-        want = video_meta(exp_dir, args.from_video)[:4]
+        want = video_meta(exp_dir, from_video)[:4]
         try:
             with h5py.File(out_dir / "masks.h5", "r") as f:
                 got = f["masks"].shape
         except Exception:
             got = None
         if got == tuple(want):
-            print(f"[resume] {out_dir}/masks.h5 {got} already complete — skipping")
-            return
+            print(f"[resume] masks.h5 {got} already complete — skipping")
+            return False
         print(f"[resume] existing masks.h5 shape {got} != expected {tuple(want)}; regenerating")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt = resolve_ckpt(args.sam2_checkpoint)
-    print(f"[init] device={device}, ckpt={ckpt}, {len(prompt_files)} camera prompt file(s)")
-    predictor = build_video_predictor(ckpt, args.model_cfg, device)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Consolidate roles across all cameras: a role present in ANY view is part
-    # of the exp roster. Assign contiguous object_ids in fixed role order so the
-    # same physical object keeps one id in every camera.
     role_name = {}
     for pf in prompt_files:
         for o in json.loads(pf.read_text())["objects"]:
@@ -285,14 +333,13 @@ def main():
     role_to_id = {r: i + 1 for i, r in enumerate(present_roles)}
     objects_list = [role_name[r] for r in present_roles]
     n_objects = len(present_roles)
-    print(f"  roles -> object_id: " +
-          ", ".join(f"{r}={role_to_id[r]}({role_name[r]})" for r in present_roles))
+    print(f"  roles: " + ", ".join(f"{r}={role_to_id[r]}" for r in present_roles))
 
     t_start = time.time()
-    n_frames, n_cams, H, W, kind = video_meta(exp_dir, args.from_video)
-    out_n = n_frames if args.max_frames is None else min(args.max_frames, n_frames)
-    print(f"  sequence [{kind}]: {n_frames} frames, {n_cams} cams, {H}x{W}; "
-          f"{n_objects} object(s); propagating {out_n} frame(s)")
+    n_frames, n_cams, H, W, kind = video_meta(exp_dir, from_video)
+    out_n = n_frames if max_frames is None else min(max_frames, n_frames)
+    print(f"  [{kind}] {n_frames} frames  {n_cams} cams  {H}x{W}  {n_objects} obj  "
+          f"propagating {out_n}")
     mask_h5 = open_mask_writer(out_dir / "masks.h5", n_frames, n_cams, H, W)
     mask_ds = mask_h5["masks"]
     for pf in prompt_files:
@@ -300,14 +347,10 @@ def main():
         cam = data["camera"]
         t0 = time.time()
         n = process_camera(predictor, exp_dir, kind, H, W, cam, data["objects"],
-                           role_to_id, mask_ds, device, args.max_frames,
-                           tmp_dir=args.tmp_dir)
-        print(f"    {cam}: {n} frame(s) propagated in {time.time()-t0:.1f}s")
+                           role_to_id, mask_ds, device, max_frames, tmp_dir=tmp_dir)
+        print(f"    {cam}: {n} frames in {time.time()-t0:.1f}s")
     mask_h5.close()
 
-    # objects.yaml lists ONLY tracked objects (primary tool) — generate_meta uses
-    # it verbatim for FoundationPose. Auxiliary/manipulated-object masks stay in
-    # masks.h5 (labels 2,3) but are NOT tracked; roles.yaml documents the mapping.
     tracked = [role_name[r] for r in present_roles if r == "primary_tool"] \
         or objects_list[:1]
     (out_dir / "objects.yaml").write_text(
@@ -316,8 +359,8 @@ def main():
                   "tracked": (r == "primary_tool")} for r in present_roles]
     (out_dir / "roles.yaml").write_text(
         yaml.safe_dump({"roles": roles_doc}, default_flow_style=False, allow_unicode=True))
-    print(f"[done] masks.h5 (labels for {objects_list}) + objects.yaml (tracked={tracked}) "
-          f"+ roles.yaml in {time.time()-t_start:.1f}s -> {out_dir}")
+    print(f"[done] {time.time()-t_start:.1f}s -> {out_dir}")
+    return True
 
 
 if __name__ == "__main__":

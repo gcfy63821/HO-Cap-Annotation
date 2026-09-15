@@ -70,6 +70,7 @@ WORKLIST=""
 VIDEOS_ROOTS=()
 DATA_ROOT="/viscam/projects/robotool/data"
 PROMPTS_ROOT="/viscam/projects/robotool/_va_bundle_v2_prompts"
+AUTO_PROMPTS_ROOT="/viscam/projects/robotool/_va_bundle_v2_auto_prompts"
 BUNDLE_ROOT="/viscam/projects/robotool/_va_bundle_v2"
 CALIB_ROOT="/viscam/projects/robotool/calibrations"
 FIX_PROMPTS=0
@@ -82,7 +83,8 @@ while [[ $# -gt 0 ]]; do
         --worklist)       WORKLIST="$2"; shift 2 ;;
         --videos_root)    shift; while [[ $# -gt 0 && "${1:0:2}" != "--" ]]; do VIDEOS_ROOTS+=("$1"); shift; done ;;
         --data_root)      DATA_ROOT="$2"; shift 2 ;;
-        --prompts_root)   PROMPTS_ROOT="$2"; shift 2 ;;
+        --prompts_root)      PROMPTS_ROOT="$2"; shift 2 ;;
+        --auto_prompts_root) AUTO_PROMPTS_ROOT="$2"; shift 2 ;;
         --bundle_root)    BUNDLE_ROOT="$2"; shift 2 ;;
         --calib_root)     CALIB_ROOT="$2"; shift 2 ;;
         --fix_prompts)    FIX_PROMPTS=1; shift ;;
@@ -123,10 +125,11 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" && -z "$WORKLIST" ]]; then
 
         echo "[frontend] scanning $NAME ..."
         python3 "$BUILD_WORKLIST" \
-            --data_root      "$(dirname "$VR")" \
-            --prompts_root   "$PROMPTS_ROOT" \
-            --videos_filter  "$NAME" \
-            --out            "$WL" 2>&1 | grep -E '^\[worklist\]|skip|pending|->|Error'
+            --data_root          "$(dirname "$VR")" \
+            --prompts_root       "$PROMPTS_ROOT" \
+            --auto_prompts_root  "$AUTO_PROMPTS_ROOT" \
+            --videos_filter      "$NAME" \
+            --out                "$WL" 2>&1 | grep -E '^\[worklist\]|skip|pending|->|Error'
 
         N=$(grep -c . "$WL" 2>/dev/null || echo 0)
         if [[ "$N" -eq 0 ]]; then
@@ -225,87 +228,84 @@ out_dir_for_exp() {
     fi
 }
 
-# ---- run the slice ----
-n_ok=0; n_fail=0; failed=()
+# ---- Phase 1: fix_prompts for the whole slice (CPU), build batch worklist ----
+BATCH_WORKLIST="${TMP_DIR}/batch_worklist_${TASK_ID}.tsv"
+> "$BATCH_WORKLIST"
+
+n_prep_ok=0; n_prep_fail=0
 
 while IFS=$'\t' read -r EXP_DIR PROMPTS_DIR; do
     [[ -z "${EXP_DIR:-}" ]] && continue
-    echo ""
-    echo "------------------------------------------"
-    echo "exp: $EXP_DIR"
-    echo "------------------------------------------"
 
     if [[ ! -d "$EXP_DIR" ]]; then
-        echo "[skip] exp dir not found on this node: $EXP_DIR"
-        n_fail=$((n_fail+1)); failed+=("$EXP_DIR (no exp dir)"); continue
+        echo "[skip] exp dir not found: $EXP_DIR"
+        n_prep_fail=$((n_prep_fail+1)); continue
     fi
 
     OUT_DIR="$(out_dir_for_exp "$EXP_DIR" "${OUT_BASE:-}")"
     mkdir -p "$OUT_DIR"
 
-    # ---- optional depth-based prompt correction ----
     EFFECTIVE_PROMPTS_DIR="$PROMPTS_DIR"
     if [[ "$FIX_PROMPTS" == "1" && -f "$FIX_PROMPTS_SCRIPT" ]]; then
-        # Derive task from prompts_dir: …/<videos_X>/<task>/<exp>/tool_masks/prompts
         _TASK_PATH="$(dirname "$(dirname "$(dirname "$PROMPTS_DIR")")")"
-        _TASK="${_TASK_PATH##*/videos_*/}"  # "spoon_press_sponge"
-        _VIDEOS_PART="$(basename "$(dirname "$(dirname "$_TASK_PATH")")")"  # e.g. "videos_0202"
-        _TASK_FULL="${_VIDEOS_PART}/${_TASK}"   # "videos_0202/spoon_press_sponge"
-
-        # Corrected prompts go alongside the masks output, to avoid touching master prompts
+        _TASK="${_TASK_PATH##*/videos_*/}"
+        _VIDEOS_PART="$(basename "$(dirname "$(dirname "$_TASK_PATH")")")"
+        _TASK_FULL="${_VIDEOS_PART}/${_TASK}"
         _CORR_PROMPTS_DIR="${OUT_DIR}/corrected_prompts"
 
         if [[ "$DRY_RUN" == "1" ]]; then
-            echo "[dry_run] fix_prompts: $FIX_PROMPTS_SCRIPT --task $_TASK_FULL"
+            echo "[dry_run] fix_prompts: $(basename "$EXP_DIR") task=$_TASK_FULL"
         else
             python "$FIX_PROMPTS_SCRIPT" \
                 --prompts_dir "$PROMPTS_DIR" \
                 --out_dir     "$_CORR_PROMPTS_DIR" \
                 --bundle      "$BUNDLE_ROOT" \
                 --calib_root  "$CALIB_ROOT" \
-                --task        "$_TASK_FULL" \
-                --verbose 2>&1 | sed 's/^/  [fix] /'
+                --task        "$_TASK_FULL" 2>&1 | sed 's/^/  [fix] /'
             _FIX_RC=$?
             if [[ "$_FIX_RC" -eq 0 || "$_FIX_RC" -eq 2 ]]; then
-                # rc=0: corrected; rc=2: no depth, copied unchanged — both are usable
                 EFFECTIVE_PROMPTS_DIR="$_CORR_PROMPTS_DIR"
             else
-                echo "  [fix_prompts rc=$_FIX_RC] falling back to original prompts"
+                echo "  [fix_prompts rc=$_FIX_RC] using original prompts"
             fi
         fi
     fi
 
-    ARGS=(
-        --exp         "$EXP_DIR"
-        --prompts_dir "$EFFECTIVE_PROMPTS_DIR"
-        --out_dir     "$OUT_DIR"
-        --tmp_dir     "$TMP_DIR"
-        --from_video
-        --resume
-    )
-
-    if [[ "$DRY_RUN" == "1" ]]; then
-        echo "[dry_run] python $MASKS_SCRIPT ${ARGS[*]}"
-        echo "          out_dir: $OUT_DIR"
-        continue
-    fi
-
-    if python "$MASKS_SCRIPT" "${ARGS[@]}"; then
-        n_ok=$((n_ok+1))
-    else
-        rc=$?
-        echo "[FAIL rc=$rc] $EXP_DIR"
-        n_fail=$((n_fail+1)); failed+=("$EXP_DIR (rc=$rc)")
-    fi
-
-    # Free /dev/shm frame dump between experiments.
-    rm -rf "$TMP_DIR"/frames_* "$TMP_DIR"/tmp_frames_* 2>/dev/null || true
+    echo -e "${EXP_DIR}\t${EFFECTIVE_PROMPTS_DIR}\t${OUT_DIR}" >> "$BATCH_WORKLIST"
+    n_prep_ok=$((n_prep_ok+1))
 
 done < <(sed -n "${START},${END}p" "$WORKLIST")
 
 echo ""
+echo "[phase1] fix_prompts done: ok=$n_prep_ok fail=$n_prep_fail"
+echo "[phase1] batch worklist: $BATCH_WORKLIST ($(wc -l < "$BATCH_WORKLIST") exps)"
+
+# ---- Phase 2: SAM2 propagation — load model once for the whole batch --------
+n_ok=0; n_fail=0; failed=()
+
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "[dry_run] python $MASKS_SCRIPT --worklist $BATCH_WORKLIST --from_video --resume"
+    echo "          (would process $(wc -l < "$BATCH_WORKLIST") exps with one SAM2 load)"
+elif [[ -s "$BATCH_WORKLIST" ]]; then
+    if python "$MASKS_SCRIPT" \
+            --worklist  "$BATCH_WORKLIST" \
+            --tmp_dir   "$TMP_DIR" \
+            --from_video \
+            --resume; then
+        n_ok=$n_prep_ok
+    else
+        rc=$?
+        echo "[FAIL rc=$rc] batch masks run"
+        n_fail=$n_prep_ok; failed+=("batch (rc=$rc)")
+    fi
+    rm -rf "$TMP_DIR"/frames_* "$TMP_DIR"/tmp_frames_* 2>/dev/null || true
+else
+    echo "[skip] empty batch worklist — nothing to propagate"
+fi
+
+echo ""
 echo "=========================================="
-echo "array task ${TASK_ID}: ok=$n_ok fail=$n_fail"
+echo "array task ${TASK_ID}: prep_ok=$n_prep_ok prep_fail=$n_prep_fail masks_ok=$n_ok fail=$n_fail"
 for f in "${failed[@]:-}"; do [[ -n "$f" ]] && echo "  FAILED: $f"; done
 echo "=========================================="
 exit 0

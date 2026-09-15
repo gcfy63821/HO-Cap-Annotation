@@ -77,6 +77,8 @@ def main():
                     help="root that contains videos_XXXX/<task>/<exp> subdirs")
     ap.add_argument("--prompts_root", default="/viscam/projects/robotool/_va_bundle_v2_prompts",
                     help="root of volunteer prompts (same layout as data_root)")
+    ap.add_argument("--auto_prompts_root", default=None,
+                    help="root of auto-generated prompts (fallback for exps without volunteer prompts)")
     ap.add_argument("--annotated_root", default=None,
                     help="where masks.h5 will be written (default: same as data_root, "
                          "outputs go to videos_XXXX_annotated/...)")
@@ -94,64 +96,80 @@ def main():
     prompts_root = Path(args.prompts_root)
     data_root = Path(args.data_root)
     annotated_root = Path(args.annotated_root) if args.annotated_root else data_root
+    auto_prompts_root = Path(args.auto_prompts_root) if args.auto_prompts_root else None
 
     if not prompts_root.is_dir():
         sys.exit(f"[ERR] prompts_root not found: {prompts_root}")
 
     n_total = n_skip_bad = n_skip_few_cams = n_skip_no_data = n_skip_done = 0
     rows = []
+    seen_exps = set()  # exp data paths already added (human prompts take priority)
 
-    # Enumerate: prompts_root/<videos_X>/<task>/<exp>/tool_masks/prompts/
-    for videos_dir in sorted(prompts_root.iterdir()):
-        if not videos_dir.is_dir() or not videos_dir.name.startswith("videos_"):
-            continue
-        if args.videos_filter and videos_dir.name != args.videos_filter:
-            continue
-        for task_dir in sorted(videos_dir.iterdir()):
-            if not task_dir.is_dir():
+    def _scan_one_root(proot: Path, allow_seen: bool):
+        """Scan proot and append qualifying experiments to rows.
+
+        allow_seen=False: skip experiments already found in a higher-priority root.
+        """
+        nonlocal n_total, n_skip_bad, n_skip_few_cams, n_skip_no_data, n_skip_done
+        if not proot.is_dir():
+            return
+        for videos_dir in sorted(proot.iterdir()):
+            if not videos_dir.is_dir() or not videos_dir.name.startswith("videos_"):
                 continue
-            for exp_dir_prompts in sorted(task_dir.iterdir()):
-                if not exp_dir_prompts.is_dir():
+            if args.videos_filter and videos_dir.name != args.videos_filter:
+                continue
+            for task_dir in sorted(videos_dir.iterdir()):
+                if not task_dir.is_dir():
                     continue
-                prompts_dir = exp_dir_prompts / "tool_masks" / "prompts"
-                if not prompts_dir.is_dir():
-                    continue
+                for exp_dir_prompts in sorted(task_dir.iterdir()):
+                    if not exp_dir_prompts.is_dir():
+                        continue
+                    prompts_dir = exp_dir_prompts / "tool_masks" / "prompts"
+                    if not prompts_dir.is_dir():
+                        continue
 
-                n_total += 1
-                exp_name = exp_dir_prompts.name
+                    n_total += 1
+                    exp_name = exp_dir_prompts.name
 
-                # Check BAD flag
-                if (exp_dir_prompts / "tool_masks" / "BAD.json").is_file():
-                    n_skip_bad += 1
-                    if args.verbose:
-                        print(f"[skip bad] {exp_name}", file=sys.stderr)
-                    continue
+                    if (exp_dir_prompts / "tool_masks" / "BAD.json").is_file():
+                        n_skip_bad += 1
+                        if args.verbose:
+                            print(f"[skip bad] {exp_name}", file=sys.stderr)
+                        continue
 
-                # Check prompt file count
-                prompt_files = sorted(prompts_dir.glob("cam*_rgb.json"))
-                if len(prompt_files) < args.min_cams:
-                    n_skip_few_cams += 1
-                    if args.verbose:
-                        print(f"[skip cams={len(prompt_files)}] {exp_name}", file=sys.stderr)
-                    continue
+                    prompt_files = sorted(prompts_dir.glob("cam*_rgb.json"))
+                    if len(prompt_files) < args.min_cams:
+                        n_skip_few_cams += 1
+                        if args.verbose:
+                            print(f"[skip cams={len(prompt_files)}] {exp_name}", file=sys.stderr)
+                        continue
 
-                # Derive data path
-                rel = exp_dir_prompts.relative_to(prompts_root)
-                exp_dir_data = data_root / rel
-                if not exp_dir_data.is_dir():
-                    n_skip_no_data += 1
-                    if args.verbose:
-                        print(f"[skip no_data] {exp_dir_data}", file=sys.stderr)
-                    continue
+                    rel = exp_dir_prompts.relative_to(proot)
+                    exp_dir_data = data_root / rel
+                    if not exp_dir_data.is_dir():
+                        n_skip_no_data += 1
+                        if args.verbose:
+                            print(f"[skip no_data] {exp_dir_data}", file=sys.stderr)
+                        continue
 
-                # Skip if already done
-                if args.skip_done and check_masks_done(exp_dir_data, annotated_root):
-                    n_skip_done += 1
-                    if args.verbose:
-                        print(f"[skip done] {exp_name}", file=sys.stderr)
-                    continue
+                    exp_key = str(exp_dir_data)
+                    if not allow_seen and exp_key in seen_exps:
+                        continue  # human-annotated version already in worklist
 
-                rows.append((str(exp_dir_data), str(prompts_dir)))
+                    if args.skip_done and check_masks_done(exp_dir_data, annotated_root):
+                        n_skip_done += 1
+                        if args.verbose:
+                            print(f"[skip done] {exp_name}", file=sys.stderr)
+                        continue
+
+                    rows.append((exp_key, str(prompts_dir)))
+                    seen_exps.add(exp_key)
+
+    # Primary: volunteer (human) prompts
+    _scan_one_root(prompts_root, allow_seen=True)
+    # Fallback: auto-generated prompts for experiments not covered above
+    if auto_prompts_root is not None:
+        _scan_one_root(auto_prompts_root, allow_seen=False)
 
     # Write output
     out_fh = open(args.out, "w") if args.out != "-" else sys.stdout
