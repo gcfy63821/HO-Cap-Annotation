@@ -25,6 +25,7 @@ from collections import defaultdict
 try:
     from depth_utils import (load_depth, depth_png_path, modal_depth, depth_best_point,
                              depth_cross_camera_iou, depth_reproject_prompts)
+    from verify_prompt_consistency import unproject_point, project_point
     _DEPTH_AVAILABLE = True
 except ImportError:
     _DEPTH_AVAILABLE = False
@@ -52,6 +53,9 @@ from template_multiview_vote import (
 MAX_CLUSTER_RATIO = 0.12   # 候选簇面积 < 图像 12%（否则是背景）
 MIN_CLUSTER_PX = 30
 N_NEG_POINTS = 2           # 每个预测结果附加的背景负样本点数
+DEPTH_REPROJ_RADIUS = 200      # 深度重投影后局部颜色搜索的像素半径
+DEPTH_CONSENSUS_THRESH = 0.15  # 3D 点一致性阈值（米）：anchor 间距超过此值视为离群点
+DEPTH_REPROJ_MIN_CONF  = 0.35  # 局部颜色搜索返回的最低置信度（低于此则拒绝，避免误选桌面）
 
 # 互斥 role 对：key role 的标注点会作为 value 集合里每个 role 的负样本
 # auxiliary_tool 和 {primary_tool, manipulated_object} 互斥，反之亦然
@@ -244,6 +248,51 @@ class ColorMatcher:
         best_conf, best_area, best_i = max(candidates, key=lambda x: x[0])
         cx, cy = centroids[best_i]
         return np.array([cx, cy]), float(best_conf), mask
+
+    def find_object_near(self, img_bgr: np.ndarray,
+                         center_xy: tuple | np.ndarray,
+                         radius: int = DEPTH_REPROJ_RADIUS,
+                         threshold: float | None = None) -> tuple[np.ndarray | None, float]:
+        """
+        在 center_xy 周围 radius 像素的局部区域内用颜色打分找目标。
+        阈值比全图搜索可以更宽松（范围已由 3D 重投影约束）。
+        返回 (质心[cx,cy], 置信度)，失败时返回 (None, 0.0)。
+        """
+        H, W = img_bgr.shape[:2]
+        cx, cy = float(center_xy[0]), float(center_xy[1])
+        x1 = max(0, int(cx - radius))
+        y1 = max(0, int(cy - radius))
+        x2 = min(W, int(cx + radius))
+        y2 = min(H, int(cy + radius))
+        if x2 - x1 < 10 or y2 - y1 < 10:
+            return None, 0.0
+
+        crop = img_bgr[y1:y2, x1:x2]
+        score = self.score_image(crop)
+        thr = threshold if threshold is not None else 1.0
+        mask = (score < thr).astype(np.uint8) * 255
+
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+
+        n, labels_img, stats_cc, centroids = cv2.connectedComponentsWithStats(mask)
+        if n <= 1:
+            return None, 0.0
+
+        best_conf, best_cxy = 0.0, None
+        for i in range(1, n):
+            area = int(stats_cc[i, cv2.CC_STAT_AREA])
+            if area < MIN_CLUSTER_PX:
+                continue
+            color_conf = 1.0 - float(score[labels_img == i].mean())
+            if color_conf > best_conf:
+                best_conf = color_conf
+                best_cxy = centroids[i]
+
+        if best_cxy is None:
+            return None, 0.0
+        # 转回全图坐标
+        return np.array([x1 + best_cxy[0], y1 + best_cxy[1]]), best_conf
 
     def background_points(self, img_bgr: np.ndarray,
                           obj_cx: float, obj_cy: float,
@@ -645,31 +694,113 @@ def annotate_exp(task: str, exp: str,
                 depth_m=depth_m,
             )
 
-    # ── 阶段 2：多视角投票，修正各相机坐标 ────────────────────────────────────
-    # voted_centers[frame][role][cam] = center_xy（投票后）
+    # ── 阶段 2：深度反投影 + 局部颜色搜索（三角化退化为 fallback） ─────────────
+    # 策略：
+    #   a) 有检测 + 有深度的相机 → unproject 到 3D，取所有 anchor 的中位数 P_world
+    #   b) P_world 投影到每个相机 → 局部颜色搜索精修（含原本无检测的相机）
+    #   c) 无深度但有多视角检测 → 退回三角化投票（原逻辑）
+    #   d) 单相机或无标定 → 直接用原始预测
     voted_centers: dict[int, dict[str, dict[str, np.ndarray]]] = {}
+
+    calib = load_calibration(task) if calib_available else {}
+    img_hw = (720, 1280)
 
     for frame in all_frames:
         voted_centers[frame] = {}
         for role in roles:
-            # 收集这一帧里所有有预测的相机
+            cam_meta: dict[str, tuple] = {}
             cam_pts: dict[int, np.ndarray] = {}
-            cam_meta: dict[str, tuple] = {}  # cam → (conf, method, extra_negs, extra_pos)
             for cam, preds in all_preds[frame].items():
                 pred = preds.get(role)
                 if pred is not None:
-                    cam_id = cam_name_to_id(cam)
-                    cam_pts[cam_id] = pred[0]   # center_xy
-                    cam_meta[cam]   = (pred[1], pred[2], pred[3], pred[4])  # conf, method, extra_negs, extra_pos
+                    cid = cam_name_to_id(cam)
+                    cam_pts[cid] = pred[0]
+                    cam_meta[cam] = (pred[1], pred[2], pred[3], pred[4])
 
-            if calib_available and len(cam_pts) >= 2:
+            voted_centers[frame][role] = {}
+
+            # ── 路径 A：深度反投影 ──────────────────────────────────────────
+            # pts3d: list of (pt3d, method) from cameras with original detections
+            pts3d: list[tuple[np.ndarray, str]] = []
+            if _DEPTH_AVAILABLE and calib_available:
+                for cam, preds in all_preds[frame].items():
+                    pred = preds.get(role)
+                    if pred is None:
+                        continue
+                    cid = cam_name_to_id(cam)
+                    if cid not in calib:
+                        continue
+                    dp = depth_png_path(BUNDLE, task, exp, cid, frame)
+                    dm = load_depth(dp)
+                    if dm is None:
+                        continue
+                    cx_d, cy_d = pred[0]
+                    K_d   = np.asarray(calib[cid]["K"],     dtype=np.float64)
+                    Tcw_d = np.asarray(calib[cid]["T_c2w"], dtype=np.float64)
+                    pt = unproject_point(cx_d, cy_d, dm, K_d, Tcw_d)
+                    if pt is not None:
+                        pts3d.append((pt, pred[2]))  # (pt3d, method)
+
+            if pts3d:
+                # ── 3D 点一致性过滤：排除离群的 anchor（检测到了错误物体）──
+                arr      = np.stack([p for p,_ in pts3d], axis=0)  # (N, 3)
+                methods_ = [m for _,m in pts3d]
+                if len(arr) >= 3:
+                    dists = np.linalg.norm(arr[:, None] - arr[None, :], axis=-1)
+                    inlier_cnt = (dists < DEPTH_CONSENSUS_THRESH).sum(axis=1)
+                    # 优先以 feature 方法的相机为 seed（更可靠）；再选 inlier 数最多的
+                    feat_idxs = [i for i, m in enumerate(methods_) if "feature" in m]
+                    if feat_idxs:
+                        seed_idx = max(feat_idxs, key=lambda i: inlier_cnt[i])
+                    else:
+                        seed_idx = int(inlier_cnt.argmax())
+                    if inlier_cnt[seed_idx] >= 2:
+                        consensus = arr[dists[seed_idx] < DEPTH_CONSENSUS_THRESH]
+                    else:
+                        consensus = arr  # 所有点孤立，退化情况
+                else:
+                    consensus = arr
+                P_world = np.median(consensus, axis=0)
+
+                # 原有检测的相机：直接保留，不替换
+                for cam in cam_kfs:
+                    if cam in cam_meta:
+                        voted_centers[frame][role][cam] = all_preds[frame][cam][role]
+
+                # 无检测的相机：用 P_world 投影 + 局部颜色搜索补充
+                for cam in cam_kfs:
+                    if cam in cam_meta:
+                        continue  # 已有检测，跳过
+                    cid = cam_name_to_id(cam)
+                    if cid not in calib:
+                        continue
+                    K_t   = np.asarray(calib[cid]["K"],     dtype=np.float64)
+                    Tcw_t = np.asarray(calib[cid]["T_c2w"], dtype=np.float64)
+                    uv = project_point(P_world, K_t, Tcw_t, *img_hw)
+                    if uv is None:
+                        continue
+
+                    img_path = BUNDLE / task / exp / f"{cam}.kf{frame}.jpg"
+                    img = cv2.imread(str(img_path)) if img_path.exists() else None
+                    matcher = matchers.get(role)
+
+                    if img is not None and matcher is not None:
+                        refined, color_conf = matcher.find_object_near(
+                            img, uv, radius=DEPTH_REPROJ_RADIUS)
+                        if refined is not None and color_conf >= DEPTH_REPROJ_MIN_CONF:
+                            voted_centers[frame][role][cam] = (
+                                refined, color_conf,
+                                "depth_reproj+color_local", [], [],
+                            )
+
+            # ── 路径 B：无深度 fallback → 三角化投票 ──────────────────────
+            elif calib_available and len(cam_pts) >= 2:
                 voted_pts, inlier_ids = vote_frame_predictions(cam_pts, task)
-
-                voted_centers[frame][role] = {}
                 for cam in cam_kfs:
                     cid = cam_name_to_id(cam)
                     if cid in voted_pts:
-                        conf, method, extra_negs, extra_pos = cam_meta.get(cam, (0.5, "voted", [], []))
+                        conf, method, extra_negs, extra_pos = cam_meta.get(
+                            cam, (0.5, "voted", [], []))
                         if cam not in cam_meta:
                             method = "voted"
                         voted_centers[frame][role][cam] = (
@@ -677,9 +808,9 @@ def annotate_exp(task: str, exp: str,
                             method + ("+voted" if cid in inlier_ids else "+reproj"),
                             extra_negs, extra_pos,
                         )
+
+            # ── 路径 C：单相机 / 无标定 → 直接用原始预测 ─────────────────
             else:
-                # 标定不可用或相机数不足，直接用原始预测
-                voted_centers[frame][role] = {}
                 for cam, preds in all_preds[frame].items():
                     pred = preds.get(role)
                     if pred is not None:

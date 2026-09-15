@@ -52,6 +52,7 @@ export CONDA_SH="${CONDA_SH:-/viscam/u/chenrq/miniconda3/etc/profile.d/conda.sh}
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-hocap-annotation}"
 MASKS_SCRIPT="$HOCAP_ROOT/volunteer_annotation/internal/prompts_to_masks.py"
 BUILD_WORKLIST="$HOCAP_ROOT/volunteer_annotation/internal/build_masks_worklist.py"
+FIX_PROMPTS_SCRIPT="$HOCAP_ROOT/volunteer_annotation/internal/fix_prompts_depth.py"
 SLURM_OUTS="${SLURM_OUTS:-/viscam/u/chenrq/crq_ws/slurm_outs}"
 
 export SAM2_ROOT="${SAM2_ROOT:-/viscam/u/chenrq/crq_ws/robotool/sam2}"
@@ -69,6 +70,9 @@ WORKLIST=""
 VIDEOS_ROOTS=()
 DATA_ROOT="/viscam/projects/robotool/data"
 PROMPTS_ROOT="/viscam/projects/robotool/_va_bundle_v2_prompts"
+BUNDLE_ROOT="/viscam/projects/robotool/_va_bundle_v2"
+CALIB_ROOT="/viscam/projects/robotool/calibrations"
+FIX_PROMPTS=0
 EXPS_PER_TASK=8
 MAX_CONCURRENT=32
 DRY_RUN=0
@@ -79,6 +83,9 @@ while [[ $# -gt 0 ]]; do
         --videos_root)    shift; while [[ $# -gt 0 && "${1:0:2}" != "--" ]]; do VIDEOS_ROOTS+=("$1"); shift; done ;;
         --data_root)      DATA_ROOT="$2"; shift 2 ;;
         --prompts_root)   PROMPTS_ROOT="$2"; shift 2 ;;
+        --bundle_root)    BUNDLE_ROOT="$2"; shift 2 ;;
+        --calib_root)     CALIB_ROOT="$2"; shift 2 ;;
+        --fix_prompts)    FIX_PROMPTS=1; shift ;;
         --exps_per_task)  EXPS_PER_TASK="$2"; shift 2 ;;
         --max_concurrent) MAX_CONCURRENT="$2"; shift 2 ;;
         --dry_run)        DRY_RUN=1; shift ;;
@@ -116,9 +123,10 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" && -z "$WORKLIST" ]]; then
 
         echo "[frontend] scanning $NAME ..."
         python3 "$BUILD_WORKLIST" \
-            --data_root    "$(dirname "$VR")" \
-            --prompts_root "$PROMPTS_ROOT" \
-            --out          "$WL" 2>&1 | grep -E '^\[worklist\]|skip|pending|->|Error'
+            --data_root      "$(dirname "$VR")" \
+            --prompts_root   "$PROMPTS_ROOT" \
+            --videos_filter  "$NAME" \
+            --out            "$WL" 2>&1 | grep -E '^\[worklist\]|skip|pending|->|Error'
 
         N=$(grep -c . "$WL" 2>/dev/null || echo 0)
         if [[ "$N" -eq 0 ]]; then
@@ -136,12 +144,14 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" && -z "$WORKLIST" ]]; then
             continue
         fi
 
+        CHILD_ARGS=(--worklist "$WL" --exps_per_task "$EXPS_PER_TASK"
+                    --bundle_root "$BUNDLE_ROOT" --calib_root "$CALIB_ROOT")
+        [[ "$FIX_PROMPTS" == "1" ]] && CHILD_ARGS+=(--fix_prompts)
+
         JID=$(sbatch --parsable \
             --array="0-${LAST}%${MAX_CONCURRENT}" \
             --output="$LOG" --error="$LOG" \
-            "$0" \
-            --worklist "$WL" \
-            --exps_per_task "$EXPS_PER_TASK")
+            "$0" "${CHILD_ARGS[@]}")
         echo "[frontend] $NAME -> array job: $JID  (log: $LOG)"
     done
     exit 0
@@ -233,9 +243,41 @@ while IFS=$'\t' read -r EXP_DIR PROMPTS_DIR; do
     OUT_DIR="$(out_dir_for_exp "$EXP_DIR" "${OUT_BASE:-}")"
     mkdir -p "$OUT_DIR"
 
+    # ---- optional depth-based prompt correction ----
+    EFFECTIVE_PROMPTS_DIR="$PROMPTS_DIR"
+    if [[ "$FIX_PROMPTS" == "1" && -f "$FIX_PROMPTS_SCRIPT" ]]; then
+        # Derive task from prompts_dir: …/<videos_X>/<task>/<exp>/tool_masks/prompts
+        _TASK_PATH="$(dirname "$(dirname "$(dirname "$PROMPTS_DIR")")")"
+        _TASK="${_TASK_PATH##*/videos_*/}"  # "spoon_press_sponge"
+        _VIDEOS_PART="$(basename "$(dirname "$(dirname "$_TASK_PATH")")")"  # e.g. "videos_0202"
+        _TASK_FULL="${_VIDEOS_PART}/${_TASK}"   # "videos_0202/spoon_press_sponge"
+
+        # Corrected prompts go alongside the masks output, to avoid touching master prompts
+        _CORR_PROMPTS_DIR="${OUT_DIR}/corrected_prompts"
+
+        if [[ "$DRY_RUN" == "1" ]]; then
+            echo "[dry_run] fix_prompts: $FIX_PROMPTS_SCRIPT --task $_TASK_FULL"
+        else
+            python "$FIX_PROMPTS_SCRIPT" \
+                --prompts_dir "$PROMPTS_DIR" \
+                --out_dir     "$_CORR_PROMPTS_DIR" \
+                --bundle      "$BUNDLE_ROOT" \
+                --calib_root  "$CALIB_ROOT" \
+                --task        "$_TASK_FULL" \
+                --verbose 2>&1 | sed 's/^/  [fix] /'
+            _FIX_RC=$?
+            if [[ "$_FIX_RC" -eq 0 || "$_FIX_RC" -eq 2 ]]; then
+                # rc=0: corrected; rc=2: no depth, copied unchanged — both are usable
+                EFFECTIVE_PROMPTS_DIR="$_CORR_PROMPTS_DIR"
+            else
+                echo "  [fix_prompts rc=$_FIX_RC] falling back to original prompts"
+            fi
+        fi
+    fi
+
     ARGS=(
         --exp         "$EXP_DIR"
-        --prompts_dir "$PROMPTS_DIR"
+        --prompts_dir "$EFFECTIVE_PROMPTS_DIR"
         --out_dir     "$OUT_DIR"
         --tmp_dir     "$TMP_DIR"
         --from_video

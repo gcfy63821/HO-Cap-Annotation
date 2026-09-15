@@ -81,6 +81,8 @@ def main():
                     help="where masks.h5 will be written (default: same as data_root, "
                          "outputs go to videos_XXXX_annotated/...)")
     ap.add_argument("--out", default="-", help="output TSV path (default: stdout)")
+    ap.add_argument("--videos_filter", default=None,
+                    help="only scan this videos_XXXX folder name (e.g. videos_0202)")
     ap.add_argument("--min_cams", type=int, default=6,
                     help="minimum cam*.json files required (default 6)")
     ap.add_argument("--skip_done", action="store_true", default=True,
@@ -102,6 +104,8 @@ def main():
     # Enumerate: prompts_root/<videos_X>/<task>/<exp>/tool_masks/prompts/
     for videos_dir in sorted(prompts_root.iterdir()):
         if not videos_dir.is_dir() or not videos_dir.name.startswith("videos_"):
+            continue
+        if args.videos_filter and videos_dir.name != args.videos_filter:
             continue
         for task_dir in sorted(videos_dir.iterdir()):
             if not task_dir.is_dir():
