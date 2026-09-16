@@ -75,7 +75,7 @@ BUNDLE_ROOT="/viscam/projects/robotool/_va_bundle_v2"
 CALIB_ROOT="/viscam/projects/robotool/calibrations"
 FIX_PROMPTS=0
 EXPS_PER_TASK=8
-MAX_CONCURRENT=32
+MAX_CONCURRENT=16
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -118,10 +118,14 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" && -z "$WORKLIST" ]]; then
     mkdir -p "$SLURM_OUTS"
 
     RUN_TS="$(date +%Y%m%d_%H%M%S)"
+    # Build one merged worklist across all video folders, then submit a single array job.
+    MERGED_WL="$SLURM_OUTS/masks_worklist_merged_${RUN_TS}.tsv"
+    > "$MERGED_WL"
+
     for VR in "${ROOTS[@]}"; do
         [[ -d "$VR" ]] || { echo "[skip] not a dir: $VR"; continue; }
         NAME="$(basename "$VR")"
-        WL="$SLURM_OUTS/masks_worklist_${NAME}_${RUN_TS}.tsv"
+        TMP_WL="$(mktemp)"
 
         echo "[frontend] scanning $NAME ..."
         python3 "$BUILD_WORKLIST" \
@@ -129,34 +133,45 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" && -z "$WORKLIST" ]]; then
             --prompts_root       "$PROMPTS_ROOT" \
             --auto_prompts_root  "$AUTO_PROMPTS_ROOT" \
             --videos_filter      "$NAME" \
-            --out                "$WL" 2>&1 | grep -E '^\[worklist\]|skip|pending|->|Error'
+            --out                "$TMP_WL" 2>&1 | grep -E '^\[worklist\]|skip|pending|->|Error'
 
-        N=$(grep -c . "$WL" 2>/dev/null || echo 0)
+        N=$(grep -c . "$TMP_WL" 2>/dev/null || echo 0)
         if [[ "$N" -eq 0 ]]; then
             echo "[frontend] $NAME: 0 pending exps — skip"
-            continue
+        else
+            echo "[frontend] $NAME: $N pending exps -> appended to merged worklist"
+            cat "$TMP_WL" >> "$MERGED_WL"
         fi
-
-        N_TASKS=$(( (N + EXPS_PER_TASK - 1) / EXPS_PER_TASK ))
-        LAST=$(( N_TASKS - 1 ))
-        LOG="$SLURM_OUTS/va_masks_${NAME}_${RUN_TS}_%A_%a.out"
-
-        echo "[frontend] $NAME: $N exps -> $N_TASKS tasks (array 0-${LAST}%${MAX_CONCURRENT})"
-        if [[ "$DRY_RUN" == "1" ]]; then
-            echo "[dry_run] sbatch --array=0-${LAST}%${MAX_CONCURRENT} ... --worklist $WL"
-            continue
-        fi
-
-        CHILD_ARGS=(--worklist "$WL" --exps_per_task "$EXPS_PER_TASK"
-                    --bundle_root "$BUNDLE_ROOT" --calib_root "$CALIB_ROOT")
-        [[ "$FIX_PROMPTS" == "1" ]] && CHILD_ARGS+=(--fix_prompts)
-
-        JID=$(sbatch --parsable \
-            --array="0-${LAST}%${MAX_CONCURRENT}" \
-            --output="$LOG" --error="$LOG" \
-            "$0" "${CHILD_ARGS[@]}")
-        echo "[frontend] $NAME -> array job: $JID  (log: $LOG)"
+        rm -f "$TMP_WL"
     done
+
+    N_TOTAL=$(grep -c . "$MERGED_WL" 2>/dev/null || echo 0)
+    if [[ "$N_TOTAL" -eq 0 ]]; then
+        echo "[frontend] nothing pending — done"
+        exit 0
+    fi
+
+    N_TASKS=$(( (N_TOTAL + EXPS_PER_TASK - 1) / EXPS_PER_TASK ))
+    LAST=$(( N_TASKS - 1 ))
+    LOG="$SLURM_OUTS/va_masks_merged_${RUN_TS}_%A_%a.out"
+
+    echo "[frontend] merged: $N_TOTAL exps -> $N_TASKS tasks (array 0-${LAST}%${MAX_CONCURRENT})"
+    echo "[frontend] worklist: $MERGED_WL"
+
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "[dry_run] sbatch --array=0-${LAST}%${MAX_CONCURRENT} ... --worklist $MERGED_WL"
+        exit 0
+    fi
+
+    CHILD_ARGS=(--worklist "$MERGED_WL" --exps_per_task "$EXPS_PER_TASK"
+                --bundle_root "$BUNDLE_ROOT" --calib_root "$CALIB_ROOT")
+    [[ "$FIX_PROMPTS" == "1" ]] && CHILD_ARGS+=(--fix_prompts)
+
+    JID=$(sbatch --parsable \
+        --array="0-${LAST}%${MAX_CONCURRENT}" \
+        --output="$LOG" --error="$LOG" \
+        "$0" "${CHILD_ARGS[@]}")
+    echo "[frontend] submitted -> array job: $JID  (log: $LOG)"
     exit 0
 fi
 
