@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=48G
 #SBATCH --cpus-per-task=4
-#SBATCH --time=4:00:00
+#SBATCH --time=8:00:00
 #SBATCH --exclude=svl17,svl3,svl5,svl6,svl4,viscam1,viscam2,viscam3,viscam4,viscam14,viscam15,viscam-hgx-1,viscam-hgx-2
 #SBATCH --output=/viscam/u/chenrq/crq_ws/slurm_outs/va_masks_%A_%a.out
 #SBATCH --error=/viscam/u/chenrq/crq_ws/slurm_outs/va_masks_%A_%a.err
@@ -249,7 +249,7 @@ while IFS=$'\t' read -r EXP_DIR PROMPTS_DIR; do
     if [[ "$FIX_PROMPTS" == "1" && -f "$FIX_PROMPTS_SCRIPT" ]]; then
         _TASK_PATH="$(dirname "$(dirname "$(dirname "$PROMPTS_DIR")")")"
         _TASK="${_TASK_PATH##*/videos_*/}"
-        _VIDEOS_PART="$(basename "$(dirname "$(dirname "$_TASK_PATH")")")"
+        _VIDEOS_PART="$(basename "$(dirname "$_TASK_PATH")")"
         _TASK_FULL="${_VIDEOS_PART}/${_TASK}"
         _CORR_PROMPTS_DIR="${OUT_DIR}/corrected_prompts"
 
